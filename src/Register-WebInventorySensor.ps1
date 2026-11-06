@@ -361,8 +361,8 @@ try {
         if (-not $grant.Count) {
             # the accounts that could use the previous key keep that right on the new one
             $was = @(); try { $was = @([WebInv.SensorCert]::KeyReaders($old)) } catch { Write-Line ("  the previous key's readers could not be read: {0}" -f (Get-Inner $_)) 'Yellow' }
-            $base = @(); try { $base = @([WebInv.SensorCert]::KeyReaders($cert)) } catch { }
-            $grant = @($was | Where-Object { $base -notcontains $_ })
+            $already = @(); try { $already = @([WebInv.SensorCert]::KeyReaders($cert)) } catch { }
+            $grant = @($was | Where-Object { $already -notcontains $_ })
         }
         Grant-Key $cert $grant
         $where = 'LocalMachine\My'

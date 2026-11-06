@@ -804,6 +804,44 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
     host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
     canary reports it).
 
+- **v2.6.0 additions** (Linux workspace and GitHub's Windows and Ubuntu runners):
+  - **Compile and static checks.** The four C# blocks (the shipping code is new) compile with Windows PowerShell
+    5.1's compiler (CI) and as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
+    warnings. PSScriptAnalyzer with the 5.1 profiles reports no compatibility finding in the three scripts.
+  - **Tests.** Self-test 156/156 on Windows PowerShell 5.1 (ESENT) and 149/149 on PowerShell 7; 3,225 rule examples;
+    the 30 lab regression scenarios; store scenarios v2.2 40/40 and v2.3 34/34; gating 4/4 and 4/4;
+    `Test-WebInventoryStore.ps1` 10/10 on Windows.
+  - **Scan path unchanged.** An interleaved A/B against v2.5.0 found 0 differences on the lab (26 rows), the farm
+    (200) and the closed-port run. The same scan with and without `-ShipTo` gives the same rows, and only
+    `_ship-state.json` is added.
+  - **Shipping** (`tests/v26/ship.sh` against `lab/tideline_mock.py`, which checks what the platform plan gives
+    ingest): 29/29 here (28 on CI, which has no browser):
+    - the round trip is byte-identical: services, delta, vulnerabilities, screenshots, errors and every artifact;
+    - delivery: already delivered (no request), `-Force`, `-Status`; a connection dropped mid-upload, then a resume
+      that sent only the missing parts; a 503 retried; Tideline unreachable (exit 2, state kept);
+    - refused: a changed file; an inactive sensor; a client certificate from another CA; expired, URN-less and RSA
+      certificates (before the scan); a server outside the pinned root or with the wrong name; a conflicting
+      manifest (409); an engagement the sensor is not assigned to; a record that fails its schema (422 with the line);
+    - a file sent as chunks; the export bundle verified offline, and a tampered one caught; an incomplete run;
+    - a PFX password file; exit 4 still shipped; the errors part.
+  - **Enrollment** against step-ca 0.30.2 (`tests/v26/register.sh`), 10/10 here and on CI: enroll; token reuse,
+    expired token, token without a sensor name and wrong root fingerprint refused; renewal with a new key and the
+    same name; a scan shipped with only the enrolled defaults.
+  - **Windows PowerShell 5.1** (`tests/v26/windows.ps1` on GitHub's runner, elevated, against step-ca):
+    - certreq enrollment: a non-exportable ECDSA P-256 machine key, no pending request left, the root pinned, the
+      intermediate in `LocalMachine\CA`;
+    - `-GrantKeyAccess` (NETWORK SERVICE) in the key's security descriptor;
+    - a scan shipped over Schannel with that key; `-Status`; an export bundle whose chain came from the machine store;
+    - renewal: new key, previous certificate and key removed, readers carried over; shipping after renewal.
+  - **JSON contract.** Every results line a scan wrote in earlier releases' saved lab and benchmark runs validates
+    against `webinventory.service/1`, and so does every new JSONL file of the A/B and shipping runs.
+  - **Cost.** Shipping a 200-service run: 0.71 MB of files as 0.03 MB on the wire, 1.3 s with PowerShell start-up.
+    A 20,000-service run (65 MB of JSONL, 2 chunks): 2.6 MB on the wire, 14.9 s against the mock, which checks every
+    record against its schema.
+  - **Not covered here:** a real Tideline ingest (not built yet; the mock implements the plan's checks), a Windows
+    host with a non-administrator scan account (the runner is elevated; `-GrantKeyAccess` was checked through the
+    key's security descriptor, not by shipping as NETWORK SERVICE), and AD-joined or hardened Schannel policies.
+
 - **v2.5.0 additions** (Linux workspace and GitHub's Windows and Ubuntu runners):
   - **Compile and static checks.** The three C# blocks compile with Windows PowerShell 5.1's compiler (CI) and as
     C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0 warnings. PSScriptAnalyzer
