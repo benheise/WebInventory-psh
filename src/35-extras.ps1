@@ -10,7 +10,7 @@ function Initialize-Extras {
     }
     else {
         $swc = [Diagnostics.Stopwatch]::StartNew()
-        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
         Add-Type @addType
         Write-RunLog ("Extras compiled in {0} ms" -f $swc.ElapsedMilliseconds) 'DEBUG'
@@ -220,8 +220,12 @@ function Invoke-Screenshots {
             }
         }
         if ($out.Count) {
-            $lines = @($out | Sort-Object { [string]$_.File } | ConvertTo-Csv -NoTypeInformation)
+            $sortedShots = @($out | Sort-Object { [string]$_.File })
+            $lines = @($sortedShots | ConvertTo-Csv -NoTypeInformation)
             [IO.File]::WriteAllLines($script:ShotIndexPath, [string[]]$lines, $script:Utf8Bom)
+            $script:ShotJsonlPath = [IO.Path]::ChangeExtension($script:ShotIndexPath, '.jsonl')
+            $shotNames = [string[]]@($sortedShots[0].PSObject.Properties | ForEach-Object { $_.Name })
+            Write-JsonlRows -Path $script:ShotJsonlPath -Names $shotNames -Rows $sortedShots
         }
     }
     $ok = @($out | Where-Object { $_.Status -eq 'ok' }).Count

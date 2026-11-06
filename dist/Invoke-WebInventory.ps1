@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.5.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.6.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -131,6 +131,27 @@
 .PARAMETER NvdFeed
     -StoreQuery Vulnerabilities: NVD CVE JSON 2.0 feed files or folders (nvdcve-2.0-*.json[.gz]); matched offline against
     the CPEs of the current inventory, version-aware. -KevFile adds CISA KEV (JSON or CSV), -EpssFile FIRST EPSS (CSV[.gz]).
+    On a scan run (v2.6): the same join over this run's services, written as WebInventory_<RunId>_vulns.csv/.jsonl
+    (+ .provenance.json) before the run's manifest, so -ShipTo sends it as the run's vulns part.
+.PARAMETER ShipTo
+    Tideline ingest URL (https://host:8443). After the run is complete (and added to -Store, if given), its JSONL
+    files, run.json, manifest, logs and screenshots are sent unchanged as a signed envelope over mutual TLS.
+    Off by default; nothing is sent to Tideline before the scan ends. A delivery that fails exits 2 and leaves
+    WebInventory_<RunId>_ship-state.json; Send-WebInventoryRun.ps1 sends the rest later. See SHIPPING.md.
+.PARAMETER ShipCertThumbprint
+    The sensor certificate (LocalMachine\My or CurrentUser\My). Default: the newest valid certificate there with a
+    urn:tideline:sensor:<id> name and its private key (Register-WebInventorySensor.ps1 installs it), so a renewal
+    needs no change to scheduled tasks.
+.PARAMETER ShipCertPath
+    PFX file with the sensor certificate and key, instead of the certificate store (PowerShell 7 on Linux/macOS;
+    default there: ~/.config/webinventory/tideline-sensor.pfx). -ShipCertPasswordFile holds its password, if any.
+.PARAMETER ShipCaFile
+    The Tideline root CA (PEM) the server must chain to; the machine trust store is not used. Default: the root
+    Register-WebInventorySensor.ps1 saved (%ProgramData%\WebInventory\tideline-root.crt, ~/.config/webinventory/...).
+.PARAMETER Engagement
+    Engagement id (letters, digits, . _ -; up to 64) written to run.json and to the Tideline envelope.
+.PARAMETER ShipRetries
+    Delivery attempts after the first (default 3; waits 5 s, 15 s, 45 s).
 .PARAMETER StoreMerge
     Two entity ids (from Inventory/History queries) that are the same service: the later one is folded into the earlier,
     recorded as a correction in the ledger (nothing is rewritten). -Reason is required.
@@ -175,13 +196,16 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Vulnerabilities -NvdFeed D:\feeds\nvd -KevFile D:\feeds\known_exploited_vulnerabilities.json -EpssFile D:\feeds\epss_scores-current.csv.gz
 .EXAMPLE
+    .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore -ShipTo https://tideline.corp.example:8443 -Engagement eng-2026-014
+.EXAMPLE
     .\Invoke-WebInventory.ps1 -SelfTest
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.5.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
-    Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
-    store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
+    Version 2.6.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
+    Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
+    4 = completed, but nothing answered.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -292,6 +316,14 @@ param(
     [string[]]$NvdFeed,
     [string]$KevFile,
     [string]$EpssFile,
+    # ---- Tideline (results platform)
+    [string]$ShipTo,
+    [string]$ShipCertThumbprint,
+    [string]$ShipCertPath,
+    [string]$ShipCertPasswordFile,
+    [string]$ShipCaFile,
+    [string]$Engagement,
+    [ValidateRange(0, 10)][int]$ShipRetries = 3,
     [string[]]$StoreMerge,
     [string]$StoreSplit,
     [string]$SplitAt,
@@ -306,7 +338,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.5.0'
+$ScriptVersion = '2.6.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -325,20 +357,34 @@ catch { Write-Host "FATAL: cannot create log files in '$LogDir': $($_.Exception.
 $script:ErrCounts = @{}
 $script:ErrTotal = 0
 
+# errors and warnings of a scan run also go to WebInventory_<RunId>_errors.jsonl in -OutputDir (open from Open-Outputs
+# until Close-Logs, so the file is final before the run's manifest)
+# until, lines are held (DNS, scope and input errors come before the output files exist)
+$script:ErrJsonNames = [string[]]@('time', 'level', 'category', 'target', 'message')
+$script:ErrJsonPending = New-Object System.Collections.Generic.List[object]
+function Write-ErrJson([string]$Time, [string]$Level, [string]$Category, [string]$Target, [string]$Message) {
+    $v = [object[]]@($Time, $Level, $Category, $Target, $Message)
+    if ($script:ErrJsonW) { try { $script:ErrJsonW.WriteLine([WebInv.Out]::JsonLine($script:ErrJsonNames, $v)) } catch { } }
+    elseif ($null -ne $script:ErrJsonPending -and $script:ErrJsonPending.Count -lt 100000) { $script:ErrJsonPending.Add($v) }
+}
 function Write-RunLog {
     param([string]$Message, [string]$Level = 'INFO')
-    if ($script:RunLog) { $script:RunLog.WriteLine(('{0} [{1,-5}] {2}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'), $Level, $Message)) }
+    $t = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz')
+    if ($script:RunLog) { $script:RunLog.WriteLine(('{0} [{1,-5}] {2}' -f $t, $Level, $Message)) }
+    if ($Level -eq 'WARN') { Write-ErrJson $t 'warning' '' '' $Message }
 }
 function Write-ErrLog {
     param([string]$Category, [string]$Target, [string]$Message)
     $script:ErrTotal++
     if ($script:ErrCounts.ContainsKey($Category)) { $script:ErrCounts[$Category]++ } else { $script:ErrCounts[$Category] = 1 }
-    if ($script:ErrLog) {
-        $script:ErrLog.WriteLine(('{0} [ERROR] [{1}] {2} | {3}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'), $Category, $Target, ($Message -replace '[\r\n]+', ' ')))
-    }
+    $t = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz')
+    $m = $Message -replace '[\r\n]+', ' '
+    if ($script:ErrLog) { $script:ErrLog.WriteLine(('{0} [ERROR] [{1}] {2} | {3}' -f $t, $Category, $Target, $m)) }
+    Write-ErrJson $t $(if ($Category -eq 'FATAL') { 'fatal' } else { 'error' }) $Category $Target $m
 }
 function Close-Logs {
-    foreach ($n in 'RunLog', 'ErrLog') {
+    $script:ErrJsonPending = $null
+    foreach ($n in 'RunLog', 'ErrLog', 'ErrJsonW') {
         $w = Get-Variable -Name $n -Scope Script -ValueOnly -ErrorAction SilentlyContinue
         if ($w) { try { $w.Flush(); $w.Dispose() } catch { } }
         Set-Variable -Name $n -Scope Script -Value $null
@@ -3616,7 +3662,7 @@ namespace WebInv
 
     public static class Util
     {
-        public const string EngineVersion = "2.5.0";
+        public const string EngineVersion = "2.6.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3703,8 +3749,9 @@ try {
     }
     else {
         # Add-Type treats compiler warnings as errors; a newer .NET marking an API obsolete must not stop the tool from starting
+        # (nor print compiler warnings on every run: PowerShell 7.5+ shows them, for example SYSLIB0057 on .NET 9)
         # (CI compiles every block with warnings as errors on Windows PowerShell 5.1: .github/workflows/check.yml)
-        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
         Add-Type @addType
     }
@@ -3714,7 +3761,7 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 
 #region ---------- Embedded rule pack ----------
 $BuiltinRulesJson = @'
-{"name":"builtin","version":"2.5.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.6.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -6004,7 +6051,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.5.0";
+        public const string Version = "2.6.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
@@ -8070,7 +8117,7 @@ function Initialize-Extras {
     }
     else {
         $swc = [Diagnostics.Stopwatch]::StartNew()
-        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
         Add-Type @addType
         Write-RunLog ("Extras compiled in {0} ms" -f $swc.ElapsedMilliseconds) 'DEBUG'
@@ -8280,8 +8327,12 @@ function Invoke-Screenshots {
             }
         }
         if ($out.Count) {
-            $lines = @($out | Sort-Object { [string]$_.File } | ConvertTo-Csv -NoTypeInformation)
+            $sortedShots = @($out | Sort-Object { [string]$_.File })
+            $lines = @($sortedShots | ConvertTo-Csv -NoTypeInformation)
             [IO.File]::WriteAllLines($script:ShotIndexPath, [string[]]$lines, $script:Utf8Bom)
+            $script:ShotJsonlPath = [IO.Path]::ChangeExtension($script:ShotIndexPath, '.jsonl')
+            $shotNames = [string[]]@($sortedShots[0].PSObject.Properties | ForEach-Object { $_.Name })
+            Write-JsonlRows -Path $script:ShotJsonlPath -Names $shotNames -Rows $sortedShots
         }
     }
     $ok = @($out | Where-Object { $_.Status -eq 'ok' }).Count
@@ -8446,6 +8497,37 @@ function Open-Outputs {
     if ($newCsv) { $script:CsvW.WriteLine((($Columns | ForEach-Object { '"' + $_ + '"' }) -join ',')) }
     $script:JsonW = New-Object System.IO.StreamWriter($script:JsonlPath, $true, $script:Utf8NoBom); $script:JsonW.AutoFlush = $true
     $script:ProgW = New-Object System.IO.StreamWriter($script:ProgressPath, $true, $script:Utf8NoBom); $script:ProgW.AutoFlush = $true
+    $script:ErrJsonPath = Join-Path $Dir ("WebInventory_{0}_errors.jsonl" -f $RunId)
+    $script:ErrJsonW = New-Object System.IO.StreamWriter($script:ErrJsonPath, $true, $script:Utf8NoBom); $script:ErrJsonW.AutoFlush = $true
+    if ($script:ErrJsonPending) { foreach ($v in $script:ErrJsonPending) { $script:ErrJsonW.WriteLine([WebInv.Out]::JsonLine($script:ErrJsonNames, $v)) } }
+    $script:ErrJsonPending = $null
+}
+
+# JSONL next to a CSV that has no JSON form otherwise (delta, screenshot index, store queries, vulnerabilities): one
+# object per row with the CSV's column names. Values are the cells as text, without the CSV formula guard; a column
+# that holds a count, port, size or duration is a number when the cell is one (an empty cell stays ""), as in the
+# results JSONL.
+$script:JsonlIntegers = @('Port', 'StatusCode', 'BodyLength', 'ResponseMs', 'CertDaysLeft', 'CertKeySize', 'FaviconMmh3', 'Versions', 'MissingRuns',
+    'Seq', 'Rows', 'Added', 'Changed', 'Enriched', 'Reappeared', 'Rekeyed', 'Missing', 'Retired', 'Active', 'MissingTotal', 'RetiredTotal',
+    'Incomplete', 'Duplicates', 'RetireAfter', 'Bytes', 'PageRequests', 'ProxyRefused', 'Ms', 'BrowserStatus')
+function Write-JsonlRows {
+    param([string]$Path, [string[]]$Names, [System.Collections.IEnumerable]$Rows, [string[]]$Integer = $script:JsonlIntegers)
+    $w = New-Object System.IO.StreamWriter($Path, $false, $script:Utf8NoBom)
+    try {
+        $isInt = @(foreach ($n in $Names) { $Integer -contains $n })
+        foreach ($r in $Rows) {
+            $v = New-Object object[] $Names.Count
+            for ($i = 0; $i -lt $Names.Count; $i++) {
+                $x = if ($r -is [System.Collections.IList]) { $r[$i] } else { $r.($Names[$i]) }
+                $x = if ($null -eq $x) { '' } else { [string]$x }
+                $n = 0L
+                if ($isInt[$i] -and [long]::TryParse($x, [Globalization.NumberStyles]::AllowLeadingSign, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { $x = $n }
+                $v[$i] = $x
+            }
+            $w.WriteLine([WebInv.Out]::JsonLine($Names, $v))
+        }
+    }
+    finally { $w.Dispose() }
 }
 
 function Close-Outputs {
@@ -8517,7 +8599,9 @@ function Compare-Baseline {
         }
     }
     foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $delta.Add([pscustomobject]@{ Change = 'REMOVED'; Key = $k; Field = ''; Old = ('{0} {1}' -f $old[$k].Url, $old[$k].Products); New = '' }) } }
-    $delta | Sort-Object Change, Key, Field | Export-Csv -LiteralPath $DeltaPath -NoTypeInformation -Encoding UTF8
+    $sorted = @($delta | Sort-Object Change, Key, Field)
+    $sorted | Export-Csv -LiteralPath $DeltaPath -NoTypeInformation -Encoding UTF8
+    Write-JsonlRows -Path ([IO.Path]::ChangeExtension($DeltaPath, '.jsonl')) -Names @('Change', 'Key', 'Field', 'Old', 'New') -Rows $sorted -Integer @()
     @{ New = @($delta | Where-Object Change -eq 'NEW').Count; Removed = @($delta | Where-Object Change -eq 'REMOVED').Count; Changed = @($delta | Where-Object Change -eq 'CHANGED' | Select-Object -ExpandProperty Key -Unique).Count }
 }
 #endregion
@@ -9332,7 +9416,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.5.0";
+        public const string Version = "2.6.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -13058,7 +13142,7 @@ function Initialize-StoreEngine {
         return
     }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
     if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
     Add-Type @addType
     if ($script:RunLog) { Write-RunLog ("Store engine compiled in {0} ms" -f $sw.ElapsedMilliseconds) 'DEBUG' }
@@ -13069,14 +13153,19 @@ function Format-Iso([datetime]$T) { ([DateTimeOffset]$T).ToString('yyyy-MM-ddTHH
 # run.json: when, how (probe switches) and by whom the run was made. The store uses it for timestamps, for keeping
 # values a probe that was switched off did not collect, and to refuse incomplete runs.
 function Write-RunInfo {
-    param([bool]$Complete, [bool]$Interrupted, [bool]$TimeLimit, [int]$Rows)
+    param([bool]$Complete, [bool]$Interrupted, [bool]$TimeLimit, [int]$Rows, [int]$ExitCode)
     $path = Join-Path $OutputDir ("WebInventory_{0}_run.json" -f $script:RunId)
     $started = Format-Iso $script:ScriptStart
     $sessions = New-Object System.Collections.Generic.List[object]
+    # v2.6: the run's UUID (the Tideline run_id) is made once and kept by every session of a resumed run
+    $uuid = [guid]::NewGuid().ToString()
+    $eng = [string]$Engagement
     if (Test-Path -LiteralPath $path) {
         try {
             $old = [IO.File]::ReadAllText($path) | ConvertFrom-Json
             if ($old.startedAt) { $started = [string]$old.startedAt }
+            if ($old.runUuid) { $uuid = [string]$old.runUuid }
+            if ($old.engagement -and -not $eng) { $eng = [string]$old.engagement }
             foreach ($s in @($old.sessions)) { if ($s) { $sessions.Add($s) } }
         }
         catch { Write-ErrLog 'IO' 'run.json' ("previous run.json unreadable, rewritten: {0}" -f $_.Exception.Message) }
@@ -13092,8 +13181,9 @@ function Write-RunInfo {
     $checks = 0
     if ($script:ProgressPath -and (Test-Path -LiteralPath $script:ProgressPath)) { foreach ($l in [IO.File]::ReadLines($script:ProgressPath)) { if ($l.Trim()) { $checks++ } } }
     $info = [ordered]@{
-        format = 1; runId = $script:RunId; startedAt = $started; finishedAt = (Format-Iso (Get-Date)); complete = $Complete; synthesized = $false
-        scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
+        format = 1; runId = $script:RunId; runUuid = $uuid; startedAt = $started; finishedAt = (Format-Iso (Get-Date)); complete = $Complete; synthesized = $false
+        scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; engagement = $(if ($eng) { $eng } else { $null }); exitCode = $ExitCode
+        operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
         profile = [ordered]@{
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
@@ -13450,9 +13540,10 @@ function Invoke-StoreMode {
         # unique name: two queries of the same kind in the same second must not overwrite each other
         $stem = Join-Path (Resolve-Path -LiteralPath $OutputDir).ProviderPath ("WebInventory_store_{0}_{1}" -f $StoreQuery.ToLowerInvariant(), $script:Stamp)
         $base = $stem; $n = 1
-        while ((Test-Path -LiteralPath "$base.csv") -or (Test-Path -LiteralPath "$base.html") -or (Test-Path -LiteralPath "$base.provenance.json")) { $n++; $base = '{0}_{1}' -f $stem, $n }
+        while ((Test-Path -LiteralPath "$base.csv") -or (Test-Path -LiteralPath "$base.jsonl") -or (Test-Path -LiteralPath "$base.html") -or (Test-Path -LiteralPath "$base.provenance.json")) { $n++; $base = '{0}_{1}' -f $stem, $n }
         Write-QueryCsv $q "$base.csv"
-        $files = @("$base.csv")
+        Write-JsonlRows -Path "$base.jsonl" -Names ([string[]]$q.Columns) -Rows $q.Rows
+        $files = @("$base.csv", "$base.jsonl")
         if ($prov) { [IO.File]::WriteAllText("$base.provenance.json", $prov + "`n", $script:Utf8NoBom); $files += "$base.provenance.json" }
         if ($StoreQuery -eq 'Inventory' -and -not $NoHtml -and $q.Rows.Count -gt 0) {
             $meta = @{ RunId = 'inventory store'; Tag = $(if ($AsOf) { 'as of ' + $asOf } else { 'current' }); Started = (Get-Date).ToString('yyyy-MM-dd HH:mm'); Duration = ''; Operator = $script:Operator; Computer = [Environment]::MachineName; Version = $ScriptVersion }
@@ -14306,6 +14397,7 @@ function Invoke-SelfTest {
         finally { $l.Stop() }
     }
     Invoke-ExtrasSelfTest
+    Invoke-ShipSelfTest
     Invoke-StoreSelfTest
     $total = $script:StPass + $script:StFail
     $c = if ($script:StFail) { 'Red' } else { 'Green' }
@@ -14314,6 +14406,1528 @@ function Invoke-SelfTest {
     if ($script:StFail) { $script:ExitCode = 1 }
 }
 $script:SelfTestCertB64 = 'MIIEiTCCA3GgAwIBAgIURZiyZOhvJeTNgPCSAFlEg5pq16IwDQYJKoZIhvcNAQELBQAwga4xCzAJBgNVBAYTAlVTMREwDwYDVQQIDAhNaWNoaWdhbjESMBAGA1UEBwwJQW5uIEFyYm9yMRswGQYDVQQKDBJEdW8gU2VjdXJpdHksIEluYy4xGDAWBgNVBAsMD0VuZHBvaW50IEhlYWx0aDESMBAGA1UEAwwJMTI3LjAuMC4xMS0wKwYJKoZIhvcNAQkBFh5lbmRwb2ludGhlYWx0aEBkdW9zZWN1cml0eS5jb20wHhcNMjYxMDIzMjMzNjM5WhcNMjYxMTIyMjMzNjM5WjCBrjELMAkGA1UEBhMCVVMxETAPBgNVBAgMCE1pY2hpZ2FuMRIwEAYDVQQHDAlBbm4gQXJib3IxGzAZBgNVBAoMEkR1byBTZWN1cml0eSwgSW5jLjEYMBYGA1UECwwPRW5kcG9pbnQgSGVhbHRoMRIwEAYDVQQDDAkxMjcuMC4wLjExLTArBgkqhkiG9w0BCQEWHmVuZHBvaW50aGVhbHRoQGR1b3NlY3VyaXR5LmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMV1yLcNPqc/vZ8lEDwSBbmzH+38SxjKluEhPK6DbdzcnLMzsQqGIil5F/SNuZLhJ/5VhT+7Y/kOVjWQjfWhppLMv9+7ihSuZ+oU7+LzM1WUq31AmLH6VdTN1e0w/6EpWPjmcksmCe6YADaWe8nP35B5jsiRwn6I2rcMU3lhfGbOFb7KeQYKBmv2skPLFtgtwGi1/PZXuSqcxnBMdrfr3g9W9F/5Es5U/FD5n6pKGeXyRrtJDwxXvDenAUAZh6kXfB5+iFcC3eEpqeLzM3uDhXUn9U1Oz5i1P7JHiu4bigEtxupGYYDIBCMYJEZ8+vZuQrzNi2GkxEhY49rgv9Ut5VUCAwEAAaOBnDCBmTAdBgNVHQ4EFgQUGSZFdZmRbwnODl8Aqu/EdO9NVmgwHwYDVR0jBBgwFoAUGSZFdZmRbwnODl8Aqu/EdO9NVmgwDwYDVR0TAQH/BAUwAwEB/zBGBgNVHREEPzA9gg93ZWIwMS5sYWIubG9jYWyCCyoubGFiLmxvY2FshwQKAQIDhxAAAAAAAAAAAAAAAAAAAAABgQVhQGIuYzANBgkqhkiG9w0BAQsFAAOCAQEABsxrbca+eQ26mkbpOQaDsErx04ii+3QajrhGHJo6QsDSYIVinaoS0Hoea6yISI0Um/49tgVyUT+AlMPhsUJzcUxSebZFMtIugHe55j+gWV+0eCsbE/n84Y4iYSZg+QwaWHT2zHkpZZT8HtvzFkoZENSMeqxbV0+uTp0Ghfi0aEp2YlG2rznq94s5tb5BPtzEjIjrPROovq5t0fgqvgjqyHoX3pJYFO73Pm1yju3WCyKl3nluzyE7HQusnxYRTkrvdJKvePKMKSdZNq24tibwOzfg8nJ15chRJoRBT5g+wYQw8x6YfEYdKEVlOeHwInalEE/nufmIi5a092wuz/ua8g=='
+#endregion
+
+#region ---------- Tideline shipping (-ShipTo): compiled only when used ----------
+$ShipSource = @'
+// Tideline result shipping: shared by Invoke-WebInventory.ps1 (-ShipTo), Send-WebInventoryRun.ps1 and
+// Register-WebInventorySensor.ps1. C# 5 / .NET Framework 4.7.2 (Windows PowerShell 5.1), also .NET 8+ (PowerShell 7).
+// Reads a finished run's files and sends them unchanged; nothing here touches scanning.
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.IO.Compression;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading;
+
+namespace WebInv
+{
+    // ---------- JSON: ordered objects, deterministic ASCII output ----------
+    public sealed class JObj
+    {
+        public readonly List<string> Keys = new List<string>();
+        readonly Dictionary<string, object> map = new Dictionary<string, object>(StringComparer.Ordinal);
+        public JObj Add(string k, object v) { if (!map.ContainsKey(k)) Keys.Add(k); map[k] = v; return this; }
+        public object this[string k] { get { object v; return map.TryGetValue(k, out v) ? v : null; } }
+        public bool Has(string k) { return map.ContainsKey(k); }
+        public string Str(string k) { object v = this[k]; return v == null ? null : Convert.ToString(v, CultureInfo.InvariantCulture); }
+        public JObj Obj(string k) { return this[k] as JObj; }
+        public List<object> Arr(string k) { return this[k] as List<object>; }
+        public bool Remove(string k) { if (!map.Remove(k)) return false; Keys.Remove(k); return true; }
+    }
+
+    public static class TJson
+    {
+        public static object Parse(string s)
+        {
+            int p = 0;
+            object v = Value(s, ref p, 0);
+            Ws(s, ref p);
+            if (p != s.Length) throw new FormatException("JSON: unexpected text at position " + p);
+            return v;
+        }
+        static void Ws(string s, ref int p) { while (p < s.Length && (s[p] == ' ' || s[p] == '\t' || s[p] == '\r' || s[p] == '\n')) p++; }
+        static object Value(string s, ref int p, int depth)
+        {
+            if (depth > 64) throw new FormatException("JSON: nested too deeply");
+            Ws(s, ref p);
+            if (p >= s.Length) throw new FormatException("JSON: unexpected end");
+            char c = s[p];
+            if (c == '{')
+            {
+                p++; JObj o = new JObj(); Ws(s, ref p);
+                if (p < s.Length && s[p] == '}') { p++; return o; }
+                while (true)
+                {
+                    Ws(s, ref p);
+                    if (p >= s.Length || s[p] != '"') throw new FormatException("JSON: expected a name at position " + p);
+                    string k = Str(s, ref p); Ws(s, ref p);
+                    if (p >= s.Length || s[p] != ':') throw new FormatException("JSON: expected ':' at position " + p);
+                    p++; o.Add(k, Value(s, ref p, depth + 1)); Ws(s, ref p);
+                    if (p < s.Length && s[p] == ',') { p++; continue; }
+                    if (p < s.Length && s[p] == '}') { p++; return o; }
+                    throw new FormatException("JSON: expected ',' or '}' at position " + p);
+                }
+            }
+            if (c == '[')
+            {
+                p++; List<object> a = new List<object>(); Ws(s, ref p);
+                if (p < s.Length && s[p] == ']') { p++; return a; }
+                while (true)
+                {
+                    a.Add(Value(s, ref p, depth + 1)); Ws(s, ref p);
+                    if (p < s.Length && s[p] == ',') { p++; continue; }
+                    if (p < s.Length && s[p] == ']') { p++; return a; }
+                    throw new FormatException("JSON: expected ',' or ']' at position " + p);
+                }
+            }
+            if (c == '"') return Str(s, ref p);
+            if (string.CompareOrdinal(s, p, "true", 0, 4) == 0) { p += 4; return true; }
+            if (string.CompareOrdinal(s, p, "false", 0, 5) == 0) { p += 5; return false; }
+            if (string.CompareOrdinal(s, p, "null", 0, 4) == 0) { p += 4; return null; }
+            int st = p;
+            if (p < s.Length && s[p] == '-') p++;
+            while (p < s.Length && (char.IsDigit(s[p]) || s[p] == '.' || s[p] == 'e' || s[p] == 'E' || s[p] == '+' || s[p] == '-')) p++;
+            string num = s.Substring(st, p - st);
+            if (num.Length == 0) throw new FormatException("JSON: unexpected character at position " + st);
+            long l;
+            if (num.IndexOfAny(new char[] { '.', 'e', 'E' }) < 0 && long.TryParse(num, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out l)) return l;
+            double d;
+            if (double.TryParse(num, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return d;
+            throw new FormatException("JSON: bad number at position " + st);
+        }
+        static string Str(string s, ref int p)
+        {
+            p++; StringBuilder sb = new StringBuilder();
+            while (p < s.Length)
+            {
+                char c = s[p++];
+                if (c == '"') return sb.ToString();
+                if (c != '\\') { sb.Append(c); continue; }
+                if (p >= s.Length) break;
+                char e = s[p++];
+                switch (e)
+                {
+                    case '"': sb.Append('"'); break;
+                    case '\\': sb.Append('\\'); break;
+                    case '/': sb.Append('/'); break;
+                    case 'b': sb.Append('\b'); break;
+                    case 'f': sb.Append('\f'); break;
+                    case 'n': sb.Append('\n'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'u':
+                        if (p + 4 > s.Length) throw new FormatException("JSON: bad \\u escape");
+                        sb.Append((char)int.Parse(s.Substring(p, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture)); p += 4; break;
+                    default: throw new FormatException("JSON: bad escape at position " + (p - 1));
+                }
+            }
+            throw new FormatException("JSON: unterminated string");
+        }
+
+        public static string Write(object v) { StringBuilder sb = new StringBuilder(); W(sb, v, 0); return sb.ToString(); }
+        static void W(StringBuilder sb, object v, int depth)
+        {
+            if (depth > 64) throw new InvalidOperationException("JSON: nested too deeply");
+            if (v == null) { sb.Append("null"); return; }
+            if (v is string) { Q(sb, (string)v); return; }
+            if (v is bool) { sb.Append((bool)v ? "true" : "false"); return; }
+            if (v is int || v is long || v is short || v is uint || v is ulong || v is byte) { sb.Append(Convert.ToString(v, CultureInfo.InvariantCulture)); return; }
+            if (v is double || v is float || v is decimal) { sb.Append(((IFormattable)v).ToString("R", CultureInfo.InvariantCulture)); return; }
+            JObj o = v as JObj;
+            if (o != null)
+            {
+                sb.Append('{');
+                for (int i = 0; i < o.Keys.Count; i++) { if (i > 0) sb.Append(','); Q(sb, o.Keys[i]); sb.Append(':'); W(sb, o[o.Keys[i]], depth + 1); }
+                sb.Append('}'); return;
+            }
+            System.Collections.IEnumerable en = v as System.Collections.IEnumerable;
+            if (en != null)
+            {
+                sb.Append('['); bool first = true;
+                foreach (object x in en) { if (!first) sb.Append(','); first = false; W(sb, x, depth + 1); }
+                sb.Append(']'); return;
+            }
+            Q(sb, Convert.ToString(v, CultureInfo.InvariantCulture));
+        }
+        // ASCII only, so the exact bytes survive any round trip through a text file
+        static void Q(StringBuilder sb, string s)
+        {
+            sb.Append('"');
+            foreach (char c in s)
+            {
+                if (c == '"') sb.Append("\\\"");
+                else if (c == '\\') sb.Append("\\\\");
+                else if (c == '\n') sb.Append("\\n");
+                else if (c == '\r') sb.Append("\\r");
+                else if (c == '\t') sb.Append("\\t");
+                else if (c < 0x20 || c > 0x7e) sb.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                else sb.Append(c);
+            }
+            sb.Append('"');
+        }
+    }
+
+    // ---------- TLS: the server must chain to a pinned root (not the machine trust store) ----------
+    public sealed class PinnedTls
+    {
+        public X509Certificate2Collection Roots = new X509Certificate2Collection();
+        public bool Bootstrap;              // accept and record (only to fetch a root whose fingerprint is checked afterwards)
+        public X509Certificate2 Server;     // what the server presented
+        public X509Certificate2Collection Presented = new X509Certificate2Collection();
+        public SslPolicyErrors Errors;
+        public string LastError = "";
+
+        public bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors)
+        {
+            Errors = errors; Presented = new X509Certificate2Collection(); Server = null;
+            if (certificate == null) { LastError = "the server presented no certificate"; return false; }
+            Server = new X509Certificate2(certificate.GetRawCertData());
+            if (chain != null) foreach (X509ChainElement e in chain.ChainElements) Presented.Add(new X509Certificate2(e.Certificate.RawData));
+            if (Bootstrap) return true;
+            string why;
+            if (!Check(out why)) { LastError = why; return false; }
+            return true;
+        }
+
+        public bool Check(out string why)
+        {
+            why = "";
+            if (Server == null) { why = "the server presented no certificate"; return false; }
+            if ((Errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) { why = "the server certificate does not name the host (" + Server.Subject + ")"; return false; }
+            if (Roots.Count == 0) { why = "no pinned root"; return false; }
+            return ChainsTo(Server, Presented, Roots, true, out why);
+        }
+
+        // the chain from leaf must end at one of the pinned roots, with no problem other than that root being unknown to
+        // the machine
+        public static bool ChainsTo(X509Certificate2 leaf, X509Certificate2Collection extra, X509Certificate2Collection roots, bool serverAuth, out string why)
+        {
+            why = "";
+            using (X509Chain ch = new X509Chain())
+            {
+                ch.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                ch.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                if (serverAuth) ch.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
+                if (extra != null) ch.ChainPolicy.ExtraStore.AddRange(extra);
+                ch.ChainPolicy.ExtraStore.AddRange(roots);
+                ch.Build(leaf);
+                if (ch.ChainElements.Count == 0) { why = "no chain could be built for " + leaf.Subject; return false; }
+                X509Certificate2 top = ch.ChainElements[ch.ChainElements.Count - 1].Certificate;
+                bool pinned = false;
+                foreach (X509Certificate2 r in roots) if (Same(r, top)) { pinned = true; break; }
+                if (!pinned) { why = "the server certificate does not chain to the pinned root (chain ends at " + top.Subject + ")"; return false; }
+                foreach (X509ChainElement e in ch.ChainElements)
+                    foreach (X509ChainStatus s in e.ChainElementStatus)
+                    {
+                        if (s.Status == X509ChainStatusFlags.UntrustedRoot || s.Status == X509ChainStatusFlags.NoError) continue;
+                        why = "certificate chain problem at " + e.Certificate.Subject + ": " + s.Status + " " + (s.StatusInformation ?? "").Trim();
+                        return false;
+                    }
+                foreach (X509ChainStatus s in ch.ChainStatus)
+                {
+                    if (s.Status == X509ChainStatusFlags.UntrustedRoot || s.Status == X509ChainStatusFlags.NoError) continue;
+                    why = "certificate chain problem: " + s.Status + " " + (s.StatusInformation ?? "").Trim();
+                    return false;
+                }
+            }
+            return true;
+        }
+        static bool Same(X509Certificate2 a, X509Certificate2 b)
+        {
+            byte[] x = a.RawData, y = b.RawData;
+            if (x.Length != y.Length) return false;
+            for (int i = 0; i < x.Length; i++) if (x[i] != y[i]) return false;
+            return true;
+        }
+    }
+
+    // ---------- HTTPS/1.1 over SslStream (one connection per request; TLS 1.2 or later) ----------
+    public sealed class ShipHttpResponse
+    {
+        public int Status;
+        public string Reason = "";
+        public Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public byte[] Body = new byte[0];
+        public string Protocol = "";
+        public string Text { get { return Encoding.UTF8.GetString(Body); } }
+        public JObj Json { get { try { return TJson.Parse(Text) as JObj; } catch { return null; } } }
+    }
+
+    public static class Https
+    {
+        public const int MaxResponse = 4 * 1024 * 1024;
+        public static string UserAgent = "WebInventory (authorized asset inventory)";
+
+        public static ShipHttpResponse Send(Uri baseUri, string method, string path, Dictionary<string, string> headers, byte[] body,
+            X509Certificate2 client, PinnedTls pin, int timeoutMs)
+        {
+            string host = baseUri.DnsSafeHost;
+            int port = baseUri.Port;
+            using (TcpClient tc = Connect(host, port, timeoutMs))
+            {
+                tc.NoDelay = true;
+                NetworkStream ns = tc.GetStream();
+                ns.ReadTimeout = timeoutMs; ns.WriteTimeout = timeoutMs;
+                X509Certificate2 cc = client;
+                using (SslStream ssl = new SslStream(ns, false, pin.Validate, delegate(object s, string t, X509CertificateCollection l, X509Certificate r, string[] a) { return cc; }))
+                {
+                    X509CertificateCollection certs = new X509CertificateCollection();
+                    if (client != null) certs.Add(client);
+                    try { ssl.AuthenticateAsClient(host, certs, Protocols(), false); }
+                    catch (AuthenticationException ex)
+                    {
+                        string why = pin.LastError.Length > 0 ? pin.LastError : ex.Message;
+                        Exception inner = ex.InnerException;
+                        if (pin.LastError.Length == 0 && inner != null) why += " (" + inner.Message + ")";
+                        throw new AuthenticationException("TLS handshake with " + host + ":" + port + " failed: " + why);
+                    }
+                    if ((int)ssl.SslProtocol < 3072) throw new AuthenticationException("TLS " + ssl.SslProtocol + " negotiated; TLS 1.2 or later is required");
+                    StringBuilder h = new StringBuilder();
+                    h.Append(method).Append(' ').Append(path).Append(" HTTP/1.1\r\n");
+                    h.Append("Host: ").Append(baseUri.Authority).Append("\r\n");
+                    h.Append("User-Agent: ").Append(UserAgent).Append("\r\n");
+                    h.Append("Accept: application/json\r\n");
+                    h.Append("Connection: close\r\n");
+                    if (headers != null) foreach (KeyValuePair<string, string> kv in headers) h.Append(kv.Key).Append(": ").Append(kv.Value).Append("\r\n");
+                    if (body != null || method == "POST" || method == "PUT") h.Append("Content-Length: ").Append(body == null ? 0 : body.Length).Append("\r\n");
+                    h.Append("\r\n");
+                    byte[] hb = Encoding.ASCII.GetBytes(h.ToString());
+                    ShipHttpResponse r;
+                    try
+                    {
+                        ssl.Write(hb, 0, hb.Length);
+                        if (body != null && body.Length > 0) ssl.Write(body, 0, body.Length);
+                        ssl.Flush();
+                        r = Read(ssl);
+                    }
+                    catch (IOException ex)
+                    {
+                        // with TLS 1.3 the server checks the client certificate after the client's side of the handshake
+                        // is done: a refused certificate shows as a reset here, not as a handshake error
+                        if (client != null && ssl.SslProtocol == (SslProtocols)12288 && !ex.Message.Contains("timed out"))
+                            throw new IOException(ex.Message + " (right after the TLS 1.3 handshake: if this repeats, Tideline may not accept the sensor certificate " + client.Thumbprint + ")", ex);
+                        throw;
+                    }
+                    r.Protocol = ssl.SslProtocol.ToString();
+                    return r;
+                }
+            }
+        }
+
+        static TcpClient Connect(string host, int port, int timeoutMs)
+        {
+            System.Net.IPAddress ip;
+            System.Net.IPAddress[] addrs = System.Net.IPAddress.TryParse(host, out ip) ? new System.Net.IPAddress[] { ip } : System.Net.Dns.GetHostAddresses(host);
+            if (addrs.Length == 0) throw new IOException(host + " does not resolve");
+            Exception last = null;
+            foreach (System.Net.IPAddress a in addrs)
+            {
+                TcpClient tc = new TcpClient(a.AddressFamily);
+                try
+                {
+                    IAsyncResult ar = tc.BeginConnect(a, port, null, null);
+                    if (!ar.AsyncWaitHandle.WaitOne(timeoutMs)) throw new IOException("connect to " + a + ":" + port + " timed out");
+                    tc.EndConnect(ar);
+                    return tc;
+                }
+                catch (Exception ex) { last = ex; try { tc.Close(); } catch { } }
+            }
+            throw new IOException("cannot connect to " + host + ":" + port + ": " + (last == null ? "" : last.Message));
+        }
+
+        static SslProtocols Protocols()
+        {
+            // TLS 1.3 where the runtime offers it (.NET 5+); .NET Framework 4.7.2 gets TLS 1.2 (Schannel picks the suites)
+            return Environment.Version.Major >= 5 ? (SslProtocols)(3072 | 12288) : (SslProtocols)3072;
+        }
+
+        static ShipHttpResponse Read(Stream s)
+        {
+            MemoryStream head = new MemoryStream();
+            int state = 0;
+            while (true)
+            {
+                int b = s.ReadByte();
+                if (b < 0) throw new IOException("the server closed the connection before answering");
+                head.WriteByte((byte)b);
+                if (head.Length > 65536) throw new IOException("response headers too long");
+                if (b == '\r' && (state == 0 || state == 2)) state++;
+                else if (b == '\n' && (state == 1 || state == 3)) { state++; if (state == 4) break; }
+                else state = 0;
+            }
+            string[] lines = Encoding.ASCII.GetString(head.ToArray()).Split(new string[] { "\r\n" }, StringSplitOptions.None);
+            ShipHttpResponse r = new ShipHttpResponse();
+            string[] st = lines[0].Split(new char[] { ' ' }, 3);
+            if (st.Length < 2 || !st[0].StartsWith("HTTP/1.", StringComparison.Ordinal) || !int.TryParse(st[1], out r.Status)) throw new IOException("not an HTTP response: " + lines[0]);
+            r.Reason = st.Length > 2 ? st[2] : "";
+            for (int i = 1; i < lines.Length; i++)
+            {
+                int c = lines[i].IndexOf(':');
+                if (c > 0) r.Headers[lines[i].Substring(0, c).Trim()] = lines[i].Substring(c + 1).Trim();
+            }
+            MemoryStream body = new MemoryStream();
+            string te, cl;
+            if (r.Headers.TryGetValue("Transfer-Encoding", out te) && te.IndexOf("chunked", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                while (true)
+                {
+                    string len = Line(s);
+                    int semi = len.IndexOf(';'); if (semi >= 0) len = len.Substring(0, semi);
+                    int n = int.Parse(len.Trim(), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+                    if (n == 0) { while (Line(s).Length > 0) { } break; }
+                    if (body.Length + n > MaxResponse) throw new IOException("response too large");
+                    Copy(s, body, n); Line(s);
+                }
+            }
+            else if (r.Headers.TryGetValue("Content-Length", out cl))
+            {
+                long n = long.Parse(cl, CultureInfo.InvariantCulture);
+                if (n > MaxResponse) throw new IOException("response too large");
+                Copy(s, body, (int)n);
+            }
+            else if (r.Status != 204 && r.Status != 304)
+            {
+                byte[] buf = new byte[8192]; int k;
+                while ((k = s.Read(buf, 0, buf.Length)) > 0) { body.Write(buf, 0, k); if (body.Length > MaxResponse) throw new IOException("response too large"); }
+            }
+            r.Body = body.ToArray();
+            return r;
+        }
+        static string Line(Stream s)
+        {
+            StringBuilder sb = new StringBuilder();
+            while (true)
+            {
+                int b = s.ReadByte();
+                if (b < 0) throw new IOException("connection closed in a chunked body");
+                if (b == '\n') break;
+                if (b != '\r') sb.Append((char)b);
+                if (sb.Length > 1024) throw new IOException("bad chunk header");
+            }
+            return sb.ToString();
+        }
+        static void Copy(Stream s, Stream d, int n)
+        {
+            byte[] buf = new byte[8192];
+            while (n > 0)
+            {
+                int k = s.Read(buf, 0, Math.Min(buf.Length, n));
+                if (k <= 0) throw new IOException("connection closed in the response body");
+                d.Write(buf, 0, k); n -= k;
+            }
+        }
+    }
+
+    // ---------- sensor certificates: identity is the URI SAN urn:tideline:sensor:<id> ----------
+    public static class SensorCert
+    {
+        public const string UrnPrefix = "urn:tideline:sensor:";
+        public static bool ValidId(string id)
+        {
+            if (string.IsNullOrEmpty(id) || id.Length > 64) return false;
+            for (int i = 0; i < id.Length; i++)
+            {
+                char c = id[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || (i > 0 && (c == '.' || c == '_' || c == '-'));
+                if (!ok) return false;
+            }
+            return true;
+        }
+
+        // GeneralNames of the subjectAltName extension: [6] uniformResourceIdentifier
+        public static List<string> Uris(X509Certificate2 c)
+        {
+            List<string> r = new List<string>();
+            foreach (X509Extension e in c.Extensions)
+            {
+                if (e.Oid == null || e.Oid.Value != "2.5.29.17") continue;
+                byte[] d = e.RawData; int p = 0;
+                if (d.Length < 2 || d[p] != 0x30) continue;
+                p++; int len = Len(d, ref p); int end = Math.Min(d.Length, p + len);
+                while (p < end)
+                {
+                    byte tag = d[p++]; int l = Len(d, ref p);
+                    if (l < 0 || p + l > end) break;
+                    if (tag == 0x86) r.Add(Encoding.ASCII.GetString(d, p, l));
+                    p += l;
+                }
+            }
+            return r;
+        }
+        static int Len(byte[] d, ref int p)
+        {
+            if (p >= d.Length) return -1;
+            int b = d[p++];
+            if (b < 0x80) return b;
+            int n = b & 0x7f; if (n == 0 || n > 3) return -1;
+            int v = 0; for (int i = 0; i < n; i++) { if (p >= d.Length) return -1; v = (v << 8) | d[p++]; }
+            return v;
+        }
+
+        public static string SensorId(X509Certificate2 c)
+        {
+            string found = null;
+            foreach (string u in Uris(c))
+            {
+                if (!u.StartsWith(UrnPrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                string id = u.Substring(UrnPrefix.Length);
+                if (!ValidId(id)) continue;
+                if (found != null && !string.Equals(found, id, StringComparison.Ordinal)) return null;   // two identities: refuse
+                found = id;
+            }
+            return found;
+        }
+
+        public static bool ClientAuth(X509Certificate2 c)
+        {
+            foreach (X509Extension e in c.Extensions)
+            {
+                X509EnhancedKeyUsageExtension eku = e as X509EnhancedKeyUsageExtension;
+                if (eku == null) continue;
+                foreach (Oid o in eku.EnhancedKeyUsages) if (o.Value == "1.3.6.1.5.5.7.3.2" || o.Value == "2.5.29.37.0") return true;
+                return false;
+            }
+            return true;
+        }
+
+        // newest valid sensor certificate with a private key: LocalMachine\My, then CurrentUser\My (or one thumbprint)
+        public static X509Certificate2 Find(string thumbprint, out string error)
+        {
+            error = "";
+            string want = string.IsNullOrEmpty(thumbprint) ? "" : thumbprint.Replace(" ", "").Replace(":", "").ToUpperInvariant();
+            List<X509Certificate2> cands = new List<X509Certificate2>();
+            List<string> skipped = new List<string>();
+            DateTime now = DateTime.Now;
+            foreach (StoreLocation loc in new StoreLocation[] { StoreLocation.LocalMachine, StoreLocation.CurrentUser })
+            {
+                X509Store st = new X509Store(StoreName.My, loc);
+                try { st.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly); }
+                catch { continue; }
+                try
+                {
+                    foreach (X509Certificate2 c in st.Certificates)
+                    {
+                        if (want.Length > 0)
+                        {
+                            if (c.Thumbprint.ToUpperInvariant() != want) continue;
+                            if (!c.HasPrivateKey) { error = "certificate " + want + " (" + loc + "\\My) has no private key"; return null; }
+                            if (SensorId(c) == null) { error = "certificate " + want + " has no " + UrnPrefix + "<id> subject alternative name"; return null; }
+                            return c;
+                        }
+                        if (SensorId(c) == null || !c.HasPrivateKey) continue;
+                        if (c.NotBefore > now || c.NotAfter < now) { skipped.Add(c.Thumbprint + " (" + loc + ", valid " + c.NotBefore.ToString("u") + " to " + c.NotAfter.ToString("u") + ")"); continue; }
+                        if (!ClientAuth(c)) { skipped.Add(c.Thumbprint + " (no client authentication usage)"); continue; }
+                        cands.Add(c);
+                    }
+                }
+                finally { st.Close(); }
+            }
+            if (want.Length > 0) { error = "no certificate with thumbprint " + want + " in LocalMachine\\My or CurrentUser\\My"; return null; }
+            if (cands.Count == 0)
+            {
+                error = "no valid Tideline sensor certificate (" + UrnPrefix + "<id>, with its private key) in LocalMachine\\My or CurrentUser\\My";
+                if (skipped.Count > 0) error += "; not usable: " + string.Join("; ", skipped.ToArray());
+                error += ". Enroll with Register-WebInventorySensor.ps1, or pass -ShipCertThumbprint / -ShipCertPath.";
+                return null;
+            }
+            HashSet<string> ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (X509Certificate2 c in cands) ids.Add(SensorId(c));
+            if (ids.Count > 1)
+            {
+                List<string> l = new List<string>(ids); l.Sort(StringComparer.Ordinal);
+                error = "certificates of several sensors are installed (" + string.Join(", ", l.ToArray()) + "); pass -ShipCertThumbprint";
+                return null;
+            }
+            cands.Sort(delegate(X509Certificate2 a, X509Certificate2 b) { int x = b.NotAfter.CompareTo(a.NotAfter); return x != 0 ? x : b.NotBefore.CompareTo(a.NotBefore); });
+            return cands[0];
+        }
+
+        // the CA certificates that came with a PFX (an export bundle carries them with the leaf)
+        public static readonly X509Certificate2Collection Intermediates = new X509Certificate2Collection();
+        public static X509Certificate2 LoadPfx(string path, string password)
+        {
+            X509KeyStorageFlags fl = X509KeyStorageFlags.DefaultKeySet;
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT) fl = X509KeyStorageFlags.UserKeySet;   // no machine key container is created
+            X509Certificate2Collection all = new X509Certificate2Collection();
+            all.Import(File.ReadAllBytes(path), password, fl);
+            X509Certificate2 leaf = null;
+            foreach (X509Certificate2 c in all)
+            {
+                if (c.HasPrivateKey) { if (leaf == null) leaf = c; }
+                else if (c.Subject != c.Issuer) Intermediates.Add(c);
+            }
+            if (leaf == null) throw new CryptographicException(path + " holds no certificate with a private key");
+            return leaf;
+        }
+
+        public static X509Certificate2Collection LoadPem(string path)
+        {
+            X509Certificate2Collection r = new X509Certificate2Collection();
+            foreach (byte[] der in PemBlocks(File.ReadAllText(path), "CERTIFICATE")) r.Add(new X509Certificate2(der));
+            if (r.Count == 0)
+            {
+                byte[] raw = File.ReadAllBytes(path);
+                if (raw.Length > 0 && raw[0] == 0x30) r.Add(new X509Certificate2(raw));   // a DER file
+            }
+            if (r.Count == 0) throw new CryptographicException(path + " holds no certificate");
+            return r;
+        }
+
+        public static List<byte[]> PemBlocks(string text, string label)
+        {
+            List<byte[]> r = new List<byte[]>();
+            string begin = "-----BEGIN " + label + "-----", end = "-----END " + label + "-----";
+            int p = 0;
+            while ((p = text.IndexOf(begin, p, StringComparison.Ordinal)) >= 0)
+            {
+                int s = p + begin.Length, e = text.IndexOf(end, s, StringComparison.Ordinal);
+                if (e < 0) break;
+                r.Add(Convert.FromBase64String(text.Substring(s, e - s).Replace("\r", "").Replace("\n", "").Replace(" ", "")));
+                p = e + end.Length;
+            }
+            return r;
+        }
+
+        public static string Pem(byte[] der, string label)
+        {
+            string b = Convert.ToBase64String(der);
+            StringBuilder sb = new StringBuilder();
+            sb.Append("-----BEGIN ").Append(label).Append("-----\n");
+            for (int i = 0; i < b.Length; i += 64) sb.Append(b.Substring(i, Math.Min(64, b.Length - i))).Append('\n');
+            sb.Append("-----END ").Append(label).Append("-----\n");
+            return sb.ToString();
+        }
+
+        public static string Sha256Hex(byte[] b)
+        {
+            using (SHA256 h = SHA256.Create()) return Hex(h.ComputeHash(b));
+        }
+        public static string Hex(byte[] b)
+        {
+            StringBuilder sb = new StringBuilder(b.Length * 2);
+            foreach (byte x in b) sb.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+            return sb.ToString();
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct KeyProvInfo
+        {
+            public string ContainerName, ProvName;
+            public int ProvType, Flags, ProvParamCount;
+            public IntPtr ProvParams;
+            public int KeySpec;
+        }
+        [DllImport("crypt32.dll", SetLastError = true)]
+        static extern bool CertGetCertificateContextProperty(IntPtr context, int propId, IntPtr data, ref int size);
+
+        // where a Windows certificate's key lives: provider, container, machine or user (CERT_KEY_PROV_INFO_PROP_ID)
+        public static string[] KeyLocation(X509Certificate2 cert)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return null;
+            int size = 0;
+            if (!CertGetCertificateContextProperty(cert.Handle, 2, IntPtr.Zero, ref size) || size <= 0) return null;
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!CertGetCertificateContextProperty(cert.Handle, 2, buf, ref size)) return null;
+                KeyProvInfo k = (KeyProvInfo)Marshal.PtrToStructure(buf, typeof(KeyProvInfo));
+                return new string[] { k.ProvName ?? "", k.ContainerName ?? "", (k.Flags & 0x20) != 0 ? "machine" : "user", k.ProvType.ToString(CultureInfo.InvariantCulture) };
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        // the certificate's private key. .NET Framework's GetECDsaPrivateKey can refuse a persisted machine key bound to
+        // its certificate by certutil -repairstore ("detected to be ephemeral"); the key is then opened by the provider
+        // and container the certificate records, which is the same key Schannel uses
+        public static ECDsa PrivateKey(X509Certificate2 cert)
+        {
+            Exception first = null;
+            try { ECDsa k = cert.GetECDsaPrivateKey(); if (k != null) return k; }
+            catch (Exception ex) { first = ex; }
+            string[] loc = KeyLocation(cert);
+            if (loc != null && loc[3] == "0" && loc[1].Length > 0)
+            {
+                try
+                {
+                    CngKey key = CngKey.Open(loc[1], new CngProvider(loc[0].Length > 0 ? loc[0] : CngProvider.MicrosoftSoftwareKeyStorageProvider.Provider),
+                        loc[2] == "machine" ? CngKeyOpenOptions.MachineKey : CngKeyOpenOptions.None);
+                    return new ECDsaCng(key);
+                }
+                catch (Exception ex) { if (first == null) first = ex; }
+            }
+            if (first != null) throw new CryptographicException(first.Message, first);
+            return null;
+        }
+
+        // who may use a Windows CNG key: its own security descriptor (NCRYPT_SECURITY_DESCR_PROPERTY), which the key
+        // storage provider keeps with the key; editing the key file's NTFS ACL is not the documented way for CNG keys
+        const CngPropertyOptions DaclInfo = (CngPropertyOptions)0x4;   // DACL_SECURITY_INFORMATION
+        static CommonSecurityDescriptor KeyDescriptor(CngKey key)
+        {
+            byte[] sd = key.GetProperty("Security Descr", DaclInfo).GetValue();
+            return new CommonSecurityDescriptor(false, false, sd, 0);
+        }
+        public static string[] KeyReaders(X509Certificate2 cert)
+        {
+            List<string> r = new List<string>();
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) return r.ToArray();
+                foreach (GenericAce a in KeyDescriptor(k.Key).DiscretionaryAcl)
+                {
+                    CommonAce c = a as CommonAce;
+                    if (c == null || c.AceQualifier != AceQualifier.AccessAllowed) continue;
+                    string n;
+                    try { n = c.SecurityIdentifier.Translate(typeof(NTAccount)).Value; } catch { n = c.SecurityIdentifier.Value; }
+                    if (!r.Contains(n)) r.Add(n);
+                }
+            }
+            return r.ToArray();
+        }
+        public static void GrantKeyRead(X509Certificate2 cert, string account)
+        {
+            SecurityIdentifier sid = account.StartsWith("S-1-", StringComparison.Ordinal) ? new SecurityIdentifier(account) : (SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier));
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) throw new CryptographicException("the key of " + cert.Thumbprint + " is not a Windows CNG key");
+                CommonSecurityDescriptor d = KeyDescriptor(k.Key);
+                d.DiscretionaryAcl.AddAccess(AccessControlType.Allow, sid, unchecked((int)0x80000000), InheritanceFlags.None, PropagationFlags.None);   // GENERIC_READ: use the key
+                byte[] b = new byte[d.BinaryLength];
+                d.GetBinaryForm(b, 0);
+                k.Key.SetProperty(new CngProperty("Security Descr", b, DaclInfo));
+            }
+        }
+
+        // ES256 (ECDSA P-256, SHA-256) over the exact bytes; IEEE P1363 (r || s), as .NET produces it
+        public static string SignatureHeader(byte[] data, X509Certificate2 cert)
+        {
+            ECDsa k;
+            try { k = PrivateKey(cert); }
+            catch (CryptographicException ex) { throw new CryptographicException("the private key of " + cert.Thumbprint + " cannot be used by this account (" + ex.Message + "); run as the account the key was issued to, or grant it read access to the key"); }
+            if (k == null) throw new CryptographicException("certificate " + cert.Thumbprint + " has no ECDSA private key (the sensor key must be ECDSA P-256)");
+            using (k)
+            {
+                if (k.KeySize != 256) throw new CryptographicException("the sensor key is ECDSA P-" + k.KeySize + "; ES256 needs P-256");
+                byte[] sig = k.SignData(data, HashAlgorithmName.SHA256);
+                return "alg=ES256; enc=p1363; sig=" + Convert.ToBase64String(sig);
+            }
+        }
+
+        // the certificates that go with the leaf (intermediates, not the root), for an export bundle
+        public static List<X509Certificate2> ChainOf(X509Certificate2 leaf, X509Certificate2Collection roots)
+        {
+            List<X509Certificate2> r = new List<X509Certificate2>();
+            r.Add(leaf);
+            using (X509Chain ch = new X509Chain())
+            {
+                ch.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                ch.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                if (roots != null) ch.ChainPolicy.ExtraStore.AddRange(roots);
+                ch.ChainPolicy.ExtraStore.AddRange(Intermediates);
+                ch.Build(leaf);
+                for (int i = 1; i < ch.ChainElements.Count; i++)
+                {
+                    X509Certificate2 c = ch.ChainElements[i].Certificate;
+                    if (c.Subject == c.Issuer) break;   // a self-signed root
+                    r.Add(c);
+                }
+            }
+            return r;
+        }
+    }
+
+    // ---------- a finished run, as the parts of a Tideline envelope ----------
+    public sealed class ShipPart
+    {
+        public int N;
+        public string Kind = "", Schema = "", Media = "", Role = "", Name = "", Path = "", Sha256 = "", FileSha256 = "";
+        public long Records = -1, Bytes, Offset, FileBytes;
+        public bool Gzip, Ndjson;
+        public int Chunk, Chunks;
+    }
+
+    public sealed class ShipRun
+    {
+        public const string Envelope = "tideline-envelope/1";
+        public static long ChunkBytes = 32L * 1024 * 1024;   // NDJSON files above this go as several parts, split at line ends
+        public string Dir = "", RunJson = "", ToolRun = "", RunUuid = "", Engagement = "", ToolVersion = "", Started = "", Finished = "", Computer = "", ToolManifestSha256 = "";
+        public object ExitCode;
+        public JObj Profile;
+        public readonly List<ShipPart> Parts = new List<ShipPart>();
+        public readonly List<string> Notes = new List<string>();
+        Dictionary<string, string[]> toolManifest = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+
+        public static ShipRun Collect(string runJsonPath)
+        {
+            ShipRun r = new ShipRun();
+            r.RunJson = System.IO.Path.GetFullPath(runJsonPath);
+            r.Dir = System.IO.Path.GetDirectoryName(r.RunJson);
+            JObj info = TJson.Parse(File.ReadAllText(r.RunJson, Encoding.UTF8).TrimStart('\uFEFF')) as JObj;
+            if (info == null) throw new InvalidDataException(r.RunJson + " is not a run.json object");
+            r.ToolRun = info.Str("runId") ?? "";
+            if (r.ToolRun.Length == 0) throw new InvalidDataException(r.RunJson + " has no runId");
+            if (!(info["complete"] is bool) || !(bool)info["complete"]) throw new InvalidDataException("run " + r.ToolRun + " is not complete (interrupted or time limit); resume it first, an incomplete run is never shipped");
+            string scanner = info.Str("scanner") ?? "";
+            r.ToolVersion = scanner.StartsWith("WebInventory ", StringComparison.Ordinal) ? scanner.Substring(13) : scanner;
+            r.RunUuid = info.Str("runUuid") ?? "";
+            r.Engagement = info.Str("engagement") ?? "";
+            r.ExitCode = info["exitCode"];
+            r.Computer = info.Str("computer") ?? "";
+            r.Started = Utc(info.Str("startedAt"));
+            r.Finished = Utc(info.Str("finishedAt"));
+            r.Profile = info.Obj("profile") ?? new JObj();
+
+            string stem = System.IO.Path.Combine(r.Dir, "WebInventory_" + r.ToolRun);
+            string tm = stem + "_manifest.txt";
+            if (!File.Exists(tm)) throw new FileNotFoundException("the run's manifest " + tm + " is missing; it is written when a run finishes");
+            byte[] tmb = File.ReadAllBytes(tm);
+            r.ToolManifestSha256 = SensorCert.Sha256Hex(tmb);
+            foreach (string line in Encoding.UTF8.GetString(tmb).Split('\n'))
+            {
+                string l = line.TrimEnd('\r');
+                if (l.Length == 0 || l[0] == '#') continue;
+                string[] f = l.Split(new string[] { "  " }, 3, StringSplitOptions.None);
+                if (f.Length == 3) r.toolManifest[f[2].Replace('\\', '/')] = new string[] { f[0], f[1] };
+            }
+
+            if (!File.Exists(stem + ".jsonl")) throw new FileNotFoundException("the run's results " + stem + ".jsonl are missing");
+            r.AddNdjson("services", "webinventory.service/1", stem + ".jsonl");
+            r.AddNdjson("delta", "webinventory.delta/1", stem + "_delta.jsonl");
+            r.AddNdjson("screenshots", "webinventory.screenshot/1", stem + "_screenshots.jsonl");
+            r.AddNdjson("vulns", "webinventory.vuln/1", stem + "_vulns.jsonl");
+            r.AddNdjson("errors", "webinventory.error/1", stem + "_errors.jsonl");
+            r.AddFile("run-info", "application/json", r.RunJson, true);
+            r.AddFile("tool-manifest", "text/plain; charset=utf-8", tm, true);
+            r.AddFile("vuln-provenance", "application/json", stem + "_vulns.provenance.json", false);
+            // the run and error logs of each session (written to the folder the run was started from)
+            List<object> sessions = info.Arr("sessions");
+            HashSet<string> logs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (sessions != null)
+                foreach (object so in sessions)
+                {
+                    JObj s = so as JObj; if (s == null) continue;
+                    foreach (string k in new string[] { "runLog", "errorLog" })
+                    {
+                        string p = s.Str(k);
+                        if (string.IsNullOrEmpty(p) || !logs.Add(p)) continue;
+                        if (File.Exists(p)) r.AddFile("log", "text/plain; charset=utf-8", p, true);
+                        else r.Notes.Add("log not found, not shipped: " + p);
+                    }
+                }
+            // screenshot images named by the index
+            string shots = stem + "_screenshots.jsonl";
+            if (File.Exists(shots))
+            {
+                List<string> files = new List<string>();
+                foreach (string line in File.ReadAllLines(shots, Encoding.UTF8))
+                {
+                    if (line.Trim().Length == 0) continue;
+                    JObj o = TJson.Parse(line) as JObj;
+                    string f = o == null ? null : o.Str("File");
+                    if (string.IsNullOrEmpty(f)) continue;
+                    f = f.Replace('\\', '/');
+                    if (f.StartsWith("/", StringComparison.Ordinal) || f.Contains("..") || f.Contains(":")) { r.Notes.Add("screenshot path refused: " + f); continue; }
+                    if (!files.Contains(f)) files.Add(f);
+                }
+                files.Sort(StringComparer.Ordinal);
+                foreach (string f in files)
+                {
+                    string p = System.IO.Path.Combine(r.Dir, f.Replace('/', System.IO.Path.DirectorySeparatorChar));
+                    if (File.Exists(p)) r.AddFile("screenshot", "image/png", p, false, f);
+                    else r.Notes.Add("screenshot not found, not shipped: " + f);
+                }
+            }
+            for (int i = 0; i < r.Parts.Count; i++) r.Parts[i].N = i + 1;
+            return r;
+        }
+
+        static string Utc(string iso)
+        {
+            if (string.IsNullOrEmpty(iso)) return "";
+            DateTimeOffset t;
+            if (!DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.None, out t)) return iso;
+            return t.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+        }
+
+        string Rel(string path)
+        {
+            string b = Dir.TrimEnd(System.IO.Path.DirectorySeparatorChar) + System.IO.Path.DirectorySeparatorChar;
+            return path.StartsWith(b, StringComparison.OrdinalIgnoreCase) ? path.Substring(b.Length).Replace('\\', '/') : System.IO.Path.GetFileName(path);
+        }
+
+        // the file as the run wrote it must still be what the run's own manifest recorded
+        void CheckTool(string name, string sha, long bytes)
+        {
+            string[] e;
+            if (!toolManifest.TryGetValue(name, out e)) return;
+            if (!string.Equals(e[0], sha, StringComparison.OrdinalIgnoreCase) || e[1] != bytes.ToString(CultureInfo.InvariantCulture))
+                throw new InvalidDataException(name + " changed after the run's manifest was written (manifest " + e[0].Substring(0, Math.Min(12, e[0].Length)) + ", file " + sha.Substring(0, 12) + "); it is not shipped");
+        }
+
+        void AddNdjson(string kind, string schema, string path)
+        {
+            if (!File.Exists(path)) return;
+            string name = Rel(path);
+            byte[] all = File.ReadAllBytes(path);
+            string fileSha = SensorCert.Sha256Hex(all);
+            CheckTool(name, fileSha, all.LongLength);
+            // split at line ends into chunks of at most ChunkBytes
+            List<long[]> chunks = new List<long[]>();
+            long start = 0;
+            while (start < all.LongLength)
+            {
+                long end = Math.Min(all.LongLength, start + ChunkBytes);
+                if (end < all.LongLength)
+                {
+                    long nl = end - 1;
+                    while (nl > start && all[nl] != (byte)'\n') nl--;
+                    if (nl == start) throw new InvalidDataException(name + " has a line longer than " + ChunkBytes + " bytes");
+                    end = nl + 1;
+                }
+                chunks.Add(new long[] { start, end - start });
+                start = end;
+            }
+            if (chunks.Count == 0) chunks.Add(new long[] { 0, 0 });
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                ShipPart p = new ShipPart();
+                p.Kind = kind; p.Schema = schema; p.Media = "application/x-ndjson"; p.Name = name; p.Path = path; p.Ndjson = true;
+                p.Offset = chunks[i][0]; p.Bytes = chunks[i][1];
+                p.Gzip = p.Bytes > 0;   // an empty part goes as it is: .NET 9's GZipStream writes no gzip member for no data
+                long rec = 0; long last = p.Offset - 1;
+                for (long j = p.Offset; j < p.Offset + p.Bytes; j++)
+                    if (all[j] == (byte)'\n') { if (j - last > 1 && !(j - last == 2 && all[j - 1] == (byte)'\r')) rec++; last = j; }
+                if (p.Offset + p.Bytes - 1 > last) rec++;   // a last line without a line end
+                p.Records = rec;
+                using (SHA256 h = SHA256.Create()) p.Sha256 = SensorCert.Hex(h.ComputeHash(all, (int)p.Offset, (int)p.Bytes));
+                if (chunks.Count > 1) { p.Chunk = i + 1; p.Chunks = chunks.Count; p.FileSha256 = fileSha; p.FileBytes = all.LongLength; }
+                Parts.Add(p);
+            }
+        }
+
+        void AddFile(string role, string media, string path, bool gzip) { AddFile(role, media, path, gzip, null); }
+        void AddFile(string role, string media, string path, bool gzip, string name)
+        {
+            if (!File.Exists(path)) return;
+            byte[] b = File.ReadAllBytes(path);
+            ShipPart p = new ShipPart();
+            p.Kind = "artifact"; p.Role = role; p.Media = media; p.Name = name ?? Rel(path); p.Path = path; p.Gzip = gzip && b.LongLength > 0;
+            p.Bytes = b.LongLength; p.Sha256 = SensorCert.Sha256Hex(b);
+            CheckTool(p.Name, p.Sha256, p.Bytes);
+            Parts.Add(p);
+        }
+
+        // a run made before run.json recorded runUuid gets a name-based UUID, so shipping it twice gives the same id
+        public string DerivedUuid()
+        {
+            byte[] h;
+            using (SHA256 s = SHA256.Create()) h = s.ComputeHash(Encoding.UTF8.GetBytes("webinventory|" + Computer + "|" + ToolRun + "|" + ToolManifestSha256));
+            h[6] = (byte)((h[6] & 0x0f) | 0x50); h[8] = (byte)((h[8] & 0x3f) | 0x80);
+            string x = SensorCert.Hex(h).Substring(0, 32);
+            return x.Substring(0, 8) + "-" + x.Substring(8, 4) + "-" + x.Substring(12, 4) + "-" + x.Substring(16, 4) + "-" + x.Substring(20, 12);
+        }
+
+        // deterministic bytes: the same run, sensor and engagement always give the same manifest
+        public byte[] Manifest(string sensor, string runId, string engagement)
+        {
+            JObj m = new JObj();
+            m.Add("schema", Envelope).Add("run_id", runId).Add("tool", "webinventory").Add("tool_version", ToolVersion).Add("tool_run", ToolRun);
+            m.Add("sensor", sensor).Add("engagement", string.IsNullOrEmpty(engagement) ? null : engagement).Add("job_id", null);
+            m.Add("started", Started).Add("finished", Finished).Add("exit_code", ExitCode);
+            m.Add("profile", Profile).Add("tool_manifest_sha256", ToolManifestSha256);
+            List<object> parts = new List<object>();
+            foreach (ShipPart p in Parts)
+            {
+                JObj o = new JObj();
+                o.Add("n", (long)p.N).Add("kind", p.Kind);
+                if (p.Ndjson) o.Add("schema", p.Schema);
+                else o.Add("role", p.Role);
+                o.Add("media", p.Media).Add("name", p.Name);
+                if (p.Ndjson) o.Add("records", p.Records);
+                o.Add("bytes", p.Bytes).Add("sha256", p.Sha256).Add("encoding", p.Gzip ? "gzip" : "identity");
+                if (p.Chunks > 1) o.Add("chunk", (long)p.Chunk).Add("chunks", (long)p.Chunks).Add("file_bytes", p.FileBytes).Add("file_sha256", p.FileSha256);
+                parts.Add(o);
+            }
+            m.Add("parts", parts);
+            return Encoding.ASCII.GetBytes(TJson.Write(m));
+        }
+
+        // the bytes of one part as uploaded (gzip for NDJSON and text); checked against the manifest first
+        public static byte[] Body(ShipPart p)
+        {
+            byte[] raw = new byte[p.Bytes];
+            using (FileStream fs = new FileStream(p.Path, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                fs.Seek(p.Offset, SeekOrigin.Begin);
+                int got = 0;
+                while (got < raw.Length) { int k = fs.Read(raw, got, raw.Length - got); if (k <= 0) break; got += k; }
+                if (got != raw.Length) throw new InvalidDataException(p.Name + " is shorter than when the manifest was made; it changed and is not shipped");
+            }
+            string sha = SensorCert.Sha256Hex(raw);
+            if (sha != p.Sha256) throw new InvalidDataException(p.Name + " changed since the manifest was made (part " + p.N + "); it is not shipped");
+            if (!p.Gzip) return raw;
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (GZipStream gz = new GZipStream(ms, CompressionLevel.Optimal, true)) gz.Write(raw, 0, raw.Length);
+                return ms.ToArray();
+            }
+        }
+    }
+
+    public sealed class ShipResult
+    {
+        public bool Ok, Retryable, AlreadyComplete;
+        public string State = "", Error = "", RunId = "", Sensor = "", ManifestSha256 = "";
+        public int PartsSent, PartsTotal, Attempts;
+        public long BytesSent;
+        public readonly List<string> Log = new List<string>();
+    }
+
+    // ---------- the shipping protocol (POST manifest, PUT missing parts, POST complete), with ship-state.json ----------
+    public sealed class Shipper
+    {
+        public Uri Target;
+        public X509Certificate2 Cert;
+        public X509Certificate2Collection Roots = new X509Certificate2Collection();
+        public int TimeoutMs = 60000, Retries = 3, RetryDelayMs = 5000;
+        public string ToolVersion = "";
+
+        public static string StateFile(ShipRun run) { return System.IO.Path.Combine(run.Dir, "WebInventory_" + run.ToolRun + "_ship-state.json"); }
+        string Key { get { return Target.GetLeftPart(UriPartial.Authority).ToLowerInvariant() + Target.AbsolutePath.TrimEnd('/'); } }
+        string ApiBase { get { return Target.AbsolutePath.TrimEnd('/'); } }
+
+        static JObj LoadState(string path)
+        {
+            if (!File.Exists(path)) return new JObj().Add("format", 1L).Add("targets", new JObj());
+            JObj s = TJson.Parse(File.ReadAllText(path, Encoding.UTF8)) as JObj;
+            if (s == null || s.Obj("targets") == null) throw new InvalidDataException(path + " is not a ship-state file");
+            return s;
+        }
+        static void SaveState(string path, JObj s)
+        {
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, TJson.Write(s) + "\n", new UTF8Encoding(false));
+            if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
+        }
+
+        public static string Now() { return DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture); }
+
+        public JObj Entry(ShipRun run)
+        {
+            JObj s = LoadState(StateFile(run));
+            return s.Obj("targets").Obj(Key);
+        }
+
+        // a run this URL already confirmed, from its run.json path alone (a folder sweep skips it without re-reading the run)
+        public bool DeliveredBefore(string runJsonPath)
+        {
+            string name = System.IO.Path.GetFileName(runJsonPath);
+            if (!name.StartsWith("WebInventory_", StringComparison.Ordinal) || !name.EndsWith("_run.json", StringComparison.Ordinal)) return false;
+            string sp = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(runJsonPath)), name.Substring(0, name.Length - 9) + "_ship-state.json");
+            if (!File.Exists(sp)) return false;
+            try { JObj e = LoadState(sp).Obj("targets").Obj(Key); return e != null && e.Str("state") == "complete"; }
+            catch { return false; }
+        }
+
+        // the manifest this run is shipped under: the one Tideline accepted for this target (it must not change once
+        // accepted), else a new one. Manifests are deterministic, so a new one is the same bytes unless the sensor,
+        // the engagement or the run's files changed.
+        public byte[] Prepare(ShipRun run, string engagement, out string runId, out string sensor, out JObj state, out JObj entry)
+        {
+            sensor = SensorCert.SensorId(Cert);
+            if (sensor == null) throw new CryptographicException("the certificate " + Cert.Thumbprint + " has no single " + SensorCert.UrnPrefix + "<id> name");
+            state = LoadState(StateFile(run));
+            entry = state.Obj("targets").Obj(Key);
+            if (entry != null && entry.Str("manifest") != null && entry["accepted"] is bool && (bool)entry["accepted"])
+            {
+                byte[] mb = Encoding.ASCII.GetBytes(entry.Str("manifest"));
+                JObj m = TJson.Parse(entry.Str("manifest")) as JObj;
+                if (m == null || m.Str("sensor") != sensor)
+                    throw new InvalidDataException("this run was prepared for Tideline as sensor '" + (m == null ? "?" : m.Str("sensor")) + "', the certificate is sensor '" + sensor + "'; ship it with that sensor's certificate");
+                if (!string.IsNullOrEmpty(engagement) && m.Str("engagement") != engagement)
+                    throw new InvalidDataException("this run was prepared for engagement '" + m.Str("engagement") + "'; -Engagement '" + engagement + "' cannot change it");
+                runId = m.Str("run_id");
+                return mb;
+            }
+            string eng = run.Engagement;
+            if (!string.IsNullOrEmpty(engagement))
+            {
+                if (eng.Length > 0 && eng != engagement) throw new InvalidDataException("the run was made for engagement '" + eng + "'; -Engagement '" + engagement + "' cannot change it");
+                eng = engagement;
+            }
+            runId = run.RunUuid.Length > 0 ? run.RunUuid : run.DerivedUuid();
+            byte[] bytes = run.Manifest(sensor, runId, eng);
+            JObj previous = entry;
+            entry = new JObj();
+            entry.Add("target", Target.ToString()).Add("run_id", runId).Add("sensor", sensor).Add("state", "prepared").Add("accepted", false)
+                 .Add("manifest_sha256", SensorCert.Sha256Hex(bytes)).Add("manifest", Encoding.ASCII.GetString(bytes))
+                 .Add("parts_sent", new List<object>()).Add("attempts", previous != null && previous.Arr("attempts") != null ? previous.Arr("attempts") : new List<object>());
+            state.Obj("targets").Add(Key, entry);
+            SaveState(StateFile(run), state);
+            return bytes;
+        }
+
+        ShipHttpResponse Call(string method, string path, Dictionary<string, string> h, byte[] body)
+        {
+            PinnedTls pin = new PinnedTls(); pin.Roots = Roots;
+            return Https.Send(Target, method, ApiBase + path, h, body, Cert, pin, TimeoutMs);
+        }
+
+        static string Brief(ShipHttpResponse r)
+        {
+            string t = r.Text.Trim();
+            JObj j = r.Json;
+            if (j != null && j.Str("error") != null) t = j.Str("error") + (j.Has("lines") ? " lines " + TJson.Write(j["lines"]) : "") + (j.Str("reason") != null ? " (" + j.Str("reason") + ")" : "");
+            if (t.Length > 300) t = t.Substring(0, 300) + "...";
+            return "HTTP " + r.Status + (t.Length > 0 ? ": " + t : "");
+        }
+        static bool Transient(int status) { return status == 408 || status == 429 || status >= 500; }
+
+        static List<int> Missing(JObj j, int total)
+        {
+            List<int> r = new List<int>();
+            List<object> m = j == null ? null : j.Arr("missing");
+            if (m == null) { for (int i = 1; i <= total; i++) r.Add(i); return r; }
+            foreach (object o in m) { long n; if (o is long) { n = (long)o; if (n >= 1 && n <= total && !r.Contains((int)n)) r.Add((int)n); } }
+            r.Sort();
+            return r;
+        }
+
+        public ShipResult Ship(ShipRun run, string engagement, bool force)
+        {
+            ShipResult res = new ShipResult();
+            string runId, sensor; JObj state, entry;
+            byte[] manifest = Prepare(run, engagement, out runId, out sensor, out state, out entry);
+            res.RunId = runId; res.Sensor = sensor; res.PartsTotal = run.Parts.Count; res.ManifestSha256 = SensorCert.Sha256Hex(manifest);
+            string sp = StateFile(run);
+            if (entry.Str("state") == "complete" && !force)
+            {
+                res.Ok = true; res.AlreadyComplete = true; res.State = "complete";
+                res.Log.Add("already shipped to " + Target + " (run " + runId + ", " + entry.Str("completed_at") + ")");
+                return res;
+            }
+            // the parts must match the manifest this run was prepared under
+            JObj mobj = TJson.Parse(Encoding.ASCII.GetString(manifest)) as JObj;
+            List<object> mparts = mobj.Arr("parts");
+            if (mparts == null || mparts.Count != run.Parts.Count) throw new InvalidDataException("the run's files differ from the manifest prepared earlier (" + (mparts == null ? 0 : mparts.Count) + " parts then, " + run.Parts.Count + " now)");
+            for (int i = 0; i < run.Parts.Count; i++)
+            {
+                JObj q = mparts[i] as JObj;
+                if (q == null || q.Str("sha256") != run.Parts[i].Sha256 || q.Str("name") != run.Parts[i].Name) throw new InvalidDataException("part " + (i + 1) + " (" + run.Parts[i].Name + ") differs from the manifest prepared earlier");
+            }
+            string sig = SensorCert.SignatureHeader(manifest, Cert);
+            List<object> sent = entry.Arr("parts_sent") ?? new List<object>();
+            for (int attempt = 0; attempt <= Retries; attempt++)
+            {
+                res.Attempts = attempt + 1;
+                if (attempt > 0)
+                {
+                    int wait = (int)Math.Min(300000, RetryDelayMs * Math.Pow(3, attempt - 1));
+                    res.Log.Add("retrying in " + (wait / 1000) + " s");
+                    Thread.Sleep(wait);
+                }
+                string error = ""; bool transient = true;
+                try
+                {
+                    Dictionary<string, string> h = new Dictionary<string, string>();
+                    h["Content-Type"] = "application/json"; h["Tideline-Signature"] = sig;
+                    ShipHttpResponse r = Call("POST", "/v1/runs", h, manifest);
+                    if (r.Status == 409) { transient = false; throw new IOException("Tideline already holds run " + runId + " with a different manifest (" + Brief(r) + ")"); }
+                    if (r.Status != 200 && r.Status != 201) { transient = Transient(r.Status); throw new IOException("opening the run: " + Brief(r)); }
+                    if (!(entry["accepted"] is bool) || !(bool)entry["accepted"]) { entry.Add("accepted", true); SaveState(sp, state); }
+                    JObj j = r.Json;
+                    string st = j == null ? "" : (j.Str("state") ?? "");
+                    if (st == "verified" || st == "normalized")
+                    {
+                        Record(entry, sp, state, "complete", "");
+                        res.Ok = true; res.State = st; res.AlreadyComplete = r.Status == 200;
+                        res.Log.Add("Tideline already has run " + runId + " complete (" + st + ")");
+                        return res;
+                    }
+                    if (st == "rejected") { transient = false; throw new IOException("Tideline rejected run " + runId + ": " + (j.Str("reason") ?? "")); }
+                    List<int> missing = Missing(j, run.Parts.Count);
+                    res.Log.Add(string.Format(CultureInfo.InvariantCulture, "run {0} open ({1}); {2} of {3} parts to send", runId, r.Status == 201 ? "new" : "resumed", missing.Count, run.Parts.Count));
+                    foreach (int n in missing)
+                    {
+                        ShipPart p = run.Parts[n - 1];
+                        byte[] body = ShipRun.Body(p);
+                        Dictionary<string, string> ph = new Dictionary<string, string>();
+                        ph["Content-Type"] = p.Media;
+                        if (p.Gzip) ph["Content-Encoding"] = "gzip";
+                        ShipHttpResponse pr = Call("PUT", "/v1/runs/" + runId + "/parts/" + n.ToString(CultureInfo.InvariantCulture), ph, body);
+                        if (pr.Status == 204 || pr.Status == 200)
+                        {
+                            res.PartsSent++; res.BytesSent += body.Length;
+                            if (!sent.Contains((long)n)) sent.Add((long)n);
+                            entry.Add("parts_sent", sent); entry.Add("state", "receiving"); SaveState(sp, state);
+                            continue;
+                        }
+                        transient = Transient(pr.Status);
+                        throw new IOException("part " + n + " (" + p.Name + (p.Chunks > 1 ? " chunk " + p.Chunk + "/" + p.Chunks : "") + "): " + Brief(pr));
+                    }
+                    ShipHttpResponse cr = Call("POST", "/v1/runs/" + runId + "/complete", null, new byte[0]);
+                    if (cr.Status == 202 || cr.Status == 200)
+                    {
+                        JObj cj = cr.Json;
+                        Record(entry, sp, state, "complete", "");
+                        res.Ok = true; res.State = cj == null ? "verified" : (cj.Str("state") ?? "verified");
+                        res.Log.Add(string.Format(CultureInfo.InvariantCulture, "run {0} complete at Tideline ({1}); {2} parts, {3:N0} bytes sent", runId, res.State, res.PartsSent, res.BytesSent));
+                        return res;
+                    }
+                    if (cr.Status == 409) { error = "closing the run: " + Brief(cr) + "; the missing parts are sent again"; transient = true; throw new IOException(error); }
+                    transient = Transient(cr.Status);
+                    throw new IOException("closing the run: " + Brief(cr));
+                }
+                catch (Exception ex)
+                {
+                    if (ex is InvalidDataException || ex is CryptographicException) transient = false;
+                    if (ex is AuthenticationException) transient = false;
+                    error = ex.Message;
+                    res.Log.Add("attempt " + (attempt + 1) + ": " + error);
+                    Record(entry, sp, state, transient ? "receiving" : "rejected", error);
+                    res.Error = error; res.Retryable = transient;
+                    if (!transient) { res.State = "rejected"; return res; }
+                }
+            }
+            res.State = "pending";
+            return res;
+        }
+
+        void Record(JObj entry, string sp, JObj state, string st, string error)
+        {
+            List<object> at = entry.Arr("attempts") ?? new List<object>();
+            at.Add(new JObj().Add("at", Now()).Add("result", st).Add("error", error.Length > 0 ? error : null).Add("by", ToolVersion));
+            while (at.Count > 50) at.RemoveAt(0);
+            entry.Add("attempts", at).Add("state", st == "rejected" ? "failed" : st).Add("last_error", error.Length > 0 ? error : null);
+            if (st == "complete") entry.Add("completed_at", Now());
+            SaveState(sp, state);
+        }
+
+        public ShipHttpResponse Status(string runId)
+        {
+            return Call("GET", "/v1/runs/" + runId, null, null);
+        }
+
+        // one file to carry by hand: manifest, signature, the sensor's certificate chain and the parts as they would be uploaded
+        public static int Export(ShipRun run, X509Certificate2 cert, X509Certificate2Collection roots, string engagement, string zipPath, string toolVersion)
+        {
+            string sensor = SensorCert.SensorId(cert);
+            if (sensor == null) throw new CryptographicException("the certificate " + cert.Thumbprint + " has no single " + SensorCert.UrnPrefix + "<id> name");
+            string eng = run.Engagement;
+            if (!string.IsNullOrEmpty(engagement))
+            {
+                if (eng.Length > 0 && eng != engagement) throw new InvalidDataException("the run was made for engagement '" + eng + "'; -Engagement '" + engagement + "' cannot change it");
+                eng = engagement;
+            }
+            string runId = run.RunUuid.Length > 0 ? run.RunUuid : run.DerivedUuid();
+            byte[] manifest = run.Manifest(sensor, runId, eng);
+            string sig = SensorCert.SignatureHeader(manifest, cert);
+            string tmp = zipPath + ".tmp";
+            if (File.Exists(tmp)) File.Delete(tmp);
+            JObj index = new JObj();
+            index.Add("format", "tideline-bundle/1").Add("run_id", runId).Add("created", Now()).Add("created_by", "WebInventory " + toolVersion);
+            List<object> files = new List<object>();
+            using (FileStream fs = new FileStream(tmp, FileMode.CreateNew))
+            using (ZipArchive z = new ZipArchive(fs, ZipArchiveMode.Create))
+            {
+                ZipPut(z, "manifest.json", manifest, CompressionLevel.Optimal);
+                ZipPut(z, "manifest.sig", Encoding.ASCII.GetBytes(sig + "\n"), CompressionLevel.Optimal);
+                StringBuilder chain = new StringBuilder();
+                foreach (X509Certificate2 c in SensorCert.ChainOf(cert, roots)) chain.Append(SensorCert.Pem(c.RawData, "CERTIFICATE"));
+                ZipPut(z, "sensor-chain.pem", Encoding.ASCII.GetBytes(chain.ToString()), CompressionLevel.Optimal);
+                foreach (ShipPart p in run.Parts)
+                {
+                    string name = "parts/" + p.N.ToString("D4", CultureInfo.InvariantCulture) + (p.Gzip ? ".gz" : ".bin");
+                    ZipPut(z, name, ShipRun.Body(p), CompressionLevel.NoCompression);
+                    files.Add(new JObj().Add("n", (long)p.N).Add("path", name).Add("encoding", p.Gzip ? "gzip" : "identity").Add("media", p.Media));
+                }
+                index.Add("parts", files);
+                ZipPut(z, "bundle.json", Encoding.ASCII.GetBytes(TJson.Write(index) + "\n"), CompressionLevel.Optimal);
+            }
+            if (File.Exists(zipPath)) File.Delete(zipPath);
+            File.Move(tmp, zipPath);
+            return run.Parts.Count;
+        }
+        static void ZipPut(ZipArchive z, string name, byte[] data, CompressionLevel level)
+        {
+            ZipArchiveEntry e = z.CreateEntry(name, level);
+            using (Stream s = e.Open()) s.Write(data, 0, data.Length);
+        }
+    }
+
+    public static class ShipInfo { public static string Version = "2.6.0"; }
+}
+'@
+
+#region ---------- Tideline shipping: shared by Invoke-WebInventory.ps1, Send-WebInventoryRun.ps1, Register-WebInventorySensor.ps1 ----------
+function Get-TidelineDir {
+    # where Register-WebInventorySensor.ps1 keeps the pinned root, the sensor record and (off Windows) the sensor PFX
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { Join-Path $env:ProgramData 'WebInventory' }
+    else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config/webinventory' }
+}
+function Get-TidelineDefault([string]$Name) {
+    $p = Join-Path (Get-TidelineDir) $Name
+    if (Test-Path -LiteralPath $p -PathType Leaf) { $p } else { $null }
+}
+
+function Initialize-ShipCode([string]$Version) {
+    if ('WebInv.Shipper' -as [type]) {
+        if ([WebInv.ShipInfo]::Version -ne $Version) { throw ("WebInv shipping code v{0} is already loaded in this PowerShell session (script is v{1}). Open a new PowerShell window." -f [WebInv.ShipInfo]::Version, $Version) }
+        return
+    }
+    $addType = @{ TypeDefinition = $ShipSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
+    if ($PSVersionTable.PSEdition -ne 'Core') {
+        Add-Type -AssemblyName System.IO.Compression
+        $addType.ReferencedAssemblies = @('System.Core', 'System.IO.Compression')
+    }
+    Add-Type @addType
+    [WebInv.Https]::UserAgent = "WebInventory/$Version (authorized asset inventory)"
+}
+
+function Get-InnerMessage($ErrorRecord) {
+    $x = if ($ErrorRecord -is [Exception]) { $ErrorRecord } else { $ErrorRecord.Exception }
+    while ($x -is [System.Management.Automation.MethodInvocationException] -and $x.InnerException) { $x = $x.InnerException }
+    $x.Message
+}
+
+function Test-EngagementId([string]$Id) { $Id -cmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' }
+
+function ConvertTo-TidelineUri([string]$Url) {
+    $u = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$u) -or $u.Scheme -ne 'https' -or -not $u.Host) { throw "'$Url' is not an https:// URL" }
+    if ($u.UserInfo) { throw "'$Url': no credentials in the URL (the sensor certificate authenticates)" }
+    if ($u.Query -or $u.Fragment) { throw "'$Url': no query or fragment" }
+    $u
+}
+
+# the sensor certificate: a PFX (-ShipCertPath), one thumbprint, or the newest valid sensor certificate in the stores
+function Resolve-ShipCert([string]$Thumbprint, [string]$Path, [string]$PasswordFile) {
+    if ($Thumbprint -and $Path) { throw 'give the certificate thumbprint or the PFX path, not both' }
+    if (-not $Thumbprint -and -not $Path -and [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { $Path = Get-TidelineDefault 'tideline-sensor.pfx' }
+    if ($Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "certificate file not found: $Path" }
+        $pw = ''
+        if ($PasswordFile) {
+            if (-not (Test-Path -LiteralPath $PasswordFile -PathType Leaf)) { throw "password file not found: $PasswordFile" }
+            $pw = ([IO.File]::ReadAllLines((Resolve-Path -LiteralPath $PasswordFile).ProviderPath) | Select-Object -First 1)
+            if ($null -eq $pw) { $pw = '' }
+        }
+        $c = [WebInv.SensorCert]::LoadPfx((Resolve-Path -LiteralPath $Path).ProviderPath, $pw)
+    }
+    else {
+        if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'no sensor certificate: pass -ShipCertPath (a PFX), or enroll with Register-WebInventorySensor.ps1' }
+        $err = ''
+        $c = [WebInv.SensorCert]::Find($Thumbprint, [ref]$err)
+        if (-not $c) { throw $err }
+    }
+    if (-not [WebInv.SensorCert]::SensorId($c)) { throw ("certificate {0} has no single {1}<id> name" -f $c.Thumbprint, [WebInv.SensorCert]::UrnPrefix) }
+    $now = Get-Date
+    if ($c.NotAfter -lt $now -or $c.NotBefore -gt $now) { throw ("certificate {0} is not valid now (valid {1:u} to {2:u})" -f $c.Thumbprint, $c.NotBefore, $c.NotAfter) }
+    $c
+}
+
+function Resolve-ShipRoots([string]$CaFile) {
+    if (-not $CaFile) { $CaFile = Get-TidelineDefault 'tideline-root.crt' }
+    if (-not $CaFile) { throw ("no Tideline root CA: pass -ShipCaFile, or enroll with Register-WebInventorySensor.ps1 (it saves the root to {0})" -f (Join-Path (Get-TidelineDir) 'tideline-root.crt')) }
+    if (-not (Test-Path -LiteralPath $CaFile -PathType Leaf)) { throw "CA file not found: $CaFile" }
+    [WebInv.SensorCert]::LoadPem((Resolve-Path -LiteralPath $CaFile).ProviderPath)
+}
+
+# the run.json of a run folder or of any file of the run (newest run when a folder holds several)
+function Get-RunJsonPaths([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { throw "not found: $Path" }
+    $item = Get-Item -LiteralPath $Path
+    if ($item.PSIsContainer) { return @(Get-ChildItem -LiteralPath $item.FullName -Filter 'WebInventory_*_run.json' -File | Sort-Object Name | ForEach-Object { $_.FullName }) }
+    if ($item.Name -match '^WebInventory_(.+?)(?:_run\.json|\.jsonl|\.csv|_manifest\.txt|_progress\.txt|_ship-state\.json)$') {
+        $rj = Join-Path $item.DirectoryName ('WebInventory_{0}_run.json' -f $Matches[1])
+        if (Test-Path -LiteralPath $rj) { return @($rj) }
+        throw "the run.json of $($item.Name) is missing ($rj)"
+    }
+    throw "$Path is not a run folder or a WebInventory run file"
+}
+#endregion
+
+# before the scan: everything shipping needs is checked here, so a scan never runs for hours and then cannot deliver.
+# Nothing is sent to Tideline until the run is complete.
+function Initialize-Shipping {
+    try { $script:ShipUri = ConvertTo-TidelineUri $ShipTo } catch { Stop-Fatal "-ShipTo: $(Get-InnerMessage $_)" }
+    try { Initialize-ShipCode $ScriptVersion } catch { Stop-Fatal "Shipping code compile failed: $(Get-InnerMessage $_)" }
+    try { $script:ShipCert = Resolve-ShipCert $ShipCertThumbprint $ShipCertPath $ShipCertPasswordFile } catch { Stop-Fatal "-ShipTo: sensor certificate: $(Get-InnerMessage $_)" }
+    try { $script:ShipRoots = Resolve-ShipRoots $ShipCaFile } catch { Stop-Fatal "-ShipTo: $(Get-InnerMessage $_)" }
+    # the key must be usable by this account now, not only when the run ends
+    try { [void][WebInv.SensorCert]::SignatureHeader([byte[]]@(0), $script:ShipCert) } catch { Stop-Fatal "-ShipTo: $(Get-InnerMessage $_)" }
+    $script:ShipSensor = [WebInv.SensorCert]::SensorId($script:ShipCert)
+    $left = ($script:ShipCert.NotAfter - (Get-Date)).TotalHours
+    Write-RunLog ("Tideline: after the run, ship to {0} as sensor {1} (certificate {2}, valid until {3:u}; root {4})" -f $script:ShipUri, $script:ShipSensor, $script:ShipCert.Thumbprint, $script:ShipCert.NotAfter, $script:ShipRoots[0].Subject)
+    if ($left -lt 48) { Write-RunLog ("Tideline: the sensor certificate expires in {0:N0} hours; renew it (Register-WebInventorySensor.ps1 -Renew)" -f $left) 'WARN' }
+}
+
+# after the run (and the store ingest): ship it; $false when it could not be delivered
+function Invoke-Shipping {
+    $rj = Join-Path $OutputDir ("WebInventory_{0}_run.json" -f $script:RunId)
+    $sh = New-Object WebInv.Shipper
+    $sh.Target = $script:ShipUri; $sh.Cert = $script:ShipCert; $sh.Roots = $script:ShipRoots; $sh.Retries = $ShipRetries; $sh.ToolVersion = $ScriptVersion
+    if ($env:WEBINV_SHIP_RETRY_MS) { $sh.RetryDelayMs = [int]$env:WEBINV_SHIP_RETRY_MS }   # tests only
+    if ($env:WEBINV_SHIP_CHUNK_BYTES) { [WebInv.ShipRun]::ChunkBytes = [long]$env:WEBINV_SHIP_CHUNK_BYTES }   # tests only
+    try {
+        $run = [WebInv.ShipRun]::Collect($rj)
+        foreach ($n in $run.Notes) { Write-Host ("Tideline: {0}" -f $n) -ForegroundColor DarkGray }
+        $res = $sh.Ship($run, [string]$Engagement, $false)
+    }
+    catch {
+        Write-Host ("Tideline: not shipped: {0}" -f (Get-InnerMessage $_)) -ForegroundColor Red
+        return $false
+    }
+    foreach ($l in $res.Log) { Write-Host ("Tideline: {0}" -f $l) -ForegroundColor DarkGray }
+    if ($res.Ok) {
+        Write-Host ("Tideline: run {0} delivered to {1} as sensor {2} ({3} parts)" -f $res.RunId, $script:ShipUri, $res.Sensor, $res.PartsTotal) -ForegroundColor Cyan
+        return $true
+    }
+    $state = Join-Path $OutputDir ("WebInventory_{0}_ship-state.json" -f $script:RunId)
+    if ($res.Retryable) { Write-Host ("Tideline: delivery failed ({0}); retry later: Send-WebInventoryRun.ps1 '{1}' -ShipTo {2}  (state: {3})" -f $res.Error, $OutputDir, $script:ShipUri, $state) -ForegroundColor Yellow }
+    else { Write-Host ("Tideline: Tideline refused the run: {0} (state: {1})" -f $res.Error, $state) -ForegroundColor Red }
+    $false
+}
+
+# -NvdFeed on a scan run: this run's services joined offline with NVD/KEV/EPSS, the same matching as
+# -StoreQuery Vulnerabilities; WebInventory_<RunId>_vulns.csv / .jsonl / .provenance.json are part of the run
+function Invoke-RunVulnerabilities {
+    param([string]$CsvFile)
+    Initialize-StoreEngine
+    [void][WebInv.Vulns]::SetAliases($CpeSupplementJson)
+    $svcs = New-Object 'System.Collections.Generic.List[WebInv.Vulns+Service]'
+    foreach ($r in @(Import-Csv -LiteralPath $CsvFile)) {
+        if (-not $r.CPEs) { continue }
+        $s = New-Object 'WebInv.Vulns+Service'
+        $s.Host = $r.Host; $s.Ip = $r.IP; $s.Port = $r.Port; $s.Url = $r.Url; $s.Status = 'Active'; $s.Products = $r.Products; $s.EntityId = ''
+        foreach ($c in ($r.CPEs -split ';')) { $x = [WebInv.Cpe]::Parse($c.Trim()); if ($x) { $s.Cpes.Add($x) } }
+        if ($s.Cpes.Count) { $svcs.Add($s) }
+    }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $q = [WebInv.Vulns]::Run($svcs, [string[]]$script:NvdFeeds, [string]$script:KevPath, [string]$script:EpssPath, (New-Object 'System.Collections.Generic.List[WebInv.RowFilter]'), '', [string]$script:RunId)
+    foreach ($m in $q.Messages) { Write-RunLog ("Vulnerabilities: {0}" -f $m) }
+    $base = Join-Path $OutputDir ("WebInventory_{0}_vulns" -f $script:RunId)
+    Write-QueryCsv $q "$base.csv"
+    Write-JsonlRows -Path "$base.jsonl" -Names ([string[]]$q.Columns) -Rows $q.Rows
+    [IO.File]::WriteAllText("$base.provenance.json", $q.Provenance + "`n", $script:Utf8NoBom)
+    $msg = "Vulnerabilities: {0} service-CVE rows for {1} services with a CPE in {2:N1} s -> {3}.csv" -f $q.Rows.Count, $svcs.Count, $sw.Elapsed.TotalSeconds, $base
+    Write-RunLog $msg
+    if (-not $Quiet) { Write-Host $msg -ForegroundColor Cyan }
+    @("$base.csv", "$base.jsonl", "$base.provenance.json")
+}
+#endregion
+
+#region ---------- shipping self-test (part of -SelfTest; no network) ----------
+function Invoke-ShipSelfTest {
+    try { Initialize-ShipCode $ScriptVersion } catch { Assert 'Tideline: shipping code compiles' { $false }; return }
+    Assert 'Tideline: shipping code compiles' { $true }
+    $X = 'System.Security.Cryptography.X509Certificates'
+    function New-TestCert([string]$Cn, [string[]]$Uris, $Issuer, [string]$Eku, [bool]$Ca) {
+        $k = [Security.Cryptography.ECDsa]::Create([Security.Cryptography.ECCurve+NamedCurves]::nistP256)
+        $req = New-Object "$X.CertificateRequest" ("CN=$Cn", $k, [Security.Cryptography.HashAlgorithmName]::SHA256)
+        if ($Uris) { $b = New-Object "$X.SubjectAlternativeNameBuilder"; foreach ($u in $Uris) { $b.AddUri([Uri]$u) }; $req.CertificateExtensions.Add($b.Build()) }
+        if ($Eku) { $o = New-Object Security.Cryptography.OidCollection; [void]$o.Add((New-Object Security.Cryptography.Oid $Eku)); $req.CertificateExtensions.Add((New-Object "$X.X509EnhancedKeyUsageExtension" ($o, $false))) }
+        if ($Ca) { $req.CertificateExtensions.Add((New-Object "$X.X509BasicConstraintsExtension" ($true, $false, 0, $true))) }
+        $nb = [DateTimeOffset]::UtcNow.AddMinutes(-5); $na = [DateTimeOffset]::UtcNow.AddDays(30)
+        if ($Issuer) { $c = $req.Create($Issuer, $nb, $na, [byte[]]@(1, 2, 3, 4, 5, 6, 7, 8)); return [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::CopyWithPrivateKey($c, $k) }
+        $req.CreateSelfSigned($nb, $na)
+    }
+    Assert 'Tideline: JSON reads and writes back the same ASCII bytes' {
+        $q = [char]92; $t = '{"a":[1,2.5,true,null,"' + $q + 'u00e9' + $q + '"x' + $q + $q + 'y"],"b":{},"c":-7}'
+        [WebInv.TJson]::Write([WebInv.TJson]::Parse($t)) -ceq $t
+    }
+    Assert 'Tideline: sensor id from the urn:tideline:sensor URI name; two ids are refused' {
+        $a = New-TestCert 'wi-self' @('urn:tideline:sensor:wi-self') $null '1.3.6.1.5.5.7.3.2' $false
+        $b = New-TestCert 'x' @('urn:tideline:sensor:one', 'urn:tideline:sensor:two') $null $null $false
+        $c = New-TestCert 'x' @('https://example.invalid/') $null $null $false
+        [WebInv.SensorCert]::SensorId($a) -eq 'wi-self' -and [WebInv.SensorCert]::ClientAuth($a) -and $null -eq [WebInv.SensorCert]::SensorId($b) -and $null -eq [WebInv.SensorCert]::SensorId($c)
+    }
+    Assert 'Tideline: ES256 manifest signature (P1363) verifies; changed bytes do not' {
+        $a = New-TestCert 'wi-self' @('urn:tideline:sensor:wi-self') $null $null $false
+        $data = [Text.Encoding]::ASCII.GetBytes('{"schema":"tideline-envelope/1"}')
+        $h = [WebInv.SensorCert]::SignatureHeader($data, $a)
+        $sig = [Convert]::FromBase64String(($h -split 'sig=')[1])
+        $pub = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($a)
+        $h -like 'alg=ES256; enc=p1363; sig=*' -and $sig.Length -eq 64 -and $pub.VerifyData($data, $sig, [Security.Cryptography.HashAlgorithmName]::SHA256) -and
+            -not $pub.VerifyData([Text.Encoding]::ASCII.GetBytes('{"schema":"tideline-envelope/2"}'), $sig, [Security.Cryptography.HashAlgorithmName]::SHA256)
+    }
+    Assert 'Tideline: the server must chain to the pinned root, not another' {
+        $root = New-TestCert 'Test Root' $null $null $null $true
+        $other = New-TestCert 'Other Root' $null $null $null $true
+        $leaf = New-TestCert 'localhost' $null $root '1.3.6.1.5.5.7.3.1' $false
+        $r1 = New-Object "$X.X509Certificate2Collection"; [void]$r1.Add((New-Object "$X.X509Certificate2" (, $root.RawData)))
+        $r2 = New-Object "$X.X509Certificate2Collection"; [void]$r2.Add((New-Object "$X.X509Certificate2" (, $other.RawData)))
+        $w1 = ''; $w2 = ''
+        [WebInv.PinnedTls]::ChainsTo($leaf, $null, $r1, $true, [ref]$w1) -and -not [WebInv.PinnedTls]::ChainsTo($leaf, $null, $r2, $true, [ref]$w2) -and $w2 -match 'pinned root'
+    }
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ('wi-ship-st-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    try {
+        $id = '20260102_030405'; $stem = Join-Path $dir "WebInventory_$id"
+        $lines = @('{"Host":"a","Port":80}', '{"Host":"b","Port":443}', '{"Host":"c","Port":8080}')
+        [IO.File]::WriteAllText("$stem.jsonl", (($lines -join "`n") + "`n"), $script:Utf8NoBom)
+        [IO.File]::WriteAllText("${stem}_errors.jsonl", '', $script:Utf8NoBom)
+        $info = [ordered]@{ format = 1; runId = $id; runUuid = '11111111-2222-4333-8444-555555555555'; startedAt = '2026-01-02T03:04:05+01:00'; finishedAt = '2026-01-02T03:14:05+01:00'
+            complete = $true; scanner = 'WebInventory 2.6.0'; engagement = 'eng-1'; exitCode = 0; computer = 'HOST'; profile = [ordered]@{ tlsScan = $true }; sessions = @() }
+        [IO.File]::WriteAllText("${stem}_run.json", (ConvertTo-Json -InputObject $info -Depth 4), $script:Utf8NoBom)
+        $wm = { $m = @('# test manifest', '# sha256  bytes  file'); foreach ($f in "$stem.jsonl", "${stem}_errors.jsonl", "${stem}_run.json") { $b = [IO.File]::ReadAllBytes($f); $m += ('{0}  {1}  {2}' -f [WebInv.Hash]::Sha256Hex($b), $b.Length, (Split-Path -Leaf $f)) }; [IO.File]::WriteAllLines("${stem}_manifest.txt", [string[]]$m, $script:Utf8NoBom) }
+        & $wm
+        Assert 'Tideline: a run folder becomes services, errors, run.json and manifest parts; deterministic manifest' {
+            $r = [WebInv.ShipRun]::Collect("${stem}_run.json")
+            $k = @($r.Parts | ForEach-Object { if ($_.Kind -eq 'artifact') { 'artifact:' + $_.Role } else { $_.Kind } }) -join ','
+            $m1 = $r.Manifest('wi-self', $r.RunUuid, 'eng-1'); $m2 = ([WebInv.ShipRun]::Collect("${stem}_run.json")).Manifest('wi-self', $r.RunUuid, 'eng-1')
+            $mt = [Text.Encoding]::ASCII.GetString($m1)
+            $k -eq 'services,errors,artifact:run-info,artifact:tool-manifest' -and $r.Parts[0].Records -eq 3 -and $r.Parts[1].Records -eq 0 -and
+                [WebInv.SensorCert]::Sha256Hex($m1) -eq [WebInv.SensorCert]::Sha256Hex($m2) -and $mt -like '*"started":"2026-01-02T02:04:05Z"*' -and $mt -like '*"run_id":"11111111-2222-4333-8444-555555555555"*'
+        }
+        Assert 'Tideline: a large NDJSON file goes as chunks that end at line ends and add up to the file' {
+            $old = [WebInv.ShipRun]::ChunkBytes
+            try {
+                [WebInv.ShipRun]::ChunkBytes = 30
+                $r = [WebInv.ShipRun]::Collect("${stem}_run.json")
+                $ch = @($r.Parts | Where-Object { $_.Kind -eq 'services' })
+                $all = [IO.File]::ReadAllBytes("$stem.jsonl")
+                $ok = $ch.Count -eq 3 -and ($ch | Measure-Object Bytes -Sum).Sum -eq $all.Length -and ($ch | Measure-Object Records -Sum).Sum -eq 3
+                foreach ($c in $ch) { $ok = $ok -and $all[$c.Offset + $c.Bytes - 1] -eq 10 -and $c.Chunks -eq 3 -and $c.FileSha256 -eq [WebInv.SensorCert]::Sha256Hex($all) }
+                $ok
+            }
+            finally { [WebInv.ShipRun]::ChunkBytes = $old }
+        }
+        Assert 'Tideline: an NDJSON part is uploaded gzip-compressed and decompresses to the file' {
+            $r = [WebInv.ShipRun]::Collect("${stem}_run.json")
+            $gz = [WebInv.ShipRun]::Body($r.Parts[0])
+            $in = New-Object IO.Compression.GZipStream((New-Object IO.MemoryStream (, $gz)), [IO.Compression.CompressionMode]::Decompress)
+            $out = New-Object IO.MemoryStream; $in.CopyTo($out)
+            [WebInv.SensorCert]::Sha256Hex($out.ToArray()) -eq [WebInv.SensorCert]::Sha256Hex([IO.File]::ReadAllBytes("$stem.jsonl")) -and $gz[0] -eq 0x1f -and $gz[1] -eq 0x8b
+        }
+        Assert 'Tideline: a file changed after the run manifest, or an incomplete run, is refused' {
+            [IO.File]::AppendAllText("$stem.jsonl", '{"Host":"d","Port":1}' + "`n")
+            $changed = try { [void][WebInv.ShipRun]::Collect("${stem}_run.json"); $false } catch { (Get-InnerMessage $_) -match 'changed after the run' }
+            & $wm
+            $info.complete = $false; [IO.File]::WriteAllText("${stem}_run.json", (ConvertTo-Json -InputObject $info -Depth 4), $script:Utf8NoBom)
+            $partial = try { [void][WebInv.ShipRun]::Collect("${stem}_run.json"); $false } catch { (Get-InnerMessage $_) -match 'not complete' }
+            $changed -and $partial
+        }
+    }
+    finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    Assert 'Tideline: engagement ids and URLs are checked' {
+        (Test-EngagementId 'eng-2026.014_a') -and -not (Test-EngagementId 'bad id') -and -not (Test-EngagementId '-x') -and
+            $(try { [void](ConvertTo-TidelineUri 'http://x:8443'); $false } catch { $true }) -and $(try { [void](ConvertTo-TidelineUri 'https://u:p@x:8443'); $false } catch { $true }) -and
+            (ConvertTo-TidelineUri 'https://tideline.example:8443').Port -eq 8443
+    }
+}
 #endregion
 
 
@@ -14361,6 +15975,19 @@ if ($TestRules) { Invoke-TestRules; Close-Logs; exit $script:ExitCode }
 if ($NoJa4s -and -not $TlsFingerprint) { Stop-Fatal '-NoJa4s goes with -TlsFingerprint.' }
 if ($DnsServer -and -not $Cname) { Stop-Fatal '-DnsServer goes with -Cname.' }
 if ($CloudFile -and $NoCloud) { Stop-Fatal 'Give -CloudFile or -NoCloud, not both.' }
+# Tideline shipping and the per-run vulnerability join (v2.6)
+if (-not $ShipTo -and ($ShipCertThumbprint -or $ShipCertPath -or $ShipCertPasswordFile -or $ShipCaFile -or $Explicit.Contains('ShipRetries'))) { Stop-Fatal 'Shipping options were given without -ShipTo.' }
+if ($ShipCertPasswordFile -and -not $ShipCertPath) { Stop-Fatal '-ShipCertPasswordFile goes with -ShipCertPath.' }
+if ($Engagement -and -not (Test-EngagementId $Engagement)) { Stop-Fatal "-Engagement '$Engagement': letters, digits, '.', '_' and '-', up to 64, starting with a letter or digit." }
+$script:NvdFeeds = $null; $script:KevPath = ''; $script:EpssPath = ''
+if (($KevFile -or $EpssFile) -and -not @($NvdFeed | Where-Object { $_ }).Count) { Stop-Fatal '-KevFile and -EpssFile go with -NvdFeed.' }
+if (@($NvdFeed | Where-Object { $_ }).Count) {
+    try { $script:NvdFeeds = [string[]]@(foreach ($f in @($NvdFeed | Where-Object { $_ })) { foreach ($x in ($f -split ',')) { if ($x.Trim()) { (Resolve-Path -LiteralPath $x.Trim() -ErrorAction Stop).ProviderPath } } }) }
+    catch { Stop-Fatal "-NvdFeed: $($_.Exception.Message)" }
+    foreach ($f in @($KevFile, $EpssFile)) { if ($f -and -not (Test-Path -LiteralPath $f -PathType Leaf)) { Stop-Fatal "file not found: $f" } }
+    if ($KevFile) { $script:KevPath = (Resolve-Path -LiteralPath $KevFile).ProviderPath }
+    if ($EpssFile) { $script:EpssPath = (Resolve-Path -LiteralPath $EpssFile).ProviderPath }
+}
 $snmpCred = $null
 if (-not $Snmp -and ($SnmpCommunity -or $SnmpCredential -or $SnmpPrivPassword -or $SnmpVersion -or $SnmpPrivProtocol)) { Stop-Fatal 'SNMP options were given without -Snmp.' }
 if ($Snmp) {
@@ -14563,6 +16190,13 @@ if ($Resume) {
     if ((Split-Path -Leaf $rp) -notmatch '^WebInventory_(.+)_progress\.txt$') { Stop-Fatal "Resume file must be a WebInventory_<RunId>_progress.txt file" }
     $script:RunId = $Matches[1]
     $OutputDir = Split-Path -Parent $rp
+    if ($Engagement) {
+        $orj = Join-Path $OutputDir ("WebInventory_{0}_run.json" -f $script:RunId)
+        if (Test-Path -LiteralPath $orj) {
+            $oe = $null; try { $oe = [string](([IO.File]::ReadAllText($orj) | ConvertFrom-Json).engagement) } catch { }
+            if ($oe -and $oe -ne $Engagement) { Stop-Fatal ("-Engagement {0}: run {1} was started for engagement {2}" -f $Engagement, $script:RunId, $oe) }
+        }
+    }
     foreach ($l in [IO.File]::ReadAllLines($rp)) { if ($l) { [void]$doneKeys.Add($l.Trim()) } }
     $before = $Jobs.Count
     $Jobs = New-Object System.Collections.Generic.List[string] (, [string[]]@($Jobs | Where-Object { $p = $_.Split("`t"); -not $doneKeys.Contains(('{0}|{1}|{2}' -f $p[0], $p[1], $p[2])) }))
@@ -14609,6 +16243,7 @@ if ($Store -and -not $NoStore) {
     catch { Stop-Fatal ("-Store: {0}" -f $_.Exception.Message) }
     Write-RunLog ("Store: {0} (runs are added after they complete)" -f $script:StorePath)
 }
+if ($ShipTo) { Initialize-Shipping }
 if (-not (Test-Path -LiteralPath $OutputDir)) { try { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null } catch { Stop-Fatal "Cannot create -OutputDir '$OutputDir': $($_.Exception.Message)" } }
 $OutputDir = (Resolve-Path -LiteralPath $OutputDir).ProviderPath
 try { Open-Outputs $OutputDir $script:RunId } catch { Stop-Fatal "Cannot open output files in '$OutputDir': $($_.Exception.Message)" }
@@ -14770,6 +16405,7 @@ finally {
             $shots = Invoke-Screenshots -CsvFile $script:CsvPath
             if ($script:ShotIndexPath -and (Test-Path -LiteralPath $script:ShotIndexPath)) {
                 $outputs.Add($script:ShotIndexPath)
+                if ($script:ShotJsonlPath -and (Test-Path -LiteralPath $script:ShotJsonlPath)) { $outputs.Add($script:ShotJsonlPath) }
                 foreach ($f in $shots.Values) { $outputs.Add((Join-Path $OutputDir $f)) }
             }
         }
@@ -14797,12 +16433,24 @@ finally {
                 $script:DeltaPath = Join-Path $OutputDir ("WebInventory_{0}_delta.csv" -f $script:RunId)
                 $dc = Compare-Baseline -BaselinePath $bl -CurrentCsv $script:CsvPath -DeltaPath $script:DeltaPath
                 $deltaMsg = "Delta vs {0}: {1} new, {2} removed, {3} changed -> {4}" -f (Split-Path -Leaf $bl), $dc.New, $dc.Removed, $dc.Changed, $script:DeltaPath
-                Write-RunLog $deltaMsg; $outputs.Add($script:DeltaPath)
+                Write-RunLog $deltaMsg; $outputs.Add($script:DeltaPath); $outputs.Add([IO.Path]::ChangeExtension($script:DeltaPath, '.jsonl'))
             }
         }
         catch { Write-ErrLog 'IO' 'delta' ("baseline comparison failed: {0}" -f $_.Exception.Message) }
     }
-    try { $outputs.Add((Write-RunInfo -Complete (-not $interrupted -and -not $script:TimeLimitHit) -Interrupted $interrupted -TimeLimit $script:TimeLimitHit -Rows $counts.rows)) }
+    $outputs.Add($script:ErrJsonPath)
+    if ($script:NvdFeeds -and -not $interrupted -and -not $script:TimeLimitHit) {
+        try { foreach ($f in (Invoke-RunVulnerabilities -CsvFile $script:CsvPath)) { $outputs.Add($f) } }
+        catch {
+            $ex = $_.Exception; while ($ex -is [System.Management.Automation.MethodInvocationException] -and $ex.InnerException) { $ex = $ex.InnerException }
+            Write-ErrLog 'VULNS' '-' ("vulnerability join failed: {0}" -f $ex.Message)
+        }
+    }
+    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
+    # Rows from earlier sessions of a resumed run count as answers. The code is recorded in run.json (Tideline's exit_code).
+    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
+    $runExit = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif (-not $answered) { 4 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
+    try { $outputs.Add((Write-RunInfo -Complete (-not $interrupted -and -not $script:TimeLimitHit) -Interrupted $interrupted -TimeLimit $script:TimeLimitHit -Rows $counts.rows -ExitCode $runExit)) }
     catch { Write-ErrLog 'IO' 'run.json' ("run.json failed: {0}" -f $_.Exception.Message) }
     $errSummary = if ($script:ErrTotal) { ($script:ErrCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value }) -join ' ' } else { 'none' }
     $summary = "{0} in {1:hh\:mm\:ss}: {2}/{3} checks; web={4} open={5} closed={6} filtered={7} worker-errors={8}; rows={9}; requests={10}; rule-regex-timeouts={11}; logged errors: {12}" -f $(if ($interrupted) { 'INTERRUPTED' } elseif ($script:TimeLimitHit) { 'TIME LIMIT' } else { 'Done' }), $elapsed, $doneCount, $total, $counts.web, $counts.open, $counts.closed, $counts.filtered, $counts.error, $counts.rows, $counts.requests, [WebInv.Matcher]::Timeouts, $errSummary
@@ -14819,9 +16467,6 @@ finally {
     Write-Host ("Results: {0}{1}" -f $script:CsvPath, $(if ($script:HtmlPath) { " | $($script:HtmlPath)" } else { '' })) -ForegroundColor Cyan
     Write-Host ("Logs:    {0} | {1}" -f $RunLogPath, $ErrLogPath) -ForegroundColor DarkGray
     if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Resume:  re-run the same command with -Resume '{0}'" -f $script:ProgressPath) -ForegroundColor Yellow }
-    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
-    # Rows from earlier sessions of a resumed run count as answers.
-    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
     if (-not $interrupted -and -not $script:TimeLimitHit -and -not $answered) {
         $na = "NOTHING ANSWERED: {0} checks, no open service (exit 4)" -f $doneCount
         Write-RunLog $na 'WARN'; Write-Host $na -ForegroundColor Yellow
@@ -14837,6 +16482,11 @@ finally {
     if ($Store -and -not $NoStore) {
         if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Store: run not complete, not added. Resume it (-Resume) and it is added when it completes.") -ForegroundColor Yellow }
         elseif (-not (Invoke-StoreIngest -RunId $script:RunId -Dir $OutputDir)) { if ($script:ExitCode -lt 2) { $script:ExitCode = 2 } }
+    }
+    # ---------- Tideline (after the store: the run's files are final and in the manifest) ----------
+    if ($ShipTo) {
+        if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Tideline: run not complete, not shipped. Resume it (-Resume); it is shipped when it completes.") -ForegroundColor Yellow }
+        elseif (-not (Invoke-Shipping)) { if ($script:ExitCode -lt 2) { $script:ExitCode = 2 } }
     }
 }
 exit $script:ExitCode

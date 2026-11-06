@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.5.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.6.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -131,6 +131,27 @@
 .PARAMETER NvdFeed
     -StoreQuery Vulnerabilities: NVD CVE JSON 2.0 feed files or folders (nvdcve-2.0-*.json[.gz]); matched offline against
     the CPEs of the current inventory, version-aware. -KevFile adds CISA KEV (JSON or CSV), -EpssFile FIRST EPSS (CSV[.gz]).
+    On a scan run (v2.6): the same join over this run's services, written as WebInventory_<RunId>_vulns.csv/.jsonl
+    (+ .provenance.json) before the run's manifest, so -ShipTo sends it as the run's vulns part.
+.PARAMETER ShipTo
+    Tideline ingest URL (https://host:8443). After the run is complete (and added to -Store, if given), its JSONL
+    files, run.json, manifest, logs and screenshots are sent unchanged as a signed envelope over mutual TLS.
+    Off by default; nothing is sent to Tideline before the scan ends. A delivery that fails exits 2 and leaves
+    WebInventory_<RunId>_ship-state.json; Send-WebInventoryRun.ps1 sends the rest later. See SHIPPING.md.
+.PARAMETER ShipCertThumbprint
+    The sensor certificate (LocalMachine\My or CurrentUser\My). Default: the newest valid certificate there with a
+    urn:tideline:sensor:<id> name and its private key (Register-WebInventorySensor.ps1 installs it), so a renewal
+    needs no change to scheduled tasks.
+.PARAMETER ShipCertPath
+    PFX file with the sensor certificate and key, instead of the certificate store (PowerShell 7 on Linux/macOS;
+    default there: ~/.config/webinventory/tideline-sensor.pfx). -ShipCertPasswordFile holds its password, if any.
+.PARAMETER ShipCaFile
+    The Tideline root CA (PEM) the server must chain to; the machine trust store is not used. Default: the root
+    Register-WebInventorySensor.ps1 saved (%ProgramData%\WebInventory\tideline-root.crt, ~/.config/webinventory/...).
+.PARAMETER Engagement
+    Engagement id (letters, digits, . _ -; up to 64) written to run.json and to the Tideline envelope.
+.PARAMETER ShipRetries
+    Delivery attempts after the first (default 3; waits 5 s, 15 s, 45 s).
 .PARAMETER StoreMerge
     Two entity ids (from Inventory/History queries) that are the same service: the later one is folded into the earlier,
     recorded as a correction in the ledger (nothing is rewritten). -Reason is required.
@@ -175,13 +196,16 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Vulnerabilities -NvdFeed D:\feeds\nvd -KevFile D:\feeds\known_exploited_vulnerabilities.json -EpssFile D:\feeds\epss_scores-current.csv.gz
 .EXAMPLE
+    .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore -ShipTo https://tideline.corp.example:8443 -Engagement eng-2026-014
+.EXAMPLE
     .\Invoke-WebInventory.ps1 -SelfTest
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.5.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
-    Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
-    store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
+    Version 2.6.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
+    Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
+    4 = completed, but nothing answered.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -292,6 +316,14 @@ param(
     [string[]]$NvdFeed,
     [string]$KevFile,
     [string]$EpssFile,
+    # ---- Tideline (results platform)
+    [string]$ShipTo,
+    [string]$ShipCertThumbprint,
+    [string]$ShipCertPath,
+    [string]$ShipCertPasswordFile,
+    [string]$ShipCaFile,
+    [string]$Engagement,
+    [ValidateRange(0, 10)][int]$ShipRetries = 3,
     [string[]]$StoreMerge,
     [string]$StoreSplit,
     [string]$SplitAt,
@@ -306,7 +338,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.5.0'
+$ScriptVersion = '2.6.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -325,20 +357,34 @@ catch { Write-Host "FATAL: cannot create log files in '$LogDir': $($_.Exception.
 $script:ErrCounts = @{}
 $script:ErrTotal = 0
 
+# errors and warnings of a scan run also go to WebInventory_<RunId>_errors.jsonl in -OutputDir (open from Open-Outputs
+# until Close-Logs, so the file is final before the run's manifest)
+# until, lines are held (DNS, scope and input errors come before the output files exist)
+$script:ErrJsonNames = [string[]]@('time', 'level', 'category', 'target', 'message')
+$script:ErrJsonPending = New-Object System.Collections.Generic.List[object]
+function Write-ErrJson([string]$Time, [string]$Level, [string]$Category, [string]$Target, [string]$Message) {
+    $v = [object[]]@($Time, $Level, $Category, $Target, $Message)
+    if ($script:ErrJsonW) { try { $script:ErrJsonW.WriteLine([WebInv.Out]::JsonLine($script:ErrJsonNames, $v)) } catch { } }
+    elseif ($null -ne $script:ErrJsonPending -and $script:ErrJsonPending.Count -lt 100000) { $script:ErrJsonPending.Add($v) }
+}
 function Write-RunLog {
     param([string]$Message, [string]$Level = 'INFO')
-    if ($script:RunLog) { $script:RunLog.WriteLine(('{0} [{1,-5}] {2}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'), $Level, $Message)) }
+    $t = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz')
+    if ($script:RunLog) { $script:RunLog.WriteLine(('{0} [{1,-5}] {2}' -f $t, $Level, $Message)) }
+    if ($Level -eq 'WARN') { Write-ErrJson $t 'warning' '' '' $Message }
 }
 function Write-ErrLog {
     param([string]$Category, [string]$Target, [string]$Message)
     $script:ErrTotal++
     if ($script:ErrCounts.ContainsKey($Category)) { $script:ErrCounts[$Category]++ } else { $script:ErrCounts[$Category] = 1 }
-    if ($script:ErrLog) {
-        $script:ErrLog.WriteLine(('{0} [ERROR] [{1}] {2} | {3}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'), $Category, $Target, ($Message -replace '[\r\n]+', ' ')))
-    }
+    $t = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffzzz')
+    $m = $Message -replace '[\r\n]+', ' '
+    if ($script:ErrLog) { $script:ErrLog.WriteLine(('{0} [ERROR] [{1}] {2} | {3}' -f $t, $Category, $Target, $m)) }
+    Write-ErrJson $t $(if ($Category -eq 'FATAL') { 'fatal' } else { 'error' }) $Category $Target $m
 }
 function Close-Logs {
-    foreach ($n in 'RunLog', 'ErrLog') {
+    $script:ErrJsonPending = $null
+    foreach ($n in 'RunLog', 'ErrLog', 'ErrJsonW') {
         $w = Get-Variable -Name $n -Scope Script -ValueOnly -ErrorAction SilentlyContinue
         if ($w) { try { $w.Flush(); $w.Dispose() } catch { } }
         Set-Variable -Name $n -Scope Script -Value $null
@@ -389,8 +435,9 @@ try {
     }
     else {
         # Add-Type treats compiler warnings as errors; a newer .NET marking an API obsolete must not stop the tool from starting
+        # (nor print compiler warnings on every run: PowerShell 7.5+ shows them, for example SYSLIB0057 on .NET 9)
         # (CI compiles every block with warnings as errors on Windows PowerShell 5.1: .github/workflows/check.yml)
-        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
         Add-Type @addType
     }

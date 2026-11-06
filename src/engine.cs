@@ -3235,7 +3235,7 @@ namespace WebInv
 
     public static class Util
     {
-        public const string EngineVersion = "2.5.0";
+        public const string EngineVersion = "2.6.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
