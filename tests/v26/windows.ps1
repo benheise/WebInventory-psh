@@ -8,7 +8,9 @@ Tideline sensor on Windows PowerShell 5.1, against a real step-ca (CI: GitHub's 
   windows.ps1 [-Work <dir>]       downloads step-ca and step (pinned SHA-256); needs python with pip
 #>
 param([string]$Work = (Join-Path ([IO.Path]::GetTempPath()) 'wi-tideline-win'))
-$ErrorActionPreference = 'Stop'
+# Continue: under Windows PowerShell 5.1 a native tool's stderr line (step, pip) would otherwise end the script
+$ErrorActionPreference = 'Continue'
+trap { Write-Host ("::error title=Tideline (Windows) script::{0} | {1}" -f $_.Exception.Message, ($_.InvocationInfo.PositionMessage -replace '\r?\n', ' ')); exit 1 }
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $dist = Join-Path $repo 'dist'
 $ps = (Get-Process -Id $PID).Path
@@ -40,10 +42,10 @@ $dl = @(
     @{ Url = 'https://github.com/smallstep/cli/releases/download/v0.30.2/step_windows_0.30.2_amd64.zip'; Sha = 'e4b71d4f1cc6c538fdb4f2b3070bfcccc6f214cc9b71bfdf699c8cdb1c4997b8' })
 foreach ($d in $dl) {
     $zip = Join-Path $Work (Split-Path -Leaf $d.Url)
-    Invoke-WebRequest -Uri $d.Url -OutFile $zip -UseBasicParsing
+    Invoke-WebRequest -Uri $d.Url -OutFile $zip -UseBasicParsing -ErrorAction Stop
     $h = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($h -ne $d.Sha) { throw "$zip has SHA-256 $h, expected $($d.Sha)" }
-    Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $Work 'x') -Force
+    Expand-Archive -LiteralPath $zip -DestinationPath (Join-Path $Work 'x') -Force -ErrorAction Stop
 }
 $stepCa = @(Get-ChildItem (Join-Path $Work 'x') -Recurse -Filter step-ca.exe)[0].FullName
 $step = @(Get-ChildItem (Join-Path $Work 'x') -Recurse -Filter step.exe)[0].FullName
@@ -53,6 +55,7 @@ $step = @(Get-ChildItem (Join-Path $Work 'x') -Recurse -Filter step.exe)[0].Full
 $env:STEPPATH = Join-Path $Work 'ca'
 $pw = Join-Path $Work 'pw.txt'; [IO.File]::WriteAllText($pw, 'test-only-password')
 & $step ca init --name 'Tideline CI CA' --dns localhost --dns 127.0.0.1 --address 127.0.0.1:19100 --provisioner sensors@tideline --password-file $pw --provisioner-password-file $pw --deployment-type standalone 2>&1 | Out-File (Join-Path $Work 'init.txt')
+if (-not (Test-Path (Join-Path $env:STEPPATH 'config\ca.json'))) { throw ("step ca init failed: " + ((Get-Content (Join-Path $Work 'init.txt')) -join ' | ')) }
 $caJson = Join-Path $env:STEPPATH 'config\ca.json'
 & python -c "import json,sys; p=sys.argv[1]; c=json.load(open(p)); [pr.__setitem__('claims', {'defaultTLSCertDuration':'720h','maxTLSCertDuration':'720h','minTLSCertDuration':'5m'}) for pr in c['authority']['provisioners']]; json.dump(c, open(p,'w'), indent=2)" $caJson
 $rootCrt = Join-Path $env:STEPPATH 'certs\root_ca.crt'; $interCrt = Join-Path $env:STEPPATH 'certs\intermediate_ca.crt'

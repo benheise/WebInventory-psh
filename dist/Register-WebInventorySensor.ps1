@@ -1408,7 +1408,9 @@ function New-WindowsRequest([string]$Subject, [string[]]$Sans, [string]$Work) {
     foreach ($t in $sanText) { $inf += ('_continue_ = "{0}&"' -f $t) }
     $infPath = Join-Path $Work 'sensor.inf'; $reqPath = Join-Path $Work 'sensor.req'
     [IO.File]::WriteAllLines($infPath, [string[]]$inf, [Text.Encoding]::ASCII)
+    $ErrorActionPreference = 'Continue'   # (Windows PowerShell 5.1: a stderr line of a native tool is otherwise terminating)
     $out = & certreq.exe -new -q -machine $infPath $reqPath 2>&1
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $reqPath)) { throw ("certreq -new failed ({0}): {1}" -f $LASTEXITCODE, (($out | Out-String) -replace '\s+', ' ').Trim()) }
     $b64 = ([IO.File]::ReadAllText($reqPath) -replace '-----[A-Z ]+-----', '' -replace '\s', '')
     [WebInv.SensorCert]::Pem([Convert]::FromBase64String($b64), 'CERTIFICATE REQUEST')
@@ -1416,7 +1418,9 @@ function New-WindowsRequest([string]$Subject, [string[]]$Sans, [string]$Work) {
 function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Work) {
     $crt = Join-Path $Work 'sensor.crt'
     [IO.File]::WriteAllText($crt, $LeafPem, [Text.Encoding]::ASCII)
+    $ErrorActionPreference = 'Continue'
     $out = & certreq.exe -accept -q -machine $crt 2>&1
+    $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0) { throw ("certreq -accept failed ({0}): {1}" -f $LASTEXITCODE, (($out | Out-String) -replace '\s+', ' ').Trim()) }
     $leaf = New-Object Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]@([WebInv.SensorCert]::PemBlocks($LeafPem, 'CERTIFICATE'))[0])
     $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadOnly')
