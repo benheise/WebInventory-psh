@@ -182,3 +182,15 @@ opt-in probe code (-TlsFingerprint); no upstream code is shipped.
    NVD data is a work of the U.S. Government and is not subject to copyright protection in the United States.
    The NVD CVE, KEV and EPSS files given to -StoreQuery Vulnerabilities are downloaded by the operator and are not
    part of this distribution.
+
+
+7. Version-only rules (v: ids in the built-in pack; src/version-rules.json in the development suite)
+
+   The patterns were written for this tool. Where a product shows its version was established by running the
+   product itself, by reading its own page templates, or from public fingerprint collections that record where
+   a product prints its version in real responses: WhatWeb passive plugins (https://github.com/urbanadventurer/WhatWeb,
+   GPL-2.0), nuclei-templates detection templates (https://github.com/projectdiscovery/nuclei-templates, MIT),
+   Rapid7 Recog examples (BSD-2-Clause, see 1) and webappanalyzer patterns (GPL-3.0, see 2). No code, template or
+   data file of these projects is included; only the location of a version string was taken from them. Library
+   versions are read from the paths of public CDNs (cdnjs, jsDelivr, unpkg); WordPress plugins were installed from
+   wordpress.org for testing only.

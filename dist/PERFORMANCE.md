@@ -190,3 +190,28 @@ CPEs in the built-in rules); startup is within run-to-run noise.
 
 `-StoreQuery Vulnerabilities` on the lab store with the same feeds (NVD 447,034 records): 48.7 s (v2.3.0), 50.0 s
 (v2.3.1). The alias table (425 names) only widens the vendor:product prefilter.
+
+## v2.3.2: version-only rules, same scan path
+
+v2.3.2 adds 106 version-only rules to the built-in pack, changes how detections merge when one of them takes
+part, and adds rule option `b` (match the base64 decoding of a value); nothing else in the scan path changed, and no
+request was added. A/B against v2.3.1 on the same lab, two runs each (PowerShell 7.4, 2 vCPU), measured with the
+final rule set (106 rules):
+
+| Scenario | v2.3.1 wall (s) | v2.3.2 wall (s) |
+|---|---|---|
+| farm (200 services) | 11.08, 11.00 | 10.82, 10.76 |
+| lab (26 services, all probes of the lab profile) | 38.65, 38.50 | 38.48, 38.58 |
+| closed ports | 10.45, 10.63 | 10.39, 10.71 |
+| startup only | 3.00, 2.83 | 2.81, 3.17 |
+
+Accuracy, field by field: in the lab every CSV column and every JSONL detection is identical (both runs). On the farm,
+the only change is Lodash: 50 of the 200 rows load `/static/js/lodash-4.17.<n>.min.js`, and v2.3.2 reports
+`Lodash 4.17.<n>` with `cpe:2.3:a:lodash:lodash:4.17.<n>` where v2.3.1 said `Lodash` (`v:file-lodash`; the JSONL detection
+lists `wappalyzer+builtin` as its sources). Every other column of every row, the set of detections and their
+confidence and category are identical (apart from `RunId`, `ScannedAt` and `ResponseMs`, which differ per run).
+
+Rule matching: the new rules are literal-prefiltered like all others: 103 of them carry a fixed string that must
+occur in the value before their regex runs, so a page without those strings costs nothing beyond the existing
+Aho-Corasick pass; of the other three, two read a dedicated header (`X-Version-Id`, `X-JupyterHub-Version`) that only
+those products send, and n8n's reads one short base64 meta value (`n8n:config:sentry`), decoded only when present.

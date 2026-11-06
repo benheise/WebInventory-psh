@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.3.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.3.2 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -155,7 +155,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.3.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.3.2. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -277,7 +277,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.3.1'
+$ScriptVersion = '2.3.2'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -1699,6 +1699,10 @@ namespace WebInv
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;   // requires a detection in one of these categories
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
         [DataMember(Name = "h", EmitDefaultValue = false)] public string H;    // host name template
+        // version-only: the output adds its version to a product another rule detected (same kind and CPE product or name)
+        // and is discarded otherwise; it never creates a detection, never sets name/category/confidence, and never replaces
+        // a version that a detection rule captured
+        [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
     }
 
     [DataContract]
@@ -1707,7 +1711,7 @@ namespace WebInv
         [DataMember(Name = "id", EmitDefaultValue = false)] public string Id;
         [DataMember(Name = "f")] public string F;
         [DataMember(Name = "r")] public string R;
-        [DataMember(Name = "o", EmitDefaultValue = false)] public string O;    // i=ignorecase s=dot-all
+        [DataMember(Name = "o", EmitDefaultValue = false)] public string O;    // i=ignorecase s=dot-all a=absolute anchors b=base64 value
         [DataMember(Name = "and", EmitDefaultValue = false)] public CondDef[] And;
         [DataMember(Name = "ports", EmitDefaultValue = false)] public int[] Ports;
         [DataMember(Name = "src", EmitDefaultValue = false)] public string Src;
@@ -1724,6 +1728,7 @@ namespace WebInv
         [DataMember(Name = "rq", EmitDefaultValue = false)] public string[] Rq;
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
+        [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
         // self-test vector
         [DataMember(Name = "ex", EmitDefaultValue = false)] public string Ex;
         [DataMember(Name = "exv", EmitDefaultValue = false)] public string Exv;
@@ -1744,6 +1749,7 @@ namespace WebInv
     {
         public string Id; public string Field; public Regex Re; public Cond[] And; public int[] Ports; public string Src; public OutDef[] Out;
         public string Ex; public string Exv;
+        public bool B64;   // o contains 'b': the value is base64 text; the regex runs on its UTF-8 decoding (no literal prefilter)
         public string[][] Lits; public int[][] LitIds;   // requirement formula (OR of AND-sets of folded literals) + ids in the field automaton
     }
 
@@ -2090,6 +2096,9 @@ namespace WebInv
         public string[] Excludes;
         public string[] Requires;
         public string[] RequiresCategory;
+        public bool VersionOnly;   // only version-only outputs contributed so far (discarded unless a detection rule joins)
+        public bool VoVersion;     // Version came from a version-only output
+        public bool FixedVersion;  // Version is written into the rule (e.g. "1.5.0+" for a favicon), not captured
         public override string ToString() { return Name + (string.IsNullOrEmpty(Version) ? "" : " " + Version); }
     }
 
@@ -2171,7 +2180,9 @@ namespace WebInv
                 r.Ex = d.Ex; r.Exv = d.Exv;
                 try { r.Re = new Regex(d.R, Opts(d.O), TimeSpan.FromMilliseconds(RegexTimeoutMs)); }
                 catch (Exception ex) { errors.Add(r.Id + ": regex compile failed: " + ex.Message); continue; }
-                try { r.Lits = Lit.Requirement(d.R); } catch { r.Lits = null; }
+                r.B64 = !string.IsNullOrEmpty(d.O) && d.O.IndexOf('b') >= 0;
+                // literals of a base64 rule are in the decoded text, not in the value the prefilter scans
+                if (r.B64) r.Lits = null; else { try { r.Lits = Lit.Requirement(d.R); } catch { r.Lits = null; } }
                 if (d.And != null)
                 {
                     List<Cond> cs = new List<Cond>(); bool bad = false;
@@ -2192,7 +2203,7 @@ namespace WebInv
                 else
                 {
                     OutDef o = new OutDef();
-                    o.T = d.T; o.N = d.N; o.C = d.C; o.V = d.V; o.P = d.P; o.K = d.K; o.Im = d.Im; o.Xs = d.Xs; o.Rq = d.Rq; o.Rc = d.Rc; o.Flag = d.Flag;
+                    o.T = d.T; o.N = d.N; o.C = d.C; o.V = d.V; o.P = d.P; o.K = d.K; o.Im = d.Im; o.Xs = d.Xs; o.Rq = d.Rq; o.Rc = d.Rc; o.Flag = d.Flag; o.Vo = d.Vo;
                     r.Out = new OutDef[] { o };
                 }
                 bool any = false;
@@ -2206,7 +2217,7 @@ namespace WebInv
                 Dictionary<string, OutDef> ni = new Dictionary<string, OutDef>(nameInfo, StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in add)
                     foreach (OutDef o in r.Out)
-                        if (!string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
+                        if (!o.Vo && !string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
                 nameInfo = ni;
                 Dictionary<string, List<Rule>> nb = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in nr)
@@ -2273,6 +2284,17 @@ namespace WebInv
         }
 
         static readonly Regex Tpl = new Regex(@"\{(\w+)\}", RegexOptions.CultureInvariant);
+
+        // UTF-8 text of a base64 value (standard or URL alphabet, padding optional); null when it is not base64
+        public static string FromBase64(string v)
+        {
+            if (string.IsNullOrEmpty(v)) return null;
+            string t = v.Trim().Replace('-', '+').Replace('_', '/');
+            if (t.Length == 0 || t.Length > 65536) return null;
+            if (t.Length % 4 == 2) t += "=="; else if (t.Length % 4 == 3) t += "=";
+            try { return new UTF8Encoding(false, true).GetString(Convert.FromBase64String(t)); }
+            catch { return null; }
+        }
 
         public static string Expand(string tpl, Match m)
         {
@@ -2435,6 +2457,7 @@ namespace WebInv
                             }
                             if (!ok) continue;
                         }
+                        if (r.B64) { v = FromBase64(v); if (v == null) continue; }
                         Match m = SafeMatch(r.Re, v);
                         if (m == null || !m.Success) continue;
                         if (!CondsOk(r, obs)) break;
@@ -2446,6 +2469,7 @@ namespace WebInv
                             d.Flag = o.Flag ?? "";
                             if (string.IsNullOrEmpty(d.Name) && d.Kind != "flag") continue;
                             d.Version = Expand(o.V, m);
+                            d.FixedVersion = d.Version.Length > 0 && o.V.IndexOf('{') < 0;
                             d.Category = o.C ?? "";
                             d.Confidence = o.K > 0 ? Math.Min(100, o.K) : 85;
                             d.Cpe = NormalizeCpe(Expand(o.P, m), d.Version);
@@ -2455,6 +2479,12 @@ namespace WebInv
                             d.Evidence = kv.Key + "=" + ev;
                             d.HostName = Expand(o.H, m);
                             d.Implies = o.Im; d.Excludes = o.Xs; d.Requires = o.Rq; d.RequiresCategory = o.Rc;
+                            if (o.Vo)
+                            {
+                                if (string.IsNullOrEmpty(d.Version)) continue;
+                                d.VersionOnly = true; d.VoVersion = true; d.Confidence = 0;
+                                d.Implies = null; d.Excludes = null; d.Requires = null; d.RequiresCategory = null; d.Flag = "";
+                            }
                             raw.Add(d);
                         }
                         break;
@@ -2516,19 +2546,24 @@ namespace WebInv
                             else if (!string.IsNullOrEmpty(info.P)) x.Cpe = NormalizeCpe(Tpl.Replace(info.P, "*"), "");
                         }
                         string k2 = MergeKey(x);
-                        if (!m.ContainsKey(k2) && !NameExists(m, im)) { MergeInto(m, order, x); added = true; }
+                        Detection vo = VersionOnlyFor(m, k2, im);
+                        if (vo != null) { Merge(vo, x); added = true; }
+                        else if (!m.ContainsKey(k2) && !NameExists(m, im)) { MergeInto(m, order, x); added = true; }
                     }
                 }
                 if (!added) break;
             }
+            // version-only outputs that no detection rule joined are discarded
+            order.RemoveAll(delegate(string k) { return m[k].VersionOnly; });
             // excludes / requires
             HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values) names.Add(d.Name ?? "");
+            foreach (string k in order) names.Add(m[k].Name ?? "");
             HashSet<string> cats = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values) if (!string.IsNullOrEmpty(d.Category) && d.RequiresCategory == null) cats.Add(d.Category);
+            foreach (string k in order) { Detection d = m[k]; if (!string.IsNullOrEmpty(d.Category) && d.RequiresCategory == null) cats.Add(d.Category); }
             HashSet<string> drop = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values)
+            foreach (string k in order)
             {
+                Detection d = m[k];
                 if (d.Excludes != null) foreach (string x in d.Excludes) if (!string.IsNullOrEmpty(x)) drop.Add(x);
                 if (d.Requires != null) foreach (string q in d.Requires) if (!string.IsNullOrEmpty(q) && !names.Contains(q)) drop.Add(d.Name);
                 if (d.RequiresCategory != null && d.RequiresCategory.Length > 0)
@@ -2550,8 +2585,18 @@ namespace WebInv
 
         static bool NameExists(Dictionary<string, Detection> m, string name)
         {
-            foreach (Detection d in m.Values) if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (Detection d in m.Values) if (!d.VersionOnly && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
+        }
+
+        // a still version-only detection that an implied product with this key or name would join
+        static Detection VersionOnlyFor(Dictionary<string, Detection> m, string key, string name)
+        {
+            Detection d;
+            if (m.TryGetValue(key, out d)) return d.VersionOnly ? d : null;
+            if (NameExists(m, name)) return null;
+            foreach (Detection x in m.Values) if (x.VersionOnly && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) return x;
+            return null;
         }
 
         static void MergeInto(Dictionary<string, Detection> m, List<string> order, Detection d)
@@ -2564,6 +2609,19 @@ namespace WebInv
 
         static void Merge(Detection e, Detection d)
         {
+            if (e.VersionOnly && !d.VersionOnly)
+            {
+                // a detection rule joins what so far only version-only outputs contributed: it takes over the identity,
+                // and the version-only contribution is then merged into it like any other
+                Detection v = new Detection();
+                v.Kind = e.Kind; v.Name = e.Name; v.Version = e.Version; v.Cpe = e.Cpe; v.Source = e.Source; v.Field = e.Field;
+                v.Evidence = e.Evidence; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
+                e.Kind = d.Kind; e.Name = d.Name; e.Category = d.Category; e.Confidence = d.Confidence; e.Cpe = d.Cpe; e.Flag = d.Flag;
+                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.HostName = d.HostName;
+                e.Implies = d.Implies; e.Excludes = d.Excludes; e.Requires = d.Requires; e.RequiresCategory = d.RequiresCategory;
+                e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion; e.VersionOnly = false;
+                d = v;
+            }
             if (d.Confidence > e.Confidence)
             {
                 e.Confidence = d.Confidence;
@@ -2571,11 +2629,15 @@ namespace WebInv
                 if (!string.IsNullOrEmpty(d.Cpe)) e.Cpe = d.Cpe;
                 if (!string.IsNullOrEmpty(d.Category)) e.Category = d.Category;
             }
-            if (!string.IsNullOrEmpty(d.Version) && (string.IsNullOrEmpty(e.Version) || d.Version.Length > e.Version.Length))
+            // the longer version wins; when a version-only rule takes part, a version captured by a detection rule beats it,
+            // and it beats one written into a rule (a favicon's "1.5.0+")
+            if (!string.IsNullOrEmpty(d.Version) && (string.IsNullOrEmpty(e.Version)
+                || ((e.VoVersion || d.VoVersion) && VersionRank(e) != VersionRank(d) ? VersionRank(d) > VersionRank(e) : d.Version.Length > e.Version.Length)))
             {
-                e.Version = d.Version;
+                e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion;
                 if (!string.IsNullOrEmpty(d.Cpe)) e.Cpe = d.Cpe;
             }
+            e.VersionOnly = e.VersionOnly && d.VersionOnly;
             if (string.IsNullOrEmpty(e.Cpe)) e.Cpe = d.Cpe;
             if (string.IsNullOrEmpty(e.Category)) e.Category = d.Category;
             if (!string.IsNullOrEmpty(d.Flag))
@@ -2588,10 +2650,12 @@ namespace WebInv
             if (!string.IsNullOrEmpty(d.Evidence) && e.Evidence.Length < 400 && e.Evidence.IndexOf(d.Evidence, StringComparison.Ordinal) < 0) e.Evidence += " | " + d.Evidence;
             e.Implies = Union(e.Implies, d.Implies); e.Excludes = Union(e.Excludes, d.Excludes); e.Requires = Union(e.Requires, d.Requires);
             // the gate only survives a merge if every contributing rule was gated
-            if (e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
+            if (!d.VersionOnly && e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
             // a version-bearing CPE is never overwritten by a version-less one
             if (!string.IsNullOrEmpty(e.Cpe) && !string.IsNullOrEmpty(e.Version)) e.Cpe = NormalizeCpe(e.Cpe, e.Version);
         }
+
+        static int VersionRank(Detection x) { return x.VoVersion ? 2 : (x.FixedVersion ? 1 : 3); }
 
         static string[] Union(string[] a, string[] b)
         {
@@ -2608,7 +2672,7 @@ namespace WebInv
             {
                 if (r.Ex == null) continue;
                 tested++;
-                Match mm = SafeMatch(r.Re, r.Ex);
+                Match mm = SafeMatch(r.Re, r.B64 ? (FromBase64(r.Ex) ?? "") : r.Ex);
                 if (mm == null || !mm.Success) { fails.Add(r.Id + ": example did not match: " + r.Ex); continue; }
                 // the prefilter must never hide a match: the required literal has to occur in every matching example
                 if (r.Lits != null && !Lit.Satisfies(r.Lits, Lit.Fold(r.Ex))) fails.Add(r.Id + ": prefilter requirement not met by its matching example");
@@ -3306,7 +3370,7 @@ namespace WebInv
     // ------------------------------------------------------------------ Misc helpers
     public static class Util
     {
-        public const string EngineVersion = "2.3.1";
+        public const string EngineVersion = "2.3.2";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3402,7 +3466,7 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 
 #region ---------- Embedded rule pack ----------
 $BuiltinRulesJson = @'
-{"name":"builtin","version":"2.3.1","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.3.2","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -3914,7 +3978,113 @@ $BuiltinRulesJson = @'
 {"id":"b:snmp-cisco-iosxe","f":"snmp.sysdescr","r":"Cisco IOS[ -]XE Software.*?Version ([\\w.()]+)","out":[{"t":"os","n":"Cisco IOS XE","c":"OS","v":"{1}","p":"cpe:2.3:o:cisco:ios_xe:{v}","k":90}],"ex":"Cisco IOS Software [Cupertino], Catalyst L3 Switch Software (CAT9K_IOSXE), Version 17.9.4a, RELEASE SOFTWARE (fc5) Cisco IOS-XE Software, Version 17.09.04a","exv":"17.09.04a"},
 {"id":"b:snmp-windows","f":"snmp.sysdescr","r":"^Hardware: .*Software: Windows Version (\\d+\\.\\d+) \\(Build (\\d+)","out":[{"t":"os","n":"Microsoft Windows","c":"OS","v":"{1}.{2}","k":85}],"ex":"Hardware: Intel64 Family 6 Model 85 Stepping 7 AT/AT COMPATIBLE - Software: Windows Version 6.3 (Build 17763 Multiprocessor Free)","exv":"6.3.17763"},
 {"id":"b:snmp-linux","f":"snmp.sysdescr","r":"^Linux \\S+ (\\d+\\.\\d+[\\w.\\-+]*)","out":[{"t":"os","n":"Linux","c":"OS","v":"{1}","p":"cpe:2.3:o:linux:linux_kernel:{v}","k":80}],"ex":"Linux nas01 5.10.60+ #1 SMP Tue Jan 1 00:00:00 UTC 2024 x86_64","exv":"5.10.60+"},
-{"id":"b:snmp-junos","f":"snmp.sysdescr","r":"Juniper Networks, Inc\\. (\\S+) .*JUNOS (\\d[\\w.\\-]+)","out":[{"t":"os","n":"Juniper Junos OS","c":"OS","v":"{2}","p":"cpe:2.3:o:juniper:junos:{v}","k":90},{"t":"hw","n":"Juniper {1}","c":"Network device","k":85}],"ex":"Juniper Networks, Inc. ex4300-48p Ethernet Switch, kernel JUNOS 21.4R3-S5.4, Build date: 2023-06-01","exv":"21.4R3-S5.4"}
+{"id":"b:snmp-junos","f":"snmp.sysdescr","r":"Juniper Networks, Inc\\. (\\S+) .*JUNOS (\\d[\\w.\\-]+)","out":[{"t":"os","n":"Juniper Junos OS","c":"OS","v":"{2}","p":"cpe:2.3:o:juniper:junos:{v}","k":90},{"t":"hw","n":"Juniper {1}","c":"Network device","k":85}],"ex":"Juniper Networks, Inc. ex4300-48p Ethernet Switch, kernel JUNOS 21.4R3-S5.4, Build date: 2023-06-01","exv":"21.4R3-S5.4"},
+{"id":"v:roundcube","f":"body","r":"\"rcversion\":(?<a>[1-9]\\d?)(?:0(?<b>\\d)|(?<b>[1-9]\\d))(?:0(?<c>\\d)|(?<c>[1-9]\\d))[,}]","src":"builtin","n":"RoundCube","v":"{a}.{b}.{c}","p":"cpe:2.3:a:roundcube:webmail:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"locale\":\"en_US\",\"devel_mode\":null,\"rcversion\":10620,\"cookie_domain\":\"\"","exv":"1.6.20"},
+{"id":"v:solr","f":"scriptsrc","r":"^libs/angular\\.min\\.js\\?_=(\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"Apache Solr","v":"{1}","p":"cpe:2.3:a:apache:solr:{v}:*:*:*:*:*:*:*","vo":true,"ex":"libs/angular.min.js?_=9.4.1","exv":"9.4.1"},
+{"id":"v:consul","f":"body","r":"<!-- CONSUL_VERSION: (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"HashiCorp Consul","v":"{1}","p":"cpe:2.3:a:hashicorp:consul:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<!-- CONSUL_VERSION: 1.22.7\n -->","exv":"1.22.7"},
+{"id":"v:nextcloud","f":"body","r":"\"versionstring\":\"(\\d+\\.\\d+\\.\\d+)\"","src":"builtin","out":[{"n":"Nextcloud","v":"{1}","p":"cpe:2.3:a:nextcloud:nextcloud_server:{v}:*:*:*:*:*:*:*","vo":true},{"n":"Nextcloud","v":"{1}","p":"cpe:2.3:a:nextcloud:nextcloud:{v}:*:*:*:*:*:*:*","vo":true}],"ex":"\"sharing.minSearchStringLength\":0,\"version\":\"32.0.15.1\",\"versionstring\":\"32.0.15\",\"enable_non-accessible_features\"","exv":"32.0.15"},
+{"id":"v:spark","f":"body","r":"<span class=\"version\"[^>]*>(\\d+\\.\\d+\\.\\d+)</span>","src":"builtin","n":"Apache Spark","v":"{1}","p":"cpe:/a:apache:spark:{v}","vo":true,"ex":"<img src=\"/static/spark-logo-77x50px-hd.png\" />\n          <span class=\"version\" style=\"margin-right: 15px;\">3.5.9</span>","exv":"3.5.9"},
+{"id":"v:jupyterhub","f":"header:x-jupyterhub-version","r":"^(\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"JupyterHub","v":"{1}","p":"cpe:/a:jupyter:jupyterhub:{v}","vo":true,"ex":"5.5.4","exv":"5.5.4"},
+{"id":"v:xwiki-webjar","f":"body","r":"webjars\\\\?/wiki%3Axwiki\\\\?/xwiki-platform-[a-z-]+\\\\?/(\\d+\\.\\d+(?:\\.\\d+)?)\\\\?/","src":"builtin","n":"XWiki","v":"{1}","p":"cpe:2.3:a:xwiki:xwiki:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"xwiki-bootstrap\":\"\\/webjars\\/wiki%3Axwiki\\/xwiki-platform-bootstrap\\/16.10.19\\/js\\/xwiki-bootstrap.min.js?r=1\"","exv":"16.10.19"},
+{"id":"v:xwiki-footer","f":"body","r":"<div id=\"xwikiplatformversion\">\\s*(?:Powered by )?(?:XWiki (?:Enterprise )?)?(\\d+\\.\\d+(?:\\.\\d+)?)\\b","src":"builtin","n":"XWiki","v":"{1}","p":"cpe:2.3:a:xwiki:xwiki:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<div id=\"xwikiplatformversion\">XWiki 15.10.8</div>","exv":"15.10.8"},
+{"id":"v:wp-essential-addons","f":"body","r":"/wp-content/plugins/essential-addons-for-elementor-lite/assets/front-end/(?:css|js)/view/general\\.min\\.(?:css|js)\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Essential Addons for Elementor","v":"{1}","p":"cpe:2.3:a:wpdeveloper:essential_addons_for_elementor:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel='stylesheet' id='eael-general-css' href='https://www.example.org/wp-content/plugins/essential-addons-for-elementor-lite/assets/front-end/css/view/general.min.css?ver=6.0.4' media='all' />","exv":"6.0.4"},
+{"id":"v:wp-bold-page-builder","f":"body","r":"/wp-content/plugins/bold-page-builder/(?:css/front_end/content_elements\\.crush\\.css|content_elements_misc/js/content_elements\\.js)\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Bold Page Builder","v":"{1}","p":"cpe:2.3:a:bold-themes:bold_page_builder:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<script src=\"https://www.example.org/wp-content/plugins/bold-page-builder/content_elements_misc/js/content_elements.js?ver=5.9.6\" id=\"bt_bb_elements-js\"></script>","exv":"5.9.6"},
+{"id":"v:wp-pixelyoursite","f":"body","r":"/wp-content/plugins/pixelyoursite/dist/scripts/public\\.js\\?ver=(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)","src":"builtin","n":"PixelYourSite","v":"{1}","p":"cpe:2.3:a:pixelyoursite:pixelyoursite:{v}:*:*:*:*:wordpress:*:*","vo":true,"ex":"<script src=\"https://www.example.org/wp-content/plugins/pixelyoursite/dist/scripts/public.js?ver=10.0.4\" id=\"pys-js\"></script>","exv":"10.0.4"},
+{"id":"v:wp-coblocks","f":"body","r":"/wp-content/plugins/coblocks/dist/js/coblocks-animation\\.js\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"GoDaddy CoBlocks","v":"{1}","p":"cpe:2.3:a:godaddy:coblocks:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<script src=\"https://www.example.org/wp-content/plugins/coblocks/dist/js/coblocks-animation.js?ver=2.24.0\" id=\"coblocks-animation-js\"></script>","exv":"2.24.0"},
+{"id":"v:wp-gutenberg","f":"body","r":"/wp-content/plugins/gutenberg/build/(?:styles/)?components/style(?:\\.min)?\\.css\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Gutenberg","v":"{1}","p":"cpe:2.3:a:wordpress:gutenberg:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel='stylesheet' id='wp-components-css' href='https://www.example.org/wp-content/plugins/gutenberg/build/components/style.css?ver=18.4.0' media='all' />","exv":"18.4.0"},
+{"id":"v:wp-events-calendar","f":"body","r":"/wp-content/plugins/the-events-calendar/build/css/tribe-events-[\\w-]+\\.css\\?ver=(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)","src":"builtin","n":"The Events Calendar","v":"{1}","p":"cpe:2.3:a:stellarwp:the_events_calendar:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel='stylesheet' id='tribe-events-v2-single-skeleton-css' href='https://www.example.org/wp-content/plugins/the-events-calendar/build/css/tribe-events-single-skeleton.css?ver=6.18.3.1' media='all' />","exv":"6.18.3.1"},
+{"id":"v:bugzilla","f":"body","r":"class=\"header_addl_info\">version (\\d+\\.\\d+(?:\\.\\d+)?)<","src":"builtin","n":"Mozilla Bugzilla","v":"{1}","p":"cpe:/a:mozilla:bugzilla:{v}","vo":true,"ex":"<span id=\"information\" class=\"header_addl_info\">version 5.0.4</span>","exv":"5.0.4"},
+{"id":"v:bludit","f":"body","r":"/bl-(?:kernel|themes)/[^\"\\'?]+\\.(?:css|js)\\?version=(\\d+\\.\\d+\\.\\d+)[\"\\']","src":"builtin","n":"Bludit","v":"{1}","p":"cpe:2.3:a:bludit:bludit:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel=\"stylesheet\" href=\"/bl-kernel/css/bootstrap.min.css?version=3.14.1\">","exv":"3.14.1"},
+{"id":"v:weblate","f":"body","r":"Powered by <a href=\"https://weblate\\.org/[^\"]*\">Weblate (\\d+\\.\\d+(?:\\.\\d+)?)</a>","src":"builtin","n":"Weblate","v":"{1}","p":"cpe:2.3:a:weblate:weblate:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Powered by <a href=\"https://weblate.org/\">Weblate 5.8.4</a>","exv":"5.8.4"},
+{"id":"v:bookstack","f":"body","r":"/(?:dist/)?(?:app\\.js|styles\\.css|print-styles\\.css)\\?version=v(\\d+\\.\\d+(?:\\.\\d+)?)[\"\\']","src":"builtin","n":"BookStack","v":"{1}","p":"cpe:2.3:a:bookstackapp:bookstack:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel=\"stylesheet\" href=\"https://wiki.example.org/dist/styles.css?version=v24.02.3\">","exv":"24.02.3"},
+{"id":"v:jspwiki","f":"body","r":"<div class=\"wiki-version\">JSPWiki v(\\d+\\.\\d+\\.\\d+)(?![\\w.-])","src":"builtin","n":"Apache JSPWiki","v":"{1}","p":"cpe:2.3:a:apache:jspwiki:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<div class=\"wiki-version\">JSPWiki v2.12.1\n","exv":"2.12.1"},
+{"id":"v:laravel","f":"body","r":">\\s*Laravel v(\\d+\\.\\d+\\.\\d+) \\(PHP v\\d","src":"builtin","n":"Laravel","v":"{1}","p":"cpe:2.3:a:laravel:laravel:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<div class=\"ml-4 text-center text-sm text-gray-500 sm:text-right sm:ml-0\">\n                        Laravel v10.48.2 (PHP v8.2.15)","exv":"10.48.2"},
+{"id":"v:symfony","f":"body","r":"Welcome to</small> Symfony <span class=\"version\">(\\d+\\.\\d+\\.\\d+)</span>|You are using Symfony <strong>(\\d+\\.\\d+\\.\\d+)</strong> version","src":"builtin","n":"Symfony","v":"{1}{2}","p":"cpe:2.3:a:sensiolabs:symfony:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<h1><small>Welcome to</small> Symfony <span class=\"version\">6.4.3</span></h1>","exv":"6.4.3"},
+{"id":"v:cakephp","f":"body","r":"Welcome to CakePHP (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"CakePHP","v":"{1}","p":"cpe:2.3:a:cakephp:cakephp:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<h1>\n                Welcome to CakePHP 5.0.1 Chiffon (🍰)\n","exv":"5.0.1"},
+{"id":"v:rails","f":"title","r":"^Ruby on Rails (\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)$","src":"builtin","n":"Ruby on Rails","v":"{1}","p":"cpe:2.3:a:rubyonrails:rails:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Ruby on Rails 7.1.2","exv":"7.1.2"},
+{"id":"v:piwigo","f":"scriptsrc","r":"themes/default/js/jquery\\.min\\.js\\?v(\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"Piwigo","v":"{1}","p":"cpe:2.3:a:piwigo:piwigo:{v}:*:*:*:*:*:*:*","vo":true,"ex":"themes/default/js/jquery.min.js?v14.5.0","exv":"14.5.0"},
+{"id":"v:proxmox-ve","f":"body","r":"/pve2/css/ext6-pve\\.css\\?ver=(\\d+)\\.(\\d+)(?:[.-]\\d+)*\"","src":"builtin","n":"Proxmox Virtual Environment","v":"{1}.{2}","p":"cpe:/a:proxmox:virtual_environment:{v}","vo":true,"ex":"<link rel=\"stylesheet\" type=\"text/css\" href=\"/pve2/css/ext6-pve.css?ver=8.1.4\" />","exv":"8.1"},
+{"id":"v:openfire","f":"body","r":"id=\"jive-loginVersion\">\\s*Openfire, [^:<]{1,30}: (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Ignite Realtime OpenFire","v":"{1}","p":"cpe:/a:igniterealtime:openfire:{v}","vo":true,"ex":"<div class=\"text\" id=\"jive-loginVersion\"> Openfire, Version: 4.7.5</div>","exv":"4.7.5"},
+{"id":"v:k8s-version","f":"path:/version.body","r":"\"gitVersion\"\\s*:\\s*\"v(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Kubernetes API","v":"{1}","p":"cpe:2.3:a:kubernetes:kubernetes:{v}:*:*:*:*:*:*:*","vo":true,"ex":"{\n  \"major\": \"1\",\n  \"minor\": \"28\",\n  \"gitVersion\": \"v1.28.3\",\n  \"gitCommit\": \"a8a1abc25cad87333840cd7d54be2efaf31a3177\",","exv":"1.28.3"},
+{"id":"v:mastodon","f":"body","r":"<script id=\"initial-state\" type=\"application/json\">\\{\"meta\":\\{[^<]{0,20000}?\"version\":\"(\\d+\\.\\d+\\.\\d+)(?=[\"+])","src":"builtin","n":"Mastodon","v":"{1}","p":"cpe:2.3:a:joinmastodon:mastodon:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<script id=\"initial-state\" type=\"application/json\">{\"meta\":{\"access_token\":null,\"activity_api_enabled\":true,\"admin\":null,\"domain\":\"social.example.org\",\"trends_enabled\":true,\"version\":\"4.3.1\"}}</script>","exv":"4.3.1"},
+{"id":"v:mattermost","f":"header:x-version-id","r":"^(\\d+\\.\\d+\\.\\d+)\\.","src":"builtin","n":"Mattermost","v":"{1}","p":"cpe:2.3:a:mattermost:mattermost_server:{v}:*:*:*:*:*:*:*","vo":true,"ex":"10.11.26.41049445879.40550bdafb186783981245c23d63fd90.false","exv":"10.11.26"},
+{"id":"v:metabase","f":"body","r":"\"version\":\\{[^{}]{0,300}?\"tag\":\"v(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)\"","src":"builtin","n":"Metabase","v":"{1}","p":"cpe:/a:metabase:metabase:{v}","vo":true,"ex":"<script type=\"application/json\" id=\"_metabaseBootstrap\">\n      {\"version\":{\"date\":\"2023-11-01\",\"tag\":\"v0.47.6\",\"branch\":\"release-x.47.x\",\"hash\":\"c6b9de1\"},\"site-name\":\"Metabase\"}","exv":"0.47.6"},
+{"id":"v:pgadmin","f":"body","r":"\\.(?:css|js)\\?ver=(?<a>[1-9]\\d?)(?:0(?<b>\\d)|(?<b>[1-9]\\d))00[\"\\']","src":"builtin","n":"pgAdmin","v":"{a}.{b}","p":"cpe:2.3:a:pgadmin:pgadmin_4:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link type=\"text/css\" rel=\"stylesheet\" href=\"/static/js/generated/style.css?ver=91900\"/>","exv":"9.19"},
+{"id":"v:kibana","f":"body","r":"<kbn-injected-metadata data=\"\\{&quot;version&quot;:&quot;(\\d+\\.\\d+\\.\\d+)&quot;","src":"builtin","n":"Elastic Kibana","v":"{1}","p":"cpe:/a:elastic:kibana:{v}","vo":true,"ex":"<kbn-injected-metadata data=\"{&quot;version&quot;:&quot;8.19.6&quot;,&quot;buildNumber&quot;:86547,&quot;branch&quot;:&quot;8.19&quot;","exv":"8.19.6"},
+{"id":"v:forgejo","f":"scriptsrc","r":"(?:^|/)assets/js/(?:index|webcomponents)\\.js\\?v=(\\d+\\.\\d+\\.\\d+(?:-\\d+)?)(?:~gitea-\\d+(?:\\.\\d+)*)?$","src":"builtin","n":"Forgejo","v":"{1}","p":"cpe:2.3:a:forgejo:forgejo:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/assets/js/index.js?v=9.0.3~gitea-1.22.0","exv":"9.0.3"},
+{"id":"v:forgejo-footer","f":"body","r":">Powered by Forgejo</a>\\s*Version:\\s*(\\d+\\.\\d+\\.\\d+(?:-\\d+)?)(?:&#43;gitea-[\\d.]+)?\\s","src":"builtin","n":"Forgejo","v":"{1}","p":"cpe:2.3:a:forgejo:forgejo:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<a target=\"_blank\" rel=\"noopener noreferrer\" href=\"https://forgejo.org\">Powered by Forgejo</a>\n\t\t\n\t\t\n\t\t\tVersion:\n\t\t\t\n\t\t\t\t9.0.3&#43;gitea-1.22.0\n\t\t\t\n","exv":"9.0.3"},
+{"id":"v:teamcity-maintenance","f":"body","r":"<div id=\"footer2\">\\s*TeamCity (\\d{4}\\.\\d{1,2}(?:\\.\\d+)?) \\(build \\d+\\)","src":"builtin","n":"JetBrains TeamCity","v":"{1}","p":"cpe:2.3:a:jetbrains:teamcity:{v}:*:*:*:*:*:*:*","vo":true,"ex":"      <div id=\"footer2\">\n        TeamCity 2025.11.8 (build 208382)\n      </div>","exv":"2025.11.8"},
+{"id":"v:checkmk","f":"scriptsrc","r":"(?:^|/)js/main_min\\.js\\?v=(\\d+\\.\\d+\\.\\d+(?:p\\d+)?)(?:\\.c[a-z]e)?$","src":"builtin","n":"Checkmk","v":"{1}","p":"cpe:2.3:a:checkmk:checkmk:{v}:*:*:*:*:*:*:*","vo":true,"ex":"js/main_min.js?v=2.4.0p39","exv":"2.4.0p39"},
+{"id":"v:gitea-footer","f":"body","r":">Powered by Gitea</a>\\s*(?:<span>\\s*)?Version:\\s*(\\d+\\.\\d+\\.\\d+)\\s","src":"builtin","n":"Gitea","v":"{1}","p":"cpe:2.3:a:gitea:gitea:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<a target=\"_blank\" href=\"https://about.gitea.com\">Powered by Gitea</a>\n\t\t\n\t\t\n\t\t\t<span>\n\t\t\tVersion:\n\t\t\t\n\t\t\t\t1.27.3\n\t\t\t\n\t\t\t</span>","exv":"1.27.3"},
+{"id":"v:gitea-asset","f":"scriptsrc","r":"(?:^|/)assets/js/(?:index|webcomponents)\\.js\\?v=(\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"Gitea","v":"{1}","p":"cpe:2.3:a:gitea:gitea:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/assets/js/index.js?v=1.22.3","exv":"1.22.3"},
+{"id":"v:n8n","f":"meta:n8n:config:sentry","r":"\"release\"\\s*:\\s*\"n8n@(\\d+\\.\\d+\\.\\d+)\"","o":"b","src":"builtin","n":"n8n","v":"{1}","p":"cpe:2.3:a:n8n:n8n:{v}:*:*:*:*:*:*:*","vo":true,"ex":"eyJkc24iOiIiLCJlbnZpcm9ubWVudCI6ImRldmVsb3BtZW50IiwicmVsZWFzZSI6Im44bkAyLjQ3LjIifQ==","exv":"2.47.2"},
+{"id":"v:exchange2007-imap","f":"banner.imap","r":"^Microsoft Exchange Server (2007) IMAP4 service ready","src":"builtin","n":"Microsoft Exchange 2007 Server","v":"{1}","p":"cpe:/a:microsoft:exchange_server:{v}","vo":true,"ex":"Microsoft Exchange Server 2007 IMAP4 service ready","exv":"2007"},
+{"id":"v:exchange2007-pop3","f":"banner.pop3","r":"^Microsoft Exchange Server (2007) POP3 service ready","src":"builtin","n":"Microsoft Exchange 2007 Server","v":"{1}","p":"cpe:/a:microsoft:exchange_server:{v}","vo":true,"ex":"Microsoft Exchange Server 2007 POP3 service ready","exv":"2007"},
+{"id":"v:prtg-server","f":"header:server","r":"^PRTG/(\\d+\\.\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"PRTG Network Monitor","v":"{1}","p":"cpe:2.3:a:paessler:prtg_network_monitor:{v}:*:*:*:*:*:*:*","vo":true,"ex":"PRTG/23.4.90.1299","exv":"23.4.90.1299"},
+{"id":"v:prtg-css","f":"body","r":"/css/prtgmini\\.css\\?prtgversion=(\\d+\\.\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"PRTG Network Monitor","v":"{1}","p":"cpe:2.3:a:paessler:prtg_network_monitor:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel=\"stylesheet\" type=\"text/css\" href=\"/css/prtgmini.css?prtgversion=23.4.90.1299\" media=\"print,screen,projection\" />","exv":"23.4.90.1299"},
+{"id":"v:zope","f":"header:server","r":"^Zope/\\((?:Zope )?(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Zope","v":"{1}","p":"cpe:2.3:a:zope:zope:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Zope/(Zope 2.10.6-final, python 2.4.5, linux2) ZServer/1.1","exv":"2.10.6"},
+{"id":"v:wingftp","f":"header:server","r":"^Wing FTP Server/(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Wing FTP Server","v":"{1}","p":"cpe:2.3:a:wftpserver:wing_ftp_server:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Wing FTP Server/6.4.4(XXX Corp)","exv":"6.4.4"},
+{"id":"v:sawmill","f":"header:server","r":"^Sawmill/(\\d+\\.\\d+(?:\\.\\d+)+)","src":"builtin","n":"Sawmill","v":"{1}","p":"cpe:2.3:a:sawmill:sawmill:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Sawmill/8.7.9.4","exv":"8.7.9.4"},
+{"id":"v:oam-footer","f":"body","r":"<p id=\"footerVersion\">Oracle Access Manager Version: (\\d+\\.\\d+\\.\\d+(?:\\.\\d+)*)</p>","src":"builtin","n":"Oracle Access Manager","v":"{1}","p":"cpe:2.3:a:oracle:access_manager:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<p id=\"footerVersion\">Oracle Access Manager Version: 10.1.4.3</p>","exv":"10.1.4.3"},
+{"id":"v:lansweeper","f":"body","r":"\"/js/CustomControls\\.js\\?(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)\"","src":"builtin","n":"Lansweeper","v":"{1}","p":"cpe:/a:lansweeper:lansweeper:{v}","vo":true,"ex":"<script src=\"/js/CustomControls.js?10.4.1.2\" type=\"text/javascript\"></script>","exv":"10.4.1.2"},
+{"id":"v:chevereto","f":"meta:generator","r":"^Chevereto (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Chevereto","v":"{1}","p":"cpe:2.3:a:chevereto:chevereto:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Chevereto 4.0.6","exv":"4.0.6"},
+{"id":"v:a-blog","f":"meta:generator","r":"^a-blog cms (?:Ver\\.|v)?(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"a-blog cms","v":"{1}","p":"cpe:2.3:a:appleple:a-blog_cms:{v}:*:*:*:*:*:*:*","vo":true,"ex":"a-blog cms Ver.3.1.12","exv":"3.1.12"},
+{"id":"v:smartstore","f":"meta:generator","r":"^Smartstore (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Smartstore biz","v":"{1}","p":"cpe:2.3:a:smartstore:smartstore:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Smartstore 5.1.0","exv":"5.1.0"},
+{"id":"v:dokuwiki","f":"meta:generator","r":"^DokuWiki Release (\\d{4}-\\d{2}-\\d{2}[a-z]?)","src":"builtin","n":"Dokuwiki","v":"{1}","p":"cpe:/a:dokuwiki:dokuwiki:{v}","vo":true,"ex":"DokuWiki Release 2009-12-25c","exv":"2009-12-25c"},
+{"id":"v:movabletype","f":"meta:generator","r":"^Movable Type(?: Pro| Advanced| Enterprise| Open Source)? (\\d+\\.\\d+(?:\\.\\d+)?)","src":"builtin","n":"Movable Type","v":"{1}","p":"cpe:2.3:a:sixapart:movable_type:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Movable Type Pro 6.3.2","exv":"6.3.2"},
+{"id":"v:cmsms","f":"body","r":"powered by <a[^>]{0,200}>CMS Made Simple</a> version (\\d+\\.\\d+(?:\\.\\d+)*)","o":"i","src":"builtin","n":"CMS Made Simple","v":"{1}","p":"cpe:2.3:a:cmsmadesimple:cms_made_simple:{v}:*:*:*:*:*:*:*","vo":true,"ex":"This site is powered by <a href=\"http://www.cmsmadesimple.org\">CMS Made Simple</a> version 1.11.13","exv":"1.11.13"},
+{"id":"v:rundeck","f":"body","r":"data-version-string=\"(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Rundeck","v":"{1}","p":"cpe:/a:pagerduty:rundeck:{v}","vo":true,"ex":"<div class=\"rundeck-version-block\" data-version-string=\"4.17.0-20230925\" data-version-date=\"2023-09-25\"","exv":"4.17.0"},
+{"id":"v:moodle-footer","f":"body","r":"<a title=\"Moodle (\\d+\\.\\d+(?:\\.\\d+)?)[ +(]","src":"builtin","n":"Moodle","v":"{1}","p":"cpe:2.3:a:moodle:moodle:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<a title=\"Moodle 2.2.3+ (Build: 20120615)\" href=\"http://moodle.org/\">","exv":"2.2.3"},
+{"id":"v:opencart-footer","f":"body","r":"OpenCart Version (\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)<","src":"builtin","n":"OpenCart","v":"{1}","p":"cpe:2.3:a:opencart:opencart:{v}:*:*:*:*:*:*:*","vo":true,"ex":"All Rights Reserved.<br />OpenCart Version 1.5.6.4</div>","exv":"1.5.6.4"},
+{"id":"v:opencms-generator","f":"meta:generator","r":"^OpenCms version (\\d+\\.\\d+\\.\\d+)","o":"i","src":"builtin","n":"OpenCms","v":"{1}","p":"cpe:2.3:a:alkacon:opencms:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Opencms version 7.5.2","exv":"7.5.2"},
+{"id":"v:cubecart-footer","f":"body","r":"Powered by CubeCart version (\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"CubeCart","v":"{1}","p":"cpe:2.3:a:cubecart:cubecart:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<p class=\"defaultText\">Powered by CubeCart version 4.4.3<br />","exv":"4.4.3"},
+{"id":"v:dokeos-footer","f":"body","r":"href=\"http://www\\.dokeos\\.com\" target=\"_blank\">\\s*Dokeos (\\d+\\.\\d+(?:\\.\\d+)?)</a>","src":"builtin","n":"Dokeos","v":"{1}","p":"cpe:2.3:a:dokeos:dokeos:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<div class=\"copyright\">Platform <a href=\"http://www.dokeos.com\" target=\"_blank\"> Dokeos 2.1.1</a>","exv":"2.1.1"},
+{"id":"v:wolfcms-footer","f":"body","r":"\\.png\" /> Wolf CMS (\\d+\\.\\d+\\.\\d+)</div>","src":"builtin","n":"Wolf CMS","v":"{1}","p":"cpe:2.3:a:wolfcms:wolf_cms:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<img src=\"/wolf/admin/images/wolf.png\" /> Wolf CMS 0.7.8</div>","exv":"0.7.8"},
+{"id":"v:openx-generator","f":"meta:generator","r":"^OpenX v(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"OpenX","v":"{1}","p":"cpe:2.3:a:openx:openx:{v}:*:*:*:*:*:*:*","vo":true,"ex":"OpenX v2.8.7 - http://www.openx.org","exv":"2.8.7"},
+{"id":"v:fluxbb-footer","f":"body","r":">P(?:owered by|ropuls&#233; par) <a href=\"http://fluxbb\\.org/\">FluxBB</a> (\\d+\\.\\d+\\.\\d+)<","src":"builtin","n":"FluxBB","v":"{1}","p":"cpe:2.3:a:fluxbb:fluxbb:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<p id=\"poweredby\">Powered by <a href=\"http://fluxbb.org/\">FluxBB</a> 1.5.10</p>","exv":"1.5.10"},
+{"id":"v:statusnet-footer","f":"body","r":"powered by <a href=\"http://status\\.net/\">StatusNet</a> version (\\d+\\.\\d+\\.\\d+)","o":"i","src":"builtin","n":"status.net","v":"{1}","p":"cpe:2.3:a:status:statusnet:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<p>This site is powered by <a href=\"http://status.net/\">StatusNet</a> version 0.9.9, available under","exv":"0.9.9"},
+{"id":"v:luci-footer","f":"body","r":"<a href=\"/cgi-bin/luci/about\">Powered by LuCI (?:(\\d+\\.\\d+\\.\\d+)</a>|[^<]{1,60} \\(v(\\d+\\.\\d+\\.\\d+)\\)</a>)","src":"builtin","n":"OpenWrt LuCI","v":"{1}{2}","p":"cpe:2.3:a:openwrt:luci:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<p class=\"luci\"><a href=\"/cgi-bin/luci/about\">Powered by LuCI 0.11 Branch (v0.11.1)</a></p>","exv":"0.11.1"},
+{"id":"v:splunk","f":"body","r":"\"VERSION_LABEL\"\\s*:\\s*\"(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)\"","src":"builtin","n":"Splunk","v":"{1}","p":"cpe:2.3:a:splunk:splunk:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"BUILD_NUMBER\": 1234567, \"BUILD_PUSH_NUMBER\": 0, \"VERSION_LABEL\": \"9.1.2\", \"LOCALE\": \"en-US\"","exv":"9.1.2"},
+{"id":"v:wazuh","f":"body","r":"&quot;wazuhVersion&quot;:&quot;(\\d+\\.\\d+\\.\\d+)&quot;","src":"builtin","n":"Wazuh","v":"{1}","p":"cpe:2.3:a:wazuh:wazuh:{v}:*:*:*:*:*:*:*","vo":true,"ex":"&quot;wazuhVersion&quot;:&quot;4.7.2&quot;,&quot;revision&quot;:&quot;40722&quot;","exv":"4.7.2"},
+{"id":"v:superset","f":"body","r":"&#34;version_string&#34;:\\s*&#34;(\\d+\\.\\d+\\.\\d+)&#34;","src":"builtin","n":"Apache Superset","v":"{1}","p":"cpe:/a:apache:superset:{v}","vo":true,"ex":"&#34;version_string&#34;: &#34;2.1.0&#34;, &#34;version_sha&#34;: &#34;e5d5b4a&#34;","exv":"2.1.0"},
+{"id":"v:plesk-onyx","f":"body","r":"alt=\"Plesk Onyx (\\d+\\.\\d+\\.\\d+)\"","src":"builtin","n":"Plesk","v":"{1}","p":"cpe:2.3:a:plesk:plesk:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<img src=\"/images/logos/plesk/plesk-onyx-login.png\" alt=\"Plesk Onyx 17.8.11\" />","exv":"17.8.11"},
+{"id":"v:snews","f":"meta:generator","r":"^sNews (\\d+\\.\\d+(?:\\.\\d+)?)$","src":"builtin","n":"sNews","v":"{1}","p":"cpe:2.3:a:snewscms:snews:{v}:*:*:*:*:*:*:*","vo":true,"ex":"sNews 1.7.1","exv":"1.7.1"},
+{"id":"v:teamcity","f":"body","r":"Version</span> (\\d{4}\\.\\d{1,2}(?:\\.\\d+)?) \\(build \\d+\\)","src":"builtin","n":"JetBrains TeamCity","v":"{1}","p":"cpe:2.3:a:jetbrains:teamcity:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<span class=\"greyNote version\"><span class=\"vers\">Version</span> 2023.05.3 (build 129390)</span>","exv":"2023.05.3"},
+{"id":"v:citrix-hypervisor","f":"body","r":"Welcome to Citrix Hypervisor (\\d+\\.\\d+(?:\\.\\d+)?)\\b","src":"builtin","n":"Citrix Hypervisor","v":"{1}","p":"cpe:2.3:o:citrix:hypervisor:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<h1>Welcome to Citrix Hypervisor 8.2.1</h1>","exv":"8.2.1"},
+{"id":"v:play1","f":"header:server","r":"^Play! Framework;(\\d+\\.\\d+(?:\\.\\d+)*);","src":"builtin","n":"Play","v":"{1}","p":"cpe:2.3:a:playframework:play_framework:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Play! Framework;1.2.4;prod","exv":"1.2.4"},
+{"id":"v:hotaru","f":"meta:generator","r":"^Hotaru CMS (\\d+\\.\\d+(?:\\.\\d+)*)$","src":"builtin","n":"Hotaru CMS","v":"{1}","p":"cpe:2.3:a:hotarucms:hotarucms:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Hotaru CMS 1.4.2","exv":"1.4.2"},
+{"id":"v:ipb","f":"body","r":">Invision Power Board</a>(?:\\(U\\))?\\s*v(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?) &copy; 20\\d\\d","src":"builtin","n":"Invision Power Board","v":"{1}","p":"cpe:2.3:a:invisioncommunity:invision_power_board:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Powered by <a href=\"http://www.invisionboard.com\" title=\"Invision Power Board\" target=\"_blank\">Invision Power Board</a>(U) v2.3.6 &copy; 2008 &nbsp;","exv":"2.3.6"},
+{"id":"v:ipb-ips","f":"body","r":"\\bv?(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?) &copy; 20\\d\\d &nbsp;<a href=\\'http://www\\.invisionpower\\.com\\'","src":"builtin","n":"Invision Power Board","v":"{1}","p":"cpe:2.3:a:invisioncommunity:invision_power_board:{v}:*:*:*:*:*:*:*","vo":true,"ex":"v2.1.7 &copy; 2006 &nbsp;<a href='http://www.invisionpower.com' style='text-decoration:none' target='_blank'>IPS, Inc.</a>","exv":"2.1.7"},
+{"id":"v:esyndicat-generator","f":"meta:generator","r":"^eSyndiCat Web Directory Software (\\d+\\.\\d+(?:\\.\\d+)*)$","src":"builtin","n":"eSyndiCat","v":"{1}","p":"cpe:2.3:a:intelliants:esyndicat:{v}:*:*:*:*:*:*:*","vo":true,"ex":"eSyndiCat Web Directory Software 2.2","exv":"2.2"},
+{"id":"v:esyndicat-footer","f":"body","r":"Powered by <a href=\"http://www\\.esyndicat\\.com/\">eSyndiCat(?: Pro v(?<ver>\\d+\\.\\d+(?:\\.\\d+)*)</a>| ?</a> Version (?<ver>\\d+\\.\\d+(?:\\.\\d+)*))<br","src":"builtin","n":"eSyndiCat","v":"{ver}","p":"cpe:2.3:a:intelliants:esyndicat:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Powered by <a href=\"http://www.esyndicat.com/\">eSyndiCat Pro v2.3</a><br />","exv":"2.3"},
+{"id":"v:guppy","f":"body","r":"(?:Site powered by GuppY v(?<ver>\\d+\\.\\d+(?:\\.\\d+)*) </a>|<!--\\[\\s+GuppY v(?<ver>\\d+\\.\\d+(?:\\.\\d+)*) CeCILL Copyright)","src":"builtin","n":"GuppY","v":"{ver}","p":"cpe:2.3:a:freeguppy:guppy:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<!--[  GuppY v4.5.18 CeCILL Copyright (C) 2004-2009 by Laurent Duveau - http://www.freeguppy.org/  ]-->","exv":"4.5.18"},
+{"id":"v:edirectory","f":"body","r":"<blockquote class=\"eDirectoryVersion\"><span class=\"basePowered\">Powered by <a href=\"[^\"]*\" target=\"_blank\">eDirectory&trade;</a> </span> v\\.(\\d+\\.\\d+(?:\\.\\d+)*)</blockquote>","src":"builtin","n":"eDirectory","v":"{1}","p":"cpe:2.3:a:arcasolutions:edirectory:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<blockquote class=\"eDirectoryVersion\"><span class=\"basePowered\">Powered by <a href=\"http://www.edirectory.com\" target=\"_blank\">eDirectory&trade;</a> </span> v.10.4</blockquote>","exv":"10.4"},
+{"id":"v:uportal","f":"body","r":"(?:alt=\"Powered by uPortal (?<ver>\\d+\\.\\d+(?:\\.\\d+)*)\"|>Powered by uPortal (?<ver>\\d+\\.\\d+(?:\\.\\d+)*)</a>)","src":"builtin","n":"uPortal","v":"{ver}","p":"cpe:2.3:a:apereo:uportal:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<img src=\"media/skins/universality/uportal3/images/portal_logo.png\" alt=\"Powered by uPortal 3.2.4\" />","exv":"3.2.4"},
+{"id":"v:uportal-header","f":"header:uportal-version","r":"^uPortal_rel-(\\d+)-(\\d+)-(\\d+)\\b","o":"i","src":"builtin","n":"uPortal","v":"{1}.{2}.{3}","p":"cpe:2.3:a:apereo:uportal:{v}:*:*:*:*:*:*:*","vo":true,"ex":"uPortal_rel-3-2-4","exv":"3.2.4"},
+{"id":"v:cdn-tinymce","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/tinymce/|cdn\\.jsdelivr\\.net/npm/tinymce@|unpkg\\.com/tinymce@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"TinyMCE","v":"{1}","p":"cpe:2.3:a:tiny:tinymce:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/tinymce/5.10.9/tinymce.min.js","exv":"5.10.9"},
+{"id":"v:cdn-jspdf","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/jspdf/|cdn\\.jsdelivr\\.net/npm/jspdf@|unpkg\\.com/jspdf@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"jsPDF","v":"{1}","p":"cpe:2.3:a:parall:jspdf:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js","exv":"2.5.1"},
+{"id":"v:cdn-yui","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/yui/|cdn\\.jsdelivr\\.net/npm/yui@|unpkg\\.com/yui@|yui\\.yahooapis\\.com/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"YUI","v":"{1}","p":"cpe:2.3:a:yahoo:yui:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://yui.yahooapis.com/3.18.1/build/yui/yui-min.js","exv":"3.18.1"},
+{"id":"v:cdn-marked","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/marked/|cdn\\.jsdelivr\\.net/npm/marked@|unpkg\\.com/marked@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Marked","v":"{1}","p":"cpe:2.3:a:marked_project:marked:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js","exv":"4.3.0"},
+{"id":"v:cdn-lodash","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/lodash\\.js/|cdn\\.jsdelivr\\.net/npm/lodash@|unpkg\\.com/lodash@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Lodash","v":"{1}","p":"cpe:2.3:a:lodash:lodash:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js","exv":"4.17.21"},
+{"id":"v:cdn-mermaid","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/mermaid/|cdn\\.jsdelivr\\.net/npm/mermaid@|unpkg\\.com/mermaid@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Mermaid","v":"{1}","p":"cpe:2.3:a:mermaid_project:mermaid:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js","exv":"10.6.1"},
+{"id":"v:cdn-swiper","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/Swiper/|cdn\\.jsdelivr\\.net/npm/swiper@|unpkg\\.com/swiper@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Swiper","v":"{1}","p":"cpe:2.3:a:swiperjs:swiper:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/Swiper/8.4.7/swiper-bundle.min.js","exv":"8.4.7"},
+{"id":"v:cdn-moment","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/moment\\.js/|cdn\\.jsdelivr\\.net/npm/moment@|unpkg\\.com/moment@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Moment.js","v":"{1}","p":"cpe:2.3:a:momentjs:moment:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js","exv":"2.29.4"},
+{"id":"v:cdn-mathjs","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/mathjs/|cdn\\.jsdelivr\\.net/npm/mathjs@|unpkg\\.com/mathjs@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"math.js","v":"{1}","p":"cpe:2.3:a:mathjs:mathjs:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.11.0/math.min.js","exv":"11.11.0"},
+{"id":"v:cdn-bootstrap-table","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/bootstrap\\-table/|cdn\\.jsdelivr\\.net/npm/bootstrap\\-table@|unpkg\\.com/bootstrap\\-table@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Bootstrap Table","v":"{1}","p":"cpe:2.3:a:bootstrap-table:bootstrap_table:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.22.1/bootstrap-table.min.js","exv":"1.22.1"},
+{"id":"v:cdn-datatables","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/datatables/|cdn\\.jsdelivr\\.net/npm/datatables\\.net@|unpkg\\.com/datatables\\.net@|cdn\\.datatables\\.net/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"DataTables","v":"{1}","p":"cpe:2.3:a:datatables:datatables.net:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js","exv":"1.13.6"},
+{"id":"v:cdn-jszip","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/jszip/|cdn\\.jsdelivr\\.net/npm/jszip@|unpkg\\.com/jszip@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"JSZip","v":"{1}","p":"cpe:2.3:a:jszip_project:jszip:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js","exv":"3.10.1"},
+{"id":"v:cdn-revealjs","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/reveal\\.js/|cdn\\.jsdelivr\\.net/npm/reveal\\.js@|unpkg\\.com/reveal\\.js@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Reveal.js","v":"{1}","p":"cpe:2.3:a:revealjs:reveal.js:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.6.1/reveal.min.js","exv":"4.6.1"},
+{"id":"v:cdn-backbone","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/backbone\\.js/|cdn\\.jsdelivr\\.net/npm/backbone@|unpkg\\.com/backbone@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Backbone.js","v":"{1}","p":"cpe:2.3:a:backbone_project:backbone:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/backbone.js/1.4.1/backbone-min.js","exv":"1.4.1"},
+{"id":"v:cdn-d3","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/d3/|cdn\\.jsdelivr\\.net/npm/d3@|unpkg\\.com/d3@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"D3","v":"{1}","p":"cpe:2.3:a:d3.js_project:d3.js:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js","exv":"7.8.5"},
+{"id":"v:cdn-mootools","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/mootools/|ajax\\.googleapis\\.com/ajax/libs/mootools/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"MooTools","v":"{1}","p":"cpe:2.3:a:mootools:mootools:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://ajax.googleapis.com/ajax/libs/mootools/1.6.0/mootools.min.js","exv":"1.6.0"},
+{"id":"v:cdn-prettyphoto","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/prettyPhoto/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"prettyPhoto","v":"{1}","p":"cpe:2.3:a:no-margin-for-errors:prettyphoto:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/prettyPhoto/3.1.6/js/jquery.prettyPhoto.min.js","exv":"3.1.6"},
+{"id":"v:cdn-scriptaculous","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/scriptaculous/|ajax\\.googleapis\\.com/ajax/libs/scriptaculous/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"script.aculo.us","v":"{1}","p":"cpe:2.3:a:script.aculo.us:script.aculo.us:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://ajax.googleapis.com/ajax/libs/scriptaculous/1.9.0/scriptaculous.js","exv":"1.9.0"},
+{"id":"v:cdn-select2","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/select2/|cdn\\.jsdelivr\\.net/npm/select2@|unpkg\\.com/select2@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"Select2","v":"{1}","p":"cpe:2.3:a:select2:select2:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js","exv":"4.0.13"},
+{"id":"v:file-lodash","f":"scriptsrc","r":"(?:^|/)(?:lodash)[.-](\\d+\\.\\d+\\.\\d+)(?:[.-]min)?\\.js(?:[?#]|$)","o":"i","src":"builtin","n":"Lodash","v":"{1}","p":"cpe:2.3:a:lodash:lodash:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/static/js/lodash-4.17.20.min.js","exv":"4.17.20"},
+{"id":"v:file-moment","f":"scriptsrc","r":"(?:^|/)(?:moment)[.-](\\d+\\.\\d+\\.\\d+)(?:[.-]min)?\\.js(?:[?#]|$)","o":"i","src":"builtin","n":"Moment.js","v":"{1}","p":"cpe:2.3:a:momentjs:moment:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/assets/js/moment-2.29.4.min.js","exv":"2.29.4"},
+{"id":"v:file-select2","f":"scriptsrc","r":"(?:^|/)(?:select2)[.-](\\d+\\.\\d+\\.\\d+)(?:[.-]min)?\\.js(?:[?#]|$)","o":"i","src":"builtin","n":"Select2","v":"{1}","p":"cpe:2.3:a:select2:select2:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/js/select2-4.0.13.min.js?ver=6.4.2","exv":"4.0.13"},
+{"id":"v:file-backbone","f":"scriptsrc","r":"(?:^|/)(?:backbone)[.-](\\d+\\.\\d+\\.\\d+)(?:[.-]min)?\\.js(?:[?#]|$)","o":"i","src":"builtin","n":"Backbone.js","v":"{1}","p":"cpe:2.3:a:backbone_project:backbone:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/js/vendor/backbone-1.4.1.min.js","exv":"1.4.1"},
+{"id":"v:cdn-openui5","f":"scriptsrc","r":"(?:^|//)(?:openui5\\.hana\\.ondemand\\.com/|sdk\\.openui5\\.org/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"OpenUI5","v":"{1}","p":"cpe:2.3:a:sap:openui5:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://openui5.hana.ondemand.com/1.120.1/resources/sap-ui-core.js","exv":"1.120.1"}
 ]}
 '@
 # Reviewed NVD CPE names: completes rule CPEs when a Recog/Wappalyzer pack is imported (fill/replace) and tells the
@@ -5551,7 +5721,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.3.1";
+        public const string Version = "2.3.2";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
@@ -8155,7 +8325,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.3.1";
+        public const string Version = "2.3.2";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -12878,10 +13048,37 @@ function Invoke-SelfTest {
     Assert 'requiresCategory gate drops ungated hit' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 0 }
     $o6.Add('selftest.shop', 'cart')
     Assert 'requiresCategory gate passes with category present' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 1 }
+    # version-only outputs: they add a version to a product another rule detected, and nothing else
+    $voPack = [WebInv.Matcher]::ReadPack('{"name":"votest","rules":[{"id":"st:vo-det","f":"selftest.det","r":"Acme","n":"ST Acme","c":"Web application","p":"cpe:2.3:a:stacme:acme:*","k":80},{"id":"st:vo-ver","f":"selftest.page","r":"Acme v(\\d+\\.\\d+\\.\\d+)","n":"ST Acme","v":"{1}","p":"cpe:2.3:a:stacme:acme:{v}","vo":true},{"id":"st:vo-det2","f":"selftest.det2","r":"Beta ([\\d.]+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","k":80},{"id":"st:vo-ver2","f":"selftest.page","r":"Beta v(\\d+\\.\\d+\\.\\d+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","vo":true},{"id":"st:vo-gate","f":"selftest.det3","r":"Gamma","n":"ST Gamma","c":"Shipping carriers","rc":["Ecommerce"],"p":"cpe:2.3:a:stgamma:gamma:*","k":80},{"id":"st:vo-ver3","f":"selftest.page","r":"Gamma v(\\d+\\.\\d+\\.\\d+)","n":"ST Gamma","v":"{1}","p":"cpe:2.3:a:stgamma:gamma:{v}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($voPack, (New-Object 'System.Collections.Generic.List[string]'))
+    $vo1 = New-Object WebInv.Observation; $vo1.Add('selftest.page', 'Acme v1.2.3 Beta v3.1.4 Gamma v5.6.7')
+    Assert 'version-only rule never creates a detection' { @([WebInv.Matcher]::Evaluate($vo1) | Where-Object { $_.Name -like 'ST *' }).Count -eq 0 }
+    $vo2 = New-Object WebInv.Observation; $vo2.Add('selftest.page', 'Acme v1.2.3'); $vo2.Add('selftest.det', 'Acme')
+    $vo3 = New-Object WebInv.Observation; $vo3.Add('selftest.det', 'Acme'); $vo3.Add('selftest.page', 'Acme v1.2.3')
+    $voA = @([WebInv.Matcher]::Evaluate($vo2) | Where-Object { $_.Name -eq 'ST Acme' }); $voB = @([WebInv.Matcher]::Evaluate($vo3) | Where-Object { $_.Name -eq 'ST Acme' })
+    Assert 'version-only rule adds its version to the detected product (either order), not its confidence or category' {
+        $voA.Count -eq 1 -and $voB.Count -eq 1 -and $voA[0].Version -eq '1.2.3' -and $voB[0].Version -eq '1.2.3' -and $voA[0].Cpe -eq 'cpe:2.3:a:stacme:acme:1.2.3:*:*:*:*:*:*:*' -and
+        $voA[0].Confidence -eq 80 -and $voB[0].Confidence -eq 80 -and $voA[0].Category -eq 'Web application' -and $voB[0].Category -eq 'Web application' }
+    $vo4 = New-Object WebInv.Observation; $vo4.Add('selftest.page', 'Beta v3.1.4'); $vo4.Add('selftest.det2', 'Beta 2.0')
+    Assert 'version-only rule never replaces a version a detection rule captured' { @([WebInv.Matcher]::Evaluate($vo4) | Where-Object { $_.Name -eq 'ST Beta' -and $_.Version -eq '2.0' }).Count -eq 1 }
+    $voPack2 = [WebInv.Matcher]::ReadPack('{"name":"votest2","rules":[{"id":"st:vo-fix","f":"selftest.fav","r":"^ab12$","n":"ST Delta","v":"1.5.0+","p":"cpe:/a:stdelta:delta:1.5.0","k":80},{"id":"st:vo-ver4","f":"selftest.page","r":"Delta v(\\d+\\.\\d+\\.\\d+)","n":"ST Delta","v":"{1}","p":"cpe:2.3:a:stdelta:delta:{v}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($voPack2, (New-Object 'System.Collections.Generic.List[string]'))
+    $vo6 = New-Object WebInv.Observation; $vo6.Add('selftest.fav', 'ab12'); $vo6.Add('selftest.page', 'Delta v1.6.20')
+    Assert 'a captured version-only version replaces one written into a rule (favicon "1.5.0+")' { @([WebInv.Matcher]::Evaluate($vo6) | Where-Object { $_.Name -eq 'ST Delta' -and $_.Version -eq '1.6.20' -and $_.Cpe -eq 'cpe:2.3:a:stdelta:delta:1.6.20:*:*:*:*:*:*:*' }).Count -eq 1 }
+    $vo5 = New-Object WebInv.Observation; $vo5.Add('selftest.page', 'Gamma v5.6.7'); $vo5.Add('selftest.det3', 'Gamma')
+    Assert 'version-only rule does not lift a requiresCategory gate' { @([WebInv.Matcher]::Evaluate($vo5) | Where-Object { $_.Name -eq 'ST Gamma' }).Count -eq 0 }
+    # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
+    $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
+    [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))
+    $b1 = New-Object WebInv.Observation; $b1.Add('selftest.b64', 'eyJyZWwiOiJzdEA0LjUuNiJ9')
+    $b2 = New-Object WebInv.Observation; $b2.Add('selftest.b64', '{"rel":"st@4.5.6"}'); $b2.Add('selftest.b64', 'not base64!')
+    Assert 'base64 rule (o=b) matches the decoded value only' {
+        @([WebInv.Matcher]::Evaluate($b1) | Where-Object { $_.Name -eq 'ST Epsilon' -and $_.Version -eq '4.5.6' }).Count -eq 1 -and
+        @([WebInv.Matcher]::Evaluate($b2) | Where-Object { $_.Name -eq 'ST Epsilon' }).Count -eq 0 }
     $tested = 0; $fails = @([WebInv.Matcher]::TestExamples([ref]$tested))
-    $bFails = @($fails | Where-Object { $_ -like 'b:*' })
+    $bFails = @($fails | Where-Object { $_ -like 'b:*' -or $_ -like 'v:*' })
     Assert ("built-in rule examples") { $bFails.Count -eq 0 }
-    foreach ($f in $fails) { Write-RunLog "example failure: $f" $(if ($f -like 'b:*') { 'ERROR' } else { 'WARN' }) }
+    foreach ($f in $fails) { Write-RunLog "example failure: $f" $(if ($f -like 'b:*' -or $f -like 'v:*') { 'ERROR' } else { 'WARN' }) }
     if ($fails.Count -gt $bFails.Count) { Write-Host ("note: {0} example mismatches in companion rule packs (see run log); run -TestRules for detail" -f ($fails.Count - $bFails.Count)) -ForegroundColor Yellow }
     Write-RunLog ("rule examples tested: {0}; failures: {1} (built-in {2})" -f $tested, $fails.Count, $bFails.Count)
     # output safety

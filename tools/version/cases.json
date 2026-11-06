@@ -1,0 +1,707 @@
+[
+ {
+  "name": "roundcube",
+  "image": "roundcube/roundcubemail",
+  "port": 80,
+  "env": {
+   "ROUNDCUBEMAIL_DB_TYPE": "sqlite",
+   "ROUNDCUBEMAIL_DEFAULT_HOST": "localhost"
+  },
+  "wait": 120,
+  "tags": [
+   "1.6.20-apache",
+   "1.7.5-apache"
+  ],
+  "products": [
+   "RoundCube"
+  ]
+ },
+ {
+  "name": "solr",
+  "image": "solr",
+  "port": 8983,
+  "wait": 120,
+  "tags": [
+   "9.4.1",
+   "10.1.0"
+  ],
+  "products": [
+   "Apache Solr"
+  ]
+ },
+ {
+  "name": "consul",
+  "image": "public.ecr.aws/hashicorp/consul",
+  "port": 8500,
+  "cmd": [
+   "agent",
+   "-dev",
+   "-client",
+   "0.0.0.0"
+  ],
+  "wait": 90,
+  "tags": [
+   "1.22.7",
+   "2.1.0"
+  ],
+  "products": [
+   "HashiCorp Consul"
+  ]
+ },
+ {
+  "name": "vault",
+  "image": "public.ecr.aws/hashicorp/vault",
+  "port": 8200,
+  "env": {
+   "VAULT_DEV_ROOT_TOKEN_ID": "root",
+   "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200"
+  },
+  "wait": 90,
+  "tags": [
+   "1.20.4",
+   "2.2.1"
+  ],
+  "products": [
+   "HashiCorp Vault"
+  ]
+ },
+ {
+  "name": "nomad",
+  "image": "hashicorp/nomad",
+  "port": 4646,
+  "cmd": [
+   "agent",
+   "-server",
+   "-bootstrap-expect=1",
+   "-data-dir=/tmp/nomad",
+   "-bind=0.0.0.0"
+  ],
+  "wait": 90,
+  "tags": [
+   "1.10.5",
+   "2.1.1"
+  ],
+  "products": [
+   "HashiCorp Nomad"
+  ],
+  "tags4": [
+   "1.10.5"
+  ],
+  "note": "server only: the dev agent includes a client that needs writable cgroups",
+  "ready": "Nomad"
+ },
+ {
+  "name": "metabase",
+  "image": "metabase/metabase",
+  "port": 3000,
+  "wait": 480,
+  "ready": "_metabaseBootstrap",
+  "tags": [
+   "v0.58.39",
+   "v0.65.3"
+  ],
+  "vre": "v(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)",
+  "products": [
+   "Metabase"
+  ],
+  "tags2": [
+   "v0.58.39"
+  ],
+  "tags3": [
+   "v0.58.39"
+  ],
+  "tags4": [
+   "v0.65.3"
+  ]
+ },
+ {
+  "name": "nextcloud",
+  "image": "nextcloud",
+  "port": 80,
+  "env": {
+   "SQLITE_DATABASE": "nc",
+   "NEXTCLOUD_ADMIN_USER": "admin",
+   "NEXTCLOUD_ADMIN_PASSWORD": "Vlab-Passw0rd-1",
+   "NEXTCLOUD_TRUSTED_DOMAINS": "127.0.0.1 localhost"
+  },
+  "wait": 420,
+  "ready": "login",
+  "settle": 5,
+  "tags": [
+   "32.0.15-apache",
+   "35.0.2-apache"
+  ],
+  "products": [
+   "Nextcloud"
+  ]
+ },
+ {
+  "name": "owncloud",
+  "image": "owncloud/server",
+  "port": 8080,
+  "env": {
+   "OWNCLOUD_DOMAIN": "127.0.0.1",
+   "OWNCLOUD_TRUSTED_DOMAINS": "127.0.0.1,localhost",
+   "ADMIN_USERNAME": "admin",
+   "ADMIN_PASSWORD": "Vlab-Passw0rd-1"
+  },
+  "wait": 420,
+  "ready": "ownCloud",
+  "tags": [
+   "10.16.7",
+   "11.1.0"
+  ],
+  "products": [
+   "ownCloud"
+  ]
+ },
+ {
+  "name": "mattermost",
+  "image": "mattermost/mattermost-preview",
+  "port": 8065,
+  "wait": 480,
+  "ready": "Mattermost",
+  "tags": [
+   "10.11.26",
+   "12.1.0"
+  ],
+  "products": [
+   "Mattermost"
+  ],
+  "tags2": [
+   "10.11.26"
+  ],
+  "tags4": [
+   "12.1.0"
+  ]
+ },
+ {
+  "name": "teamcity",
+  "image": "jetbrains/teamcity-server",
+  "port": 8111,
+  "wait": 480,
+  "tags": [
+   "2025.11.8",
+   "2026.2.2"
+  ],
+  "vre": "(\\d{4}\\.\\d+(?:\\.\\d+)?)",
+  "products": [
+   "JetBrains TeamCity"
+  ],
+  "tags2": [
+   "2026.2.2"
+  ],
+  "tags3": [
+   "2026.2.2"
+  ]
+ },
+ {
+  "name": "elasticsearch",
+  "image": "docker.elastic.co/elasticsearch/elasticsearch",
+  "port": 9200,
+  "env": {
+   "discovery.type": "single-node",
+   "xpack.security.enabled": "false",
+   "ES_JAVA_OPTS": "-Xms512m -Xmx512m"
+  },
+  "wait": 300,
+  "ready": "tagline",
+  "tags": [
+   "8.19.6",
+   "9.2.0"
+  ],
+  "products": [
+   "Elastic Search"
+  ]
+ },
+ {
+  "name": "kibana",
+  "image": "docker.elastic.co/kibana/kibana",
+  "port": 5601,
+  "deps": [
+   {
+    "name": "es",
+    "image": "docker.elastic.co/elasticsearch/elasticsearch:{tag}",
+    "env": {
+     "discovery.type": "single-node",
+     "xpack.security.enabled": "false",
+     "ES_JAVA_OPTS": "-Xms512m -Xmx512m"
+    },
+    "sleep": 40
+   }
+  ],
+  "env": {
+   "ELASTICSEARCH_HOSTS": "http://es:9200"
+  },
+  "wait": 480,
+  "ready": "kbn",
+  "settle": 20,
+  "tags": [
+   "8.19.6",
+   "9.2.0"
+  ],
+  "products": [
+   "Elastic Kibana"
+  ]
+ },
+ {
+  "name": "checkmk",
+  "image": "checkmk/check-mk-raw",
+  "port": 5000,
+  "env": {
+   "CMK_PASSWORD": "Vlab-Passw0rd-1"
+  },
+  "wait": 480,
+  "tags": [
+   "2.3.0p38",
+   "2.4.0p39"
+  ],
+  "vre": "(\\d+\\.\\d+\\.\\d+p\\d+)",
+  "products": [
+   "Checkmk"
+  ],
+  "tags2": [
+   "2.4.0p39"
+  ],
+  "tags4": [
+   "2.3.0p38"
+  ],
+  "note": "/ redirects to /cmk/ (the site), then check_mk/ and login.py; checked on 2.3.0p38"
+ },
+ {
+  "name": "activemq",
+  "image": "apache/activemq-classic",
+  "port": 8161,
+  "wait": 180,
+  "tags": [
+   "5.18.7",
+   "6.2.0"
+  ],
+  "products": [
+   "Apache ActiveMQ"
+  ]
+ },
+ {
+  "name": "pgadmin",
+  "image": "dpage/pgadmin4",
+  "port": 80,
+  "env": {
+   "PGADMIN_DEFAULT_EMAIL": "admin@example.com",
+   "PGADMIN_DEFAULT_PASSWORD": "Vlab-Passw0rd-1",
+   "PGADMIN_LISTEN_ADDRESS": "0.0.0.0"
+  },
+  "wait": 300,
+  "ready": "pgAdmin",
+  "tags": [
+   "9.8",
+   "9.19"
+  ],
+  "products": [
+   "pgAdmin"
+  ],
+  "tags2": [
+   "9.19"
+  ],
+  "tags3": [
+   "9.19"
+  ],
+  "tags4": [
+   "9.8"
+  ]
+ },
+ {
+  "name": "n8n",
+  "image": "docker.n8n.io/n8nio/n8n",
+  "port": 5678,
+  "wait": 240,
+  "ready": "n8n:config",
+  "tags": [
+   "1.123.92",
+   "2.47.2"
+  ],
+  "products": [
+   "n8n"
+  ],
+  "env": {
+   "N8N_LISTEN_ADDRESS": "0.0.0.0"
+  },
+  "tags2": [
+   "2.47.2"
+  ],
+  "settle": 5,
+  "tags3": [
+   "2.47.2"
+  ],
+  "tags4": [
+   "1.123.92"
+  ]
+ },
+ {
+  "name": "traefik",
+  "image": "traefik",
+  "port": 8080,
+  "cmd": [
+   "--api.insecure=true",
+   "--entrypoints.web.address=:80"
+  ],
+  "wait": 60,
+  "tags": [
+   "v2.11.61",
+   "v3.7.17"
+  ],
+  "products": [
+   "Traefik"
+  ]
+ },
+ {
+  "name": "portainer",
+  "image": "portainer/portainer-ce",
+  "port": 9000,
+  "wait": 90,
+  "tags": [
+   "2.39.8",
+   "2.45.3"
+  ],
+  "products": [
+   "Portainer"
+  ]
+ },
+ {
+  "name": "rabbitmq",
+  "image": "rabbitmq",
+  "port": 15672,
+  "wait": 180,
+  "tags": [
+   "4.2.9-management",
+   "4.3.7-management"
+  ],
+  "products": [
+   "RabbitMQ"
+  ]
+ },
+ {
+  "name": "vaultwarden",
+  "image": "ghcr.io/dani-garcia/vaultwarden",
+  "port": 80,
+  "wait": 90,
+  "tags": [
+   "1.35.8",
+   "1.37.5"
+  ],
+  "products": [
+   "Vaultwarden"
+  ],
+  "tags2": [
+   "1.37.5"
+  ],
+  "env": {
+   "ROCKET_ADDRESS": "0.0.0.0",
+   "I_REALLY_WANT_VOLATILE_STORAGE": "true"
+  },
+  "tags4": [
+   "1.37.5"
+  ]
+ },
+ {
+  "name": "spark",
+  "image": "spark",
+  "port": 8080,
+  "cmd": [
+   "/opt/spark/bin/spark-class",
+   "org.apache.spark.deploy.master.Master"
+  ],
+  "wait": 120,
+  "tags": [
+   "3.5.9-scala2.12-java17-ubuntu",
+   "4.1.4"
+  ],
+  "products": [
+   "Apache Spark"
+  ]
+ },
+ {
+  "name": "etherpad",
+  "image": "etherpad/etherpad",
+  "port": 9001,
+  "wait": 180,
+  "tags": [
+   "2.7.3",
+   "3.3.15"
+  ],
+  "products": [
+   "Etherpad"
+  ]
+ },
+ {
+  "name": "uptimekuma",
+  "image": "louislam/uptime-kuma",
+  "port": 3001,
+  "wait": 180,
+  "tags": [
+   "2.4.0",
+   "2.5.9"
+  ],
+  "products": [
+   "Uptime Kuma"
+  ]
+ },
+ {
+  "name": "redmine",
+  "image": "redmine",
+  "port": 3000,
+  "wait": 240,
+  "tags": [
+   "6.0.12",
+   "7.0.3"
+  ],
+  "products": [
+   "Redmine"
+  ]
+ },
+ {
+  "name": "jupyterhub",
+  "image": "quay.io/jupyterhub/jupyterhub",
+  "port": 8000,
+  "cmd": [
+   "jupyterhub"
+  ],
+  "wait": 120,
+  "tags": [
+   "5.5.4",
+   "6.1.1"
+  ],
+  "products": [
+   "JupyterHub"
+  ]
+ },
+ {
+  "name": "couchbase",
+  "image": "couchbase",
+  "port": 8091,
+  "wait": 240,
+  "tags": [
+   "7.6.12",
+   "8.0.3"
+  ],
+  "products": [
+   "Couchbase Server"
+  ]
+ },
+ {
+  "name": "keycloak",
+  "image": "quay.io/keycloak/keycloak",
+  "port": 8080,
+  "cmd": [
+   "start-dev"
+  ],
+  "env": {
+   "KC_BOOTSTRAP_ADMIN_USERNAME": "admin",
+   "KC_BOOTSTRAP_ADMIN_PASSWORD": "admin"
+  },
+  "wait": 300,
+  "tags": [
+   "26.6",
+   "26.8.2"
+  ],
+  "products": [
+   "Keycloak"
+  ]
+ },
+ {
+  "name": "xwiki",
+  "image": "xwiki",
+  "port": 8080,
+  "deps": [
+   {
+    "name": "db",
+    "image": "postgres:16-alpine",
+    "env": {
+     "POSTGRES_USER": "xwiki",
+     "POSTGRES_PASSWORD": "xwiki",
+     "POSTGRES_DB": "xwiki"
+    },
+    "sleep": 8
+   }
+  ],
+  "env": {
+   "DB_USER": "xwiki",
+   "DB_PASSWORD": "xwiki",
+   "DB_HOST": "db"
+  },
+  "wait": 600,
+  "ready": "XWiki",
+  "settle": 10,
+  "tags": [
+   "16.10.19-postgres-tomcat",
+   "18.4.8-postgres-tomcat"
+  ],
+  "products": [
+   "XWiki"
+  ]
+ },
+ {
+  "name": "zabbix",
+  "image": "zabbix/zabbix-web-nginx-pgsql",
+  "port": 8080,
+  "deps": [
+   {
+    "name": "postgres",
+    "image": "postgres:16-alpine",
+    "env": {
+     "POSTGRES_USER": "zabbix",
+     "POSTGRES_PASSWORD": "zabbix",
+     "POSTGRES_DB": "zabbix"
+    },
+    "sleep": 8
+   },
+   {
+    "name": "zabbix-server",
+    "image": "zabbix/zabbix-server-pgsql:{tag}",
+    "env": {
+     "DB_SERVER_HOST": "postgres",
+     "POSTGRES_USER": "zabbix",
+     "POSTGRES_PASSWORD": "zabbix",
+     "POSTGRES_DB": "zabbix"
+    },
+    "sleep": 60
+   }
+  ],
+  "env": {
+   "DB_SERVER_HOST": "postgres",
+   "POSTGRES_USER": "zabbix",
+   "POSTGRES_PASSWORD": "zabbix",
+   "POSTGRES_DB": "zabbix",
+   "ZBX_SERVER_HOST": "zabbix-server"
+  },
+  "wait": 300,
+  "ready": "Zabbix",
+  "tags": [
+   "alpine-7.0.32",
+   "alpine-8.0.0"
+  ],
+  "products": [
+   "Zabbix"
+  ]
+ },
+ {
+  "name": "joomla",
+  "image": "joomla",
+  "port": 80,
+  "deps": [
+   {
+    "name": "db",
+    "image": "mariadb:11",
+    "env": {
+     "MARIADB_ROOT_PASSWORD": "root",
+     "MARIADB_DATABASE": "joomla",
+     "MARIADB_USER": "joomla",
+     "MARIADB_PASSWORD": "joomla"
+    },
+    "sleep": 15
+   }
+  ],
+  "env": {
+   "JOOMLA_DB_HOST": "db",
+   "JOOMLA_DB_USER": "joomla",
+   "JOOMLA_DB_PASSWORD": "joomla",
+   "JOOMLA_DB_NAME": "joomla",
+   "JOOMLA_SITE_NAME": "vlab",
+   "JOOMLA_ADMIN_USER": "Vlab Admin",
+   "JOOMLA_ADMIN_USERNAME": "vlabadmin",
+   "JOOMLA_ADMIN_PASSWORD": "Vlab-Passw0rd-12345",
+   "JOOMLA_ADMIN_EMAIL": "admin@example.com"
+  },
+  "wait": 360,
+  "settle": 10,
+  "tags": [
+   "4.4.14-apache",
+   "5.4.10-apache"
+  ],
+  "products": [
+   "Joomla!"
+  ]
+ },
+ {
+  "name": "splunk",
+  "image": "splunk/splunk",
+  "port": 8000,
+  "env": {
+   "SPLUNK_START_ARGS": "--accept-license",
+   "SPLUNK_GENERAL_TERMS": "--accept-sgt-current-at-splunk-com",
+   "SPLUNK_PASSWORD": "Vlab-Passw0rd-1"
+  },
+  "wait": 900,
+  "ready": "Splunk",
+  "settle": 10,
+  "tags": [
+   "9.4.17",
+   "10.6.1"
+  ],
+  "products": [
+   "Splunk"
+  ],
+  "tags2": [
+   "9.4.17"
+  ]
+ },
+ {
+  "name": "forgejo",
+  "image": "codeberg.org/forgejo/forgejo",
+  "port": 3000,
+  "wait": 120,
+  "ready": "Forgejo",
+  "env": {
+   "FORGEJO__security__INSTALL_LOCK": "true",
+   "FORGEJO__database__DB_TYPE": "sqlite3"
+  },
+  "tags": [
+   "9.0.3",
+   "17.0.1"
+  ],
+  "products": [
+   "Forgejo"
+  ]
+ },
+ {
+  "name": "gitea",
+  "image": "gitea/gitea",
+  "port": 3000,
+  "wait": 120,
+  "ready": "Gitea",
+  "env": {
+   "GITEA__security__INSTALL_LOCK": "true",
+   "GITEA__database__DB_TYPE": "sqlite3"
+  },
+  "tags": [
+   "1.22.3",
+   "1.27.3"
+  ],
+  "products": [
+   "Gitea"
+  ],
+  "tags3": [
+   "1.22.3"
+  ]
+ },
+ {
+  "name": "rancher",
+  "image": "rancher/rancher",
+  "port": 443,
+  "tls": true,
+  "privileged": true,
+  "wait": 600,
+  "ready": "Rancher",
+  "settle": 20,
+  "tags": [
+   "v2.14.7",
+   "v2.15.3"
+  ],
+  "products": [
+   "Rancher"
+  ],
+  "tags3": [
+   "v2.15.3"
+  ],
+  "note": "embedded k3s: needs a cgroup v2 host (the lab daemon here is cgroup v1, where it exits)"
+ }
+]

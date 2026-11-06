@@ -1,4 +1,4 @@
-{"name":"builtin","version":"2.3.1","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.3.2","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},

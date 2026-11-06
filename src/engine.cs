@@ -1347,6 +1347,10 @@ namespace WebInv
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;   // requires a detection in one of these categories
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
         [DataMember(Name = "h", EmitDefaultValue = false)] public string H;    // host name template
+        // version-only: the output adds its version to a product another rule detected (same kind and CPE product or name)
+        // and is discarded otherwise; it never creates a detection, never sets name/category/confidence, and never replaces
+        // a version that a detection rule captured
+        [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
     }
 
     [DataContract]
@@ -1355,7 +1359,7 @@ namespace WebInv
         [DataMember(Name = "id", EmitDefaultValue = false)] public string Id;
         [DataMember(Name = "f")] public string F;
         [DataMember(Name = "r")] public string R;
-        [DataMember(Name = "o", EmitDefaultValue = false)] public string O;    // i=ignorecase s=dot-all
+        [DataMember(Name = "o", EmitDefaultValue = false)] public string O;    // i=ignorecase s=dot-all a=absolute anchors b=base64 value
         [DataMember(Name = "and", EmitDefaultValue = false)] public CondDef[] And;
         [DataMember(Name = "ports", EmitDefaultValue = false)] public int[] Ports;
         [DataMember(Name = "src", EmitDefaultValue = false)] public string Src;
@@ -1372,6 +1376,7 @@ namespace WebInv
         [DataMember(Name = "rq", EmitDefaultValue = false)] public string[] Rq;
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
+        [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
         // self-test vector
         [DataMember(Name = "ex", EmitDefaultValue = false)] public string Ex;
         [DataMember(Name = "exv", EmitDefaultValue = false)] public string Exv;
@@ -1392,6 +1397,7 @@ namespace WebInv
     {
         public string Id; public string Field; public Regex Re; public Cond[] And; public int[] Ports; public string Src; public OutDef[] Out;
         public string Ex; public string Exv;
+        public bool B64;   // o contains 'b': the value is base64 text; the regex runs on its UTF-8 decoding (no literal prefilter)
         public string[][] Lits; public int[][] LitIds;   // requirement formula (OR of AND-sets of folded literals) + ids in the field automaton
     }
 
@@ -1738,6 +1744,9 @@ namespace WebInv
         public string[] Excludes;
         public string[] Requires;
         public string[] RequiresCategory;
+        public bool VersionOnly;   // only version-only outputs contributed so far (discarded unless a detection rule joins)
+        public bool VoVersion;     // Version came from a version-only output
+        public bool FixedVersion;  // Version is written into the rule (e.g. "1.5.0+" for a favicon), not captured
         public override string ToString() { return Name + (string.IsNullOrEmpty(Version) ? "" : " " + Version); }
     }
 
@@ -1819,7 +1828,9 @@ namespace WebInv
                 r.Ex = d.Ex; r.Exv = d.Exv;
                 try { r.Re = new Regex(d.R, Opts(d.O), TimeSpan.FromMilliseconds(RegexTimeoutMs)); }
                 catch (Exception ex) { errors.Add(r.Id + ": regex compile failed: " + ex.Message); continue; }
-                try { r.Lits = Lit.Requirement(d.R); } catch { r.Lits = null; }
+                r.B64 = !string.IsNullOrEmpty(d.O) && d.O.IndexOf('b') >= 0;
+                // literals of a base64 rule are in the decoded text, not in the value the prefilter scans
+                if (r.B64) r.Lits = null; else { try { r.Lits = Lit.Requirement(d.R); } catch { r.Lits = null; } }
                 if (d.And != null)
                 {
                     List<Cond> cs = new List<Cond>(); bool bad = false;
@@ -1840,7 +1851,7 @@ namespace WebInv
                 else
                 {
                     OutDef o = new OutDef();
-                    o.T = d.T; o.N = d.N; o.C = d.C; o.V = d.V; o.P = d.P; o.K = d.K; o.Im = d.Im; o.Xs = d.Xs; o.Rq = d.Rq; o.Rc = d.Rc; o.Flag = d.Flag;
+                    o.T = d.T; o.N = d.N; o.C = d.C; o.V = d.V; o.P = d.P; o.K = d.K; o.Im = d.Im; o.Xs = d.Xs; o.Rq = d.Rq; o.Rc = d.Rc; o.Flag = d.Flag; o.Vo = d.Vo;
                     r.Out = new OutDef[] { o };
                 }
                 bool any = false;
@@ -1854,7 +1865,7 @@ namespace WebInv
                 Dictionary<string, OutDef> ni = new Dictionary<string, OutDef>(nameInfo, StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in add)
                     foreach (OutDef o in r.Out)
-                        if (!string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
+                        if (!o.Vo && !string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
                 nameInfo = ni;
                 Dictionary<string, List<Rule>> nb = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in nr)
@@ -1921,6 +1932,17 @@ namespace WebInv
         }
 
         static readonly Regex Tpl = new Regex(@"\{(\w+)\}", RegexOptions.CultureInvariant);
+
+        // UTF-8 text of a base64 value (standard or URL alphabet, padding optional); null when it is not base64
+        public static string FromBase64(string v)
+        {
+            if (string.IsNullOrEmpty(v)) return null;
+            string t = v.Trim().Replace('-', '+').Replace('_', '/');
+            if (t.Length == 0 || t.Length > 65536) return null;
+            if (t.Length % 4 == 2) t += "=="; else if (t.Length % 4 == 3) t += "=";
+            try { return new UTF8Encoding(false, true).GetString(Convert.FromBase64String(t)); }
+            catch { return null; }
+        }
 
         public static string Expand(string tpl, Match m)
         {
@@ -2083,6 +2105,7 @@ namespace WebInv
                             }
                             if (!ok) continue;
                         }
+                        if (r.B64) { v = FromBase64(v); if (v == null) continue; }
                         Match m = SafeMatch(r.Re, v);
                         if (m == null || !m.Success) continue;
                         if (!CondsOk(r, obs)) break;
@@ -2094,6 +2117,7 @@ namespace WebInv
                             d.Flag = o.Flag ?? "";
                             if (string.IsNullOrEmpty(d.Name) && d.Kind != "flag") continue;
                             d.Version = Expand(o.V, m);
+                            d.FixedVersion = d.Version.Length > 0 && o.V.IndexOf('{') < 0;
                             d.Category = o.C ?? "";
                             d.Confidence = o.K > 0 ? Math.Min(100, o.K) : 85;
                             d.Cpe = NormalizeCpe(Expand(o.P, m), d.Version);
@@ -2103,6 +2127,12 @@ namespace WebInv
                             d.Evidence = kv.Key + "=" + ev;
                             d.HostName = Expand(o.H, m);
                             d.Implies = o.Im; d.Excludes = o.Xs; d.Requires = o.Rq; d.RequiresCategory = o.Rc;
+                            if (o.Vo)
+                            {
+                                if (string.IsNullOrEmpty(d.Version)) continue;
+                                d.VersionOnly = true; d.VoVersion = true; d.Confidence = 0;
+                                d.Implies = null; d.Excludes = null; d.Requires = null; d.RequiresCategory = null; d.Flag = "";
+                            }
                             raw.Add(d);
                         }
                         break;
@@ -2164,19 +2194,24 @@ namespace WebInv
                             else if (!string.IsNullOrEmpty(info.P)) x.Cpe = NormalizeCpe(Tpl.Replace(info.P, "*"), "");
                         }
                         string k2 = MergeKey(x);
-                        if (!m.ContainsKey(k2) && !NameExists(m, im)) { MergeInto(m, order, x); added = true; }
+                        Detection vo = VersionOnlyFor(m, k2, im);
+                        if (vo != null) { Merge(vo, x); added = true; }
+                        else if (!m.ContainsKey(k2) && !NameExists(m, im)) { MergeInto(m, order, x); added = true; }
                     }
                 }
                 if (!added) break;
             }
+            // version-only outputs that no detection rule joined are discarded
+            order.RemoveAll(delegate(string k) { return m[k].VersionOnly; });
             // excludes / requires
             HashSet<string> names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values) names.Add(d.Name ?? "");
+            foreach (string k in order) names.Add(m[k].Name ?? "");
             HashSet<string> cats = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values) if (!string.IsNullOrEmpty(d.Category) && d.RequiresCategory == null) cats.Add(d.Category);
+            foreach (string k in order) { Detection d = m[k]; if (!string.IsNullOrEmpty(d.Category) && d.RequiresCategory == null) cats.Add(d.Category); }
             HashSet<string> drop = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (Detection d in m.Values)
+            foreach (string k in order)
             {
+                Detection d = m[k];
                 if (d.Excludes != null) foreach (string x in d.Excludes) if (!string.IsNullOrEmpty(x)) drop.Add(x);
                 if (d.Requires != null) foreach (string q in d.Requires) if (!string.IsNullOrEmpty(q) && !names.Contains(q)) drop.Add(d.Name);
                 if (d.RequiresCategory != null && d.RequiresCategory.Length > 0)
@@ -2198,8 +2233,18 @@ namespace WebInv
 
         static bool NameExists(Dictionary<string, Detection> m, string name)
         {
-            foreach (Detection d in m.Values) if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (Detection d in m.Values) if (!d.VersionOnly && string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
+        }
+
+        // a still version-only detection that an implied product with this key or name would join
+        static Detection VersionOnlyFor(Dictionary<string, Detection> m, string key, string name)
+        {
+            Detection d;
+            if (m.TryGetValue(key, out d)) return d.VersionOnly ? d : null;
+            if (NameExists(m, name)) return null;
+            foreach (Detection x in m.Values) if (x.VersionOnly && string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) return x;
+            return null;
         }
 
         static void MergeInto(Dictionary<string, Detection> m, List<string> order, Detection d)
@@ -2212,6 +2257,19 @@ namespace WebInv
 
         static void Merge(Detection e, Detection d)
         {
+            if (e.VersionOnly && !d.VersionOnly)
+            {
+                // a detection rule joins what so far only version-only outputs contributed: it takes over the identity,
+                // and the version-only contribution is then merged into it like any other
+                Detection v = new Detection();
+                v.Kind = e.Kind; v.Name = e.Name; v.Version = e.Version; v.Cpe = e.Cpe; v.Source = e.Source; v.Field = e.Field;
+                v.Evidence = e.Evidence; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
+                e.Kind = d.Kind; e.Name = d.Name; e.Category = d.Category; e.Confidence = d.Confidence; e.Cpe = d.Cpe; e.Flag = d.Flag;
+                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.HostName = d.HostName;
+                e.Implies = d.Implies; e.Excludes = d.Excludes; e.Requires = d.Requires; e.RequiresCategory = d.RequiresCategory;
+                e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion; e.VersionOnly = false;
+                d = v;
+            }
             if (d.Confidence > e.Confidence)
             {
                 e.Confidence = d.Confidence;
@@ -2219,11 +2277,15 @@ namespace WebInv
                 if (!string.IsNullOrEmpty(d.Cpe)) e.Cpe = d.Cpe;
                 if (!string.IsNullOrEmpty(d.Category)) e.Category = d.Category;
             }
-            if (!string.IsNullOrEmpty(d.Version) && (string.IsNullOrEmpty(e.Version) || d.Version.Length > e.Version.Length))
+            // the longer version wins; when a version-only rule takes part, a version captured by a detection rule beats it,
+            // and it beats one written into a rule (a favicon's "1.5.0+")
+            if (!string.IsNullOrEmpty(d.Version) && (string.IsNullOrEmpty(e.Version)
+                || ((e.VoVersion || d.VoVersion) && VersionRank(e) != VersionRank(d) ? VersionRank(d) > VersionRank(e) : d.Version.Length > e.Version.Length)))
             {
-                e.Version = d.Version;
+                e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion;
                 if (!string.IsNullOrEmpty(d.Cpe)) e.Cpe = d.Cpe;
             }
+            e.VersionOnly = e.VersionOnly && d.VersionOnly;
             if (string.IsNullOrEmpty(e.Cpe)) e.Cpe = d.Cpe;
             if (string.IsNullOrEmpty(e.Category)) e.Category = d.Category;
             if (!string.IsNullOrEmpty(d.Flag))
@@ -2236,10 +2298,12 @@ namespace WebInv
             if (!string.IsNullOrEmpty(d.Evidence) && e.Evidence.Length < 400 && e.Evidence.IndexOf(d.Evidence, StringComparison.Ordinal) < 0) e.Evidence += " | " + d.Evidence;
             e.Implies = Union(e.Implies, d.Implies); e.Excludes = Union(e.Excludes, d.Excludes); e.Requires = Union(e.Requires, d.Requires);
             // the gate only survives a merge if every contributing rule was gated
-            if (e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
+            if (!d.VersionOnly && e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
             // a version-bearing CPE is never overwritten by a version-less one
             if (!string.IsNullOrEmpty(e.Cpe) && !string.IsNullOrEmpty(e.Version)) e.Cpe = NormalizeCpe(e.Cpe, e.Version);
         }
+
+        static int VersionRank(Detection x) { return x.VoVersion ? 2 : (x.FixedVersion ? 1 : 3); }
 
         static string[] Union(string[] a, string[] b)
         {
@@ -2256,7 +2320,7 @@ namespace WebInv
             {
                 if (r.Ex == null) continue;
                 tested++;
-                Match mm = SafeMatch(r.Re, r.Ex);
+                Match mm = SafeMatch(r.Re, r.B64 ? (FromBase64(r.Ex) ?? "") : r.Ex);
                 if (mm == null || !mm.Success) { fails.Add(r.Id + ": example did not match: " + r.Ex); continue; }
                 // the prefilter must never hide a match: the required literal has to occur in every matching example
                 if (r.Lits != null && !Lit.Satisfies(r.Lits, Lit.Fold(r.Ex))) fails.Add(r.Id + ": prefilter requirement not met by its matching example");
@@ -2954,7 +3018,7 @@ namespace WebInv
     // ------------------------------------------------------------------ Misc helpers
     public static class Util
     {
-        public const string EngineVersion = "2.3.1";
+        public const string EngineVersion = "2.3.2";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)

@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.3.1
+# Invoke-WebInventory.ps1 v2.3.2
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -15,17 +15,17 @@ with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM messa
 
 | File | Purpose |
 |---|---|
-| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 512 curated rules and the reviewed CPE supplement) |
+| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 512 curated rules, 106 version-only rules and the reviewed CPE supplement) |
 | `WebInventory.rules.recog.json` | 3,098 Rapid7 Recog rules converted to .NET regex (BSD-2), including SNMP sysDescr/sysObjectID, SMB NativeOS/NativeLM and JARM fingerprints. Auto-loaded when it sits next to the script |
 | `WebInventory.rules.wappalyzer.json` | 7,824 webappanalyzer (Wappalyzer fork) rules covering 5,926 technologies: JS libraries, CMS, frameworks, analytics, CDNs, e-commerce (GPL-3.0 data). Auto-loaded |
 | `WebInventory.example.psd1` | Example settings file for scheduled runs (`-ConfigFile`) |
 | `THIRD-PARTY-NOTICES.txt` | Licences, upstream commits and how to regenerate each pack |
 | `LICENSE-GPL-3.0.txt` | Full GPL-3.0 text, which must travel with the Wappalyzer pack |
-| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3 and v2.3.1 A/B runs showing the scan path unchanged |
+| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1 and v2.3.2 A/B runs showing the scan path unchanged |
 | `Test-WebInventoryStore.ps1` | One-off validation of the inventory store on the scanner host (ESENT vs portable engine, hard kills, verify, rebuild) |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-All three rule sets load together: 11,434 rules, about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
+All three rule sets load together: 11,540 rules (with the 106 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
 
 ### The Wappalyzer pack
 - **Generated from** enthec/webappanalyzer commit `d91f7e510e93` (2026-10-19), passive HTTP patterns only:
@@ -44,7 +44,7 @@ All three rule sets load together: 11,434 rules, about 0.6 s at startup. A liter
 ## Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                   # 128 offline checks on Windows (121 without ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                   # 138 offline checks on Windows (131 without ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                    # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 10.0.0.5
 .\Invoke-WebInventory.ps1 10.0.0.0/24 web01:8443 '10.0.1.1-50' -Port web -Exclude 10.0.0.1 -Scope 10.0.0.0/16
@@ -65,6 +65,53 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.3.2 adds: version capture
+
+v2.3.1 gave the products it can identify their NVD names; v2.3.2 reads their versions. Many rules recognise a
+product by a title, a cookie or a favicon and capture no version, while the same responses show it elsewhere: in a
+footer, a meta tag, an asset URL, a JSON bootstrap block or a header. **Version-only rules** read it from there.
+
+- **What a version-only rule may do.** It is a rule output marked `"vo": true`. It only adds its version to a
+  product another rule detected (same kind and CPE product, or the same name); otherwise it is discarded. It never
+  creates a detection, never changes the detected product's name, category or confidence, never lifts a
+  `requiresCategory` gate, and never replaces a version a detection rule captured. It does replace a version a rule
+  only writes in (Recog maps one Roundcube favicon to `1.5.0+`; the login page says `1.6.20`). No new request is
+  sent: the rules read `GET /` and its same-host redirects, the 404 probe, `robots.txt`, `security.txt`, the favicon
+  and, with `-IdentifyPaths`, its fixed paths.
+- **106 rules for 92 products**, embedded in the built-in pack (`v:` ids, `src/version-rules.json`),
+  each with a self-tested example. Where they come from:
+  - **the product's own container (14 products)**: the image was run, the responses a scan receives were recorded, and
+    the rule was replayed through the scanner's matcher against two releases: Solr, Consul, Nextcloud, Roundcube,
+    Apache Spark, JupyterHub, XWiki (on its first-run page), Forgejo, Checkmk, n8n, Mattermost (`X-Version-Id`),
+    Metabase, pgAdmin, and TeamCity's maintenance page (Gitea, whose rules only matched an older footer, gets the same
+    treatment);
+  - **the product's page templates or code (15)**: Bugzilla, Mastodon, Kibana, Proxmox VE, Openfire, Bludit,
+    BookStack, Weblate, JSPWiki, Piwigo, the Kubernetes API server, and the default welcome pages of Laravel,
+    Symfony, CakePHP and Ruby on Rails;
+  - **published samples of the same response (37)**: WhatWeb passive plugins, nuclei-templates detection templates,
+    Recog examples and webappanalyzer patterns (TeamCity's login page, Splunk before 9.4, PRTG, Lansweeper, Rundeck,
+    Wazuh, Superset, Zope, Wing FTP, Exchange 2007 banners, Invision Power Board, uPortal, and older CMS footers and
+    generator tags);
+  - **WordPress plugins (6)**: WordPress was run with the plugins at two releases each; a rule reads only the
+    asset files that carry the plugin's own `?ver=` (WordPress appends its own version, or a bundled library's, to
+    others);
+  - **JavaScript libraries (20)**: the release in a public CDN path (cdnjs, jsDelivr, unpkg or the project's own
+    CDN), or in the library's own file name (`lodash-4.17.21.min.js`); never a query string.
+- **What was rejected.** A number that is not the product's release (a build hash, a cache-buster, an API or
+  component version, a copyright year, a build timestamp), a major or major.minor where releases have more parts,
+  pre-releases, and anything only at another URL (the tool sends no extra request for a version). The ManageEngine
+  family, for instance, shows build numbers that NVD would need a build-to-release table for.
+- **Coverage.** Of the 1,327 products with a CPE, 690 now have a rule that gives them a version (598 in v2.3.1; 92
+  gained one). Of the 637 without, 31 share their CPE with a product whose rules read one (often on another service,
+  e.g. an SNMP sysDescr); the others, by reason: no-known-location 390, hidden 87, not-version 42, hardware 30,
+  other-url 27, platform 21, coarse 7, unverified 2. Every product and its reason is listed in
+  `docs/web-inventory-v2.3.2-coverage.md` (repository and development suite); `tools/version/coverage.py` recomputes
+  it.
+- **Effect on results:** `Products`, `CPEs` and the JSONL detections gain versions; no product appears or
+  disappears. On the lab and the 200-service farm, every other column is identical to v2.3.1 (see
+  `PERFORMANCE.md`). The first store run after the upgrade records `changed` events for the services whose
+  `Products`/`CPEs` gained a version; `-StoreQuery Vulnerabilities` then matches them by version.
 
 ## What v2.3.1 adds: CPE coverage
 
@@ -484,7 +531,7 @@ CPEs built from banners are hints: distros backport fixes without changing versi
 - `favicon.mmh3`, `favicon.md5`, `cert.subject`, `cert.issuer`, `cert.san`, `alpn`
 - `banner`, `banner.ssh|ftp|smtp|pop3|imap|mysql`, `robots`, `path:<path>.<field>`
 
-Other keys: `o` (`i` ignore case, `s` dot-all), `and` (list of `{f,r,not}`), `ports`, `out` (several outputs with `t`: service/os/hw), `im`/`xs`/`rq`, `flag`. Run `-TestRules` after editing; every rule with `ex` is checked.
+Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the value is base64 text and the pattern is matched against its UTF-8 decoding, e.g. n8n's `n8n:config:sentry` meta tag), `and` (list of `{f,r,not}`), `ports`, `out` (several outputs with `t`: service/os/hw), `im`/`xs`/`rq`, `flag`, `vo` (version-only: the output only adds its version to a product another rule detected, see "What v2.3.2 adds"). Run `-TestRules` after editing; every rule with `ex` is checked.
 
 ## Operational notes
 - **Signing and placement.** Sign the script (`Set-AuthenticodeSignature`), run it under AllSigned/RemoteSigned, and keep it plus the rule packs in a write-protected folder. The run log records the signature status and pack hashes, so tampering shows up.
@@ -553,6 +600,37 @@ Other keys: `o` (`i` ignore case, `s` dot-all), `and` (list of `{f,r,not}`), `po
     host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
     canary reports it).
 
+- **v2.3.2 additions** (same Linux workspace):
+  - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
+    warnings; PSScriptAnalyzer findings unchanged. Self-test 131/131 (138 with ESENT on Windows); the 25 lab
+    regression scenarios pass; all 3,214 rule examples pass (`-TestRules`).
+  - Product containers (Solr 9.4.1/10.1.0, Consul 1.22.7/2.1.0, Nextcloud 32.0.15/35.0.2, Roundcube 1.6.20/1.7.5,
+    Spark 3.5.9/4.1.4, JupyterHub 5.5.4/6.1.1, Forgejo 9.0.3/17.0.1, Gitea 1.22.3/1.27.3, Checkmk 2.3.0p38/2.4.0p39,
+    n8n 1.123.92/2.47.2, Mattermost 10.11.26/12.1.0, Metabase 0.58.39/0.65.3, pgAdmin 9.8/9.19, TeamCity
+    2025.11.8/2026.2.2 (maintenance page), and XWiki 16.10.19/18.4.8 (version in the webjar paths of the first-run
+    page, where no XWiki rule fires)): the responses a default scan receives were recorded and replayed through the
+    scanner's matcher; each detected product carried exactly the image's version. Products whose recorded responses
+    carry no version are listed as such (Vault 1.20.4/2.2.1, Traefik 2.11.61/3.7.17, RabbitMQ 4.2.9/4.3.7, Redmine
+    6.0.12/7.0.3, Keycloak 26.6/26.8.2, Joomla 4.4.14/5.4.10, ownCloud 10.16.7, Couchbase 7.6.12, Nomad 1.10.5,
+    Vaultwarden 1.37.5, and Splunk 9.4.17, whose login page no longer embeds the version the published-sample rule
+    reads).
+  - WordPress 7.1 with 33 plugins at two releases each: only the asset files whose `?ver=` was the plugin's own
+    release in both are read (PixelYourSite's `jquery.bind-first` carried the WordPress version in one release,
+    CoBlocks and WooCommerce ship libraries with their own versions, Gutenberg and Essential Blocks hashes, Genesis
+    Blocks a timestamp).
+  - Same detections: replaying 17 recordings (one per product, plus the two WordPress rounds) with v2.3.1 and
+    v2.3.2 gives the same 104 detections; only versions and the version field of CPEs differ.
+  - Vulnerabilities for those recordings (NVD 447,034 records, KEV, EPSS): 149 rows (52 KEV) before, 197 (35 KEV)
+    after. Gone: 21 Roundcube range rows (6 KEV) that came from Recog's favicon guess `1.5.0` for a 1.6.20 server,
+    and 11 KEV listings of version-unknown services whose real version is outside the CVE's range (TeamCity 4, Solr
+    3, Metabase 2, Spark CVE-2022-33891, n8n CVE-2025-68613). New, because the version now falls inside a range or
+    is listed by NVD: Gitea 1.22.3 40 (its KEV listing CVE-2026-60004 is now a range match), TeamCity 2025.11.8 13,
+    Solr 9.4.1 7, Metabase 0.58.39 5, CoBlocks and PixelYourSite 5, Checkmk 2.4.0p39 4 (NVD enumerates
+    `2.4.0:p39`), Mattermost 10.11.26 3; and 3 entries NVD gives for all versions (Mattermost 2, Spark 1), which the
+    join lists only once a version is known.
+  - A/B against v2.3.1, two runs each (`PERFORMANCE.md`): farm 10.82/10.76 s vs 11.08/11.00 s, lab 38.48/38.58 s vs
+    38.65/38.50 s, startup 2.81/3.17 s vs 3.00/2.83 s. Lab output identical field by field; on the farm only the 50
+    rows that load `lodash-4.17.<n>.min.js` change, gaining `Lodash 4.17.<n>` and its CPE version.
 - **v2.3.1 additions** (same Linux workspace):
   - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
     warnings. Self-test 125/125 (132 with ESENT on Windows); the 25 lab regression scenarios pass.
@@ -591,6 +669,24 @@ The `Advisories` column holds the reasoning for each finding, including "fixed" 
 - The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
 
 Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.3.2
+- **Version-only rules:** 106 rules (`v:` ids) in the built-in pack read the version of 92 products whose
+  detection rules capture none. Engine: rule outputs with `"vo": true` only join a detected product (kind + CPE
+  product, or kind + name), never create, rename, re-rate or ungate one, and rank below a captured detection version
+  but above a version written into a rule. `build.py` appends `src/version-rules.json` (generated by
+  `tools/version/gen_rules.py`) to the embedded pack.
+- **Rule option `b`:** `"o": "b"` matches a rule against the base64 decoding of the value (UTF-8; a value that is
+  not base64 is skipped). n8n publishes its release only inside the base64 JSON of its `n8n:config:sentry` meta tag.
+- **Tooling:** `tools/version/` (development suite): the reviewed rules and the products reviewed without one
+  (`rules.py`), coverage, a container lab that records exactly what a scan receives from a product image, a
+  WordPress plugin lab, and a replay that feeds recordings through the scanner's own matcher.
+- **Self-test:** 131 checks (138 on Windows): version-only outputs never create a detection, add their version in
+  either evaluation order without changing confidence or category, never replace a captured version, never lift a
+  `requiresCategory` gate, and replace a version written into a rule; a base64 rule matches the decoded value only;
+  built-in and `v:` rule examples must all pass.
+- **Results:** `Products`, `CPEs` and JSONL detections gain versions; nothing else in a scan changes (A/B in
+  `PERFORMANCE.md`). The first store run after the upgrade records `changed` events for those services.
 
 ## Changes in 2.3.1
 - **CPE coverage:** 715 more rule outputs carry an NVD CPE (built-in rules edited; Recog and Wappalyzer packs
@@ -694,6 +790,10 @@ Treat these flags as a prioritised work list for the owning teams, not as confir
 2. **RDP certificates from TLS 1.0-only servers on hardened scanner hosts.** The RDP probe uses Schannel; a raw
    ClientHello after the X.224 exchange (as the HTTPS probe already does) would read the certificate regardless of the
    host's TLS policy.
-3. **Version capture.** v2.3.1 gave the remaining NVD-listed products a CPE; 729 of the 1,327 products with a CPE are
-   still detected without a version, so they only get KEV-listed rows. Adding version capture to those rules (from the
-   page, asset paths or headers that expose it) is the next way to widen vulnerability matching.
+3. **Version capture, continued.** v2.3.2 reads the version of 92 more products; 637 of the 1,327
+   products with a CPE still get none, mostly because nothing a scan receives shows it (the reasons are listed per
+   product in `docs/web-inventory-v2.3.2-coverage.md`). Two have a candidate location in a public fingerprint
+   database that could not be checked here (Sophos Firewall: no image or sample of the value; Rancher: its image needs
+   a cgroup v2 host); `tools/version/coverage.py` lists them as `unverified`. Products whose version is
+   only at another URL (an API, a `version.txt`) would need product-specific follow-up requests, which this tool does
+   not send by design.

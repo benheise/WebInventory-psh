@@ -1,8 +1,8 @@
-# Invoke-WebInventory v2.3.1 — Product Sheet
+# Invoke-WebInventory v2.3.2 — Product Sheet
 
 **Agentless web and service inventory for Windows, with history, evidence and offline vulnerability correlation, in a single PowerShell file.**
 
-Release 2.3.1 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
+Release 2.3.2 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
 
 ---
 
@@ -11,9 +11,9 @@ Release 2.3.1 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 
 | | |
 |---|---|
 | **What it does** | Finds web services on any port, identifies what they are (product, version, CPE, OS, hardware), records TLS and certificate posture and hygiene flags, and (opt-in) reads SMB, RDP and SNMP identity. The result is a CMDB-grade inventory. |
-| **Footprint** | One script, `Invoke-WebInventory.ps1` (891 KB), plus optional rule packs placed next to it. There is no installer, no agent, no external binary and no internet dependency. |
+| **Footprint** | One script, `Invoke-WebInventory.ps1` (914 KB), plus optional rule packs placed next to it. There is no installer, no agent, no external binary and no internet dependency. |
 | **Platforms** | Windows PowerShell 5.1 with .NET Framework 4.7.2+ (4.8 for TLS 1.3 through Schannel). Also PowerShell 7 on Windows, Linux and macOS; the store uses its portable engine off Windows. |
-| **Knowledge base** | 11,434 fingerprint rules: 512 curated built-in, 3,098 Rapid7 Recog, 7,824 Wappalyzer (webappanalyzer). 1,327 products carry a reviewed NVD CPE (598 of them with a version). |
+| **Knowledge base** | 11,540 fingerprint rules: 512 curated built-in, 106 version-only, 3,098 Rapid7 Recog, 7,824 Wappalyzer (webappanalyzer). 1,327 products carry a reviewed NVD CPE; 690 of them get a version (598 in v2.3.1). |
 | **Per-run output** | 78-column CSV, JSONL with per-detection evidence, offline HTML report, field-level delta, `run.json`, SHA-256 manifest, run and error logs. |
 | **History** | Inventory store: first/last seen, versions and a change log per service. The database is Windows' built-in ESENT, rebuilt on demand from an append-only, hash-chained archive. |
 | **Vulnerability view** | Inventory CPEs joined offline with NVD CVE JSON 2.0 feeds, CISA KEV and FIRST EPSS, under every NVD name of each product (183 alias groups). |
@@ -114,6 +114,8 @@ store modes:     -StoreQuery (incl. Vulnerabilities) | -ImportRun [-Backfill] | 
 | Wappalyzer (webappanalyzer) | 7,824 | 5,926 technologies: JS libraries, CMS, frameworks, analytics, CDNs, e-commerce. 946 rules capture versions, 1,294 carry CPEs (867 upstream, 427 added by the CPE supplement). Passive HTTP patterns only. GPL-3.0 data. |
 
 Detections carry kind (service / OS / hardware / flag), name, version, category, confidence, CPE 2.3, source rule and evidence. They feed the `Products`, `Technologies`, `Categories`, `CPEs`, `OsHint` and `Hardware` columns.
+
+**Version capture (v2.3.2).** 106 version-only rules read the version of 92 products whose detection rules capture none, from the same responses: a footer, a meta tag (base64-decoded for n8n, rule option `b`), an asset URL, a JSON bootstrap block, a header, a CDN path. A version-only rule only adds a version to a product another rule detected; it never creates a detection. Each was checked against the product itself (containers of two releases, WordPress with the plugin at two releases), its page templates, or published samples of the same response. Products with a CPE and a version: 598 → 690.
 
 **CPE coverage (v2.3.1).** 1,327 of the 7,743 product names across the three sources carry an NVD CPE, 598 of them from rules that also capture a version (v2.3.0: 906 and 421). The 715 added rule outputs (149 built-in, 139 Recog, 427 Wappalyzer) come from one reviewed table, `cpe-supplement`; every name in it exists in the NVD CPE Dictionary. Left without a CPE on purpose: plugins whose only candidate is their platform, third-party services a page embeds, generic names, general-purpose operating systems, and rules whose captured "version" is not the product's version (or is a major number or a guess).
 
@@ -236,9 +238,10 @@ Each entry lists the switches, the code path (PowerShell function → C# class),
   - **Regex.** Every rule regex has a 200 ms timeout (ReDoS guard), and timeouts are counted in the summary.
   - **Rule logic.** AND/NOT conditions, port scoping, version capture, CPE 2.3 templates, `implies` / `excludes` / `requires` / `requiresCategory`.
   - **Merging.** `Matcher.Aggregate` merges detections across sources in three passes: by key, by kind and name (different CPE spellings), and by CPE product plus version (different vendor spellings).
+  - **Version-only outputs (v2.3.2).** An output with `"vo": true` is created with confidence 0 and no gates, joins a detection through the merge passes (kind + CPE product, then kind + name; implied products join it too), and is dropped if none joins. When a detection rule joins, its identity is kept and only the version is taken: a captured detection version beats a version-only one, which beats a version written into a rule (a favicon's `1.5.0+`).
   - **CPE supplement.** `Matcher.ApplyCpeSupplement` gives an imported rule output the reviewed CPE for its product when it has none (never for a rule that writes a fixed version), and replaces a known-wrong upstream CPE only while the rule still carries exactly that CPE. The built-in rules carry their CPEs directly.
   - **Output.** Detections below `-MinConfidence` (default 50) are dropped. Categories in `$MgmtCategories` raise `MgmtInterface`.
-- **Rule packs:** `Initialize-Rules` loads the embedded pack, every `WebInventory.rules.*.json` next to the script, and any `-RulesFile`. It logs each pack's version, load count and SHA-256. `-NoCompanionRules` skips the packs next to the script. All 11,434 rules load in about 0.6 s.
+- **Rule packs:** `Initialize-Rules` loads the embedded pack, every `WebInventory.rules.*.json` next to the script, and any `-RulesFile`. It logs each pack's version, load count and SHA-256. `-NoCompanionRules` skips the packs next to the script. All 11,540 rules load in about 0.6 s.
 
 #### A13. Passive version advisories
 - **Wiring:** `$Advisories` is a data table: product, CVEs, version regex, fixed releases, oldest fixed branch and a high-risk configuration pattern. `Complete-Row` reads the versions the server itself advertises in Server and X-Powered-By and calls `WebInv.Advisory.Status`. A product detected without a version yields `version-hidden`.
@@ -483,7 +486,7 @@ Exit codes: `0` clean · `1` fatal / refused to start · `2` completed with logg
 - **Measured:** 447,034 NVD records (2002–2026 plus the modified feed, 253 MB compressed) in about 50 s on 2 vCPU (lab store: 48.7 s in v2.3.0, 50.0 s in v2.3.1 with aliases); KEV 1,766 entries; EPSS 398,142 rows. On the lab store, v2.3.1 lists 936 rows (107 KEV) where v2.3.0 listed 1,347 (518 KEV): 453 product-only KEV rows from `(Ubuntu)` / `(Debian)` `Server` tokens are held back (counted) and 42 FortiOS KEV rows are new.
 - **Limits:**
   - Distribution packages with backported fixes report the upstream version, so they can still match.
-  - Services fingerprinted without a CPE and version cannot match. 729 of the 1,327 products with a CPE come from rules that do not capture a version, so they match only `all-versions` entries and KEV-listed CVEs.
+  - Services fingerprinted without a CPE and version cannot match. 637 of the 1,327 products with a CPE still get no version; most do not show one in what a scan receives (by reason: `docs/web-inventory-v2.3.2-coverage.md`).
 
 ### F. Rule management
 
@@ -528,7 +531,7 @@ Every HTTP request carries the User-Agent `... WebInventory/2.0 (authorized asse
 
 - **v2.3 vs v2.2, new switches off:** identical results in 12 of 12 comparisons. Startup is 0.1–0.2 s slower (larger script and Recog pack) and the 200-service farm 0.3–0.6 s slower, within v2.2's own run-to-run spread.
 - **Store ingest (portable engine):** 50,000 services in 18 s on the first run and 17 s on the next; 200,000 services in 70 s and 56 s.
-- **Rule matching:** 11,434 rules load in about 0.6 s; a 120 KB page matches in about 8 ms (110 ms in v2.0.2).
+- **Rule matching:** 11,540 rules load in about 0.6 s; a 120 KB page matches in about 8 ms (110 ms in v2.0.2).
 
 These figures were measured under PowerShell 7.4 on Linux. Before quoting them for Windows PowerShell 5.1, re-run `tests/perf` or a lab-VLAN comparison on the scanner host.
 
@@ -538,7 +541,7 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 |---|---|---|
 | C# 5 compile of all three blocks against .NET Framework 4.7.2 reference assemblies | 0 errors, 0 warnings | Linux workspace |
 | PSScriptAnalyzer, Windows PowerShell 5.1 compatibility profiles | Clean, apart from deliberate empty `catch` blocks and the explicitly loaded `System.Security.Cryptography.Pkcs` types | Linux workspace |
-| `-SelfTest` | 125/125 (132 expected on Windows with ESENT) | PowerShell 7.4 |
+| `-SelfTest` | 131/131 (138 expected on Windows with ESENT) | PowerShell 7.4 |
 | Lab regression scenarios | 25/25 | Local lab |
 | Store scenarios | v2.2: 40/40 · v2.3: 34/34 (v2.3.1 adds alias, platform-check and OS-suppression cases) · Enriched gating: 4/4 | Portable engine |
 | Interleaved A/B against v2.2.0 | Identical in 12/12 | Lab and 200-service farm |
@@ -555,9 +558,12 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 | v2.3.1 CPE supplement | Every fill, replace, alias and platform name exists in the NVD CPE Dictionary; regenerated Recog and Wappalyzer packs identical to v2.3.0 apart from CPEs | NVD CPE Dictionary 2026-11-04 |
 | v2.3.1 A/B lab scan against v2.3.0 | Identical apart from the `CPEs` column (FortiOS on 2 rows) and evidence order; scan times within run-to-run spread | Lab and 200-service farm |
 | v2.3.1 vulnerabilities on real feeds | Newly matched: Serv-U 15.2.3 → CVE-2021-35211, TeamCity 2023.05.3 → CVE-2023-42793, Ivanti Connect Secure 9.1R8 → CVE-2021-22893 (as `pulsesecure`), Contact Form 7 5.3.1 → CVE-2020-35489; concrete5 8.5.4 0 → 133 rows and nginx 1.16.1 0 → 7 through aliases | NVD 2002–2026, KEV, EPSS |
+| v2.3.2 version-only rules on real products | Recorded responses of the product's own containers replayed through the scanner's matcher: Solr 9.4.1/10.1.0, Consul 1.22.7/2.1.0, Nextcloud 32.0.15/35.0.2, Roundcube 1.6.20/1.7.5, Spark 3.5.9/4.1.4, JupyterHub 5.5.4/6.1.1, Forgejo 9.0.3/17.0.1, Gitea 1.22.3/1.27.3, Checkmk 2.3.0p38/2.4.0p39, n8n 1.123.92/2.47.2, Mattermost 10.11.26/12.1.0, Metabase 0.58.39/0.65.3, pgAdmin 9.8/9.19, TeamCity 2025.11.8/2026.2.2 (maintenance page), and XWiki 16.10.19/18.4.8 (version in the webjar paths of the first-run page, where no XWiki rule fires); every detected product carried exactly the image's version. Products whose responses carry none are recorded with that reason (Vault 1.20.4/2.2.1, Traefik 2.11.61/3.7.17, RabbitMQ 4.2.9/4.3.7, Redmine 6.0.12/7.0.3, Keycloak 26.6/26.8.2, Joomla 4.4.14/5.4.10, ownCloud 10.16.7, Couchbase 7.6.12, Nomad 1.10.5, Vaultwarden 1.37.5, and Splunk 9.4.17, whose login page no longer embeds the version the published-sample rule reads). WordPress with 33 plugins at two releases each | Containers (Docker) |
+| v2.3.2 A/B against v2.3.1 | Wall time within run-to-run noise (farm 10.82/10.76 s vs 11.08/11.00 s; lab 38.48/38.58 s vs 38.65/38.50 s); lab output identical field by field; on the farm only the 50 rows that load a `lodash-4.17.<n>.min.js` change, gaining `Lodash 4.17.<n>` and its CPE version | Lab and 200-service farm |
+| v2.3.2 vulnerabilities | 17 product recordings: 149 rows (52 KEV) before, 197 (35 KEV) after. Gone: 21 Roundcube range rows (6 KEV) from a favicon's `1.5.0` for a 1.6.20 server, and 11 KEV listings whose real version is outside the range (TeamCity 4, Solr 3, Metabase 2, Spark, n8n). New: range or exact-version matches for Gitea 1.22.3 (40), TeamCity 2025.11.8 (13), Solr 9.4.1 (7), Metabase 0.58.39 (5), CoBlocks and PixelYourSite (5), Checkmk 2.4.0p39 (4), Mattermost 10.11.26 (3) | NVD 2002–2026, KEV, EPSS |
 
 **Still to run on the Windows scanner host:**
-- Windows PowerShell 5.1 itself: `-SelfTest`, expecting 132.
+- Windows PowerShell 5.1 itself: `-SelfTest`, expecting 138.
 - ESENT: `Test-WebInventoryStore.ps1`, which runs the self-test, compares ESENT with the portable engine, hard-kills ESENT ingests, verifies and rebuilds across engines, and tests backfill on ESENT and event-log anchoring.
 - Edge headless policy: one interactive `-Screenshot`; the canary reports a blocking policy.
 - Schannel for the RDP probe against real Windows hosts.
@@ -616,7 +622,7 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 **Recommended next steps** (not implemented):
 - Archive and diff screenshots in the store.
 - Read RDP certificates with a raw ClientHello after the X.224 exchange.
-- Widen version capture: 729 of the 1,327 products with a CPE come from rules that capture no version (most Wappalyzer technologies), so they can only match `all-versions` and KEV entries.
+- Review the remaining version candidates (`tools/version/coverage.py` lists them) and add products as new releases start to show their version.
 - Refresh the CPE supplement with `tools/cpe/` when the NVD dictionary or the upstream rule data moves on; only names nobody has reviewed come up.
 
 ## 12. Parameter reference (103 parameters)
@@ -649,12 +655,12 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 | `THIRD-PARTY-NOTICES.txt`, `LICENSE-GPL-3.0.txt` | Licences and upstream provenance |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-The dev suite (`WebInventory-v2.3.1-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary).
+The dev suite (`WebInventory-v2.3.2-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary) and `tools/version/` (the version-only rules, their review, and the container, WordPress and replay harnesses).
 
 ## 14. Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                     # offline checks (132 on Windows with ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                     # offline checks (138 on Windows with ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                      # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -ScopeFile .\authorized.txt -Pace Polite -BaselineCsv auto
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore

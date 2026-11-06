@@ -1,0 +1,1286 @@
+{
+"hw|Cisco Adaptive Security Appliance": [
+"recog:http_servers",
+"recog:snmp_sysdescr"
+],
+"hw|Cisco IMC": [],
+"hw|Cisco MDS 9000": [
+"recog:html_title"
+],
+"hw|Cisco NAM": [],
+"hw|Cisco Nexus 1000V": [],
+"hw|Cisco Wireless LAN Controller": [
+"recog:x509_subjects"
+],
+"hw|Citrix NetScaler Gateway": [],
+"hw|Citrix NetScaler SDX Gateway": [],
+"hw|Citrix Netscaler Gateway": [],
+"hw|D-Link DCS-825L": [],
+"hw|EMC Celerra": [],
+"hw|Eltex NTP-2": [],
+"hw|Eltex NTP-RG-1402G": [],
+"hw|FatPipe Networks IPVPN": [],
+"hw|FatPipe Networks MPVPN": [],
+"hw|FatPipe Networks WARP": [
+"webappanalyzer:Warp"
+],
+"hw|Google Chromecast": [],
+"hw|HP iLO": [
+"nuclei:ilo-detect",
+"webappanalyzer:HP iLO"
+],
+"hw|HP iLO 3": [],
+"hw|HP iLO 4": [],
+"hw|KACE K1000": [],
+"hw|Mersive SolsticePod": [
+"recog:http_servers"
+],
+"hw|Philips Hue": [],
+"hw|Ruckus Zone Director": [],
+"hw|SMA Sunny WebBox": [],
+"hw|Software House iSTAR Ultra": [],
+"hw|Ubiquiti EdgeSwitch": [],
+"hw|Xerox WorkCentre": [],
+"hw|Xerox WorkCentre Pro": [
+"recog:snmp_sysdescr"
+],
+"hw|Zyxel USG20-VPN": [],
+"hw|Zyxel USG40": [],
+"hw|Zyxel USG60": [],
+"os|Alpine Linux": [],
+"os|Apple Mac OS": [
+"recog:operating_system",
+"recog:smtp_banners",
+"recog:smtp_noop",
+"recog:x509_subjects"
+],
+"os|Brocade Fabric OS": [],
+"os|Cesanta Mongoose OS": [],
+"os|Check Point GAiA OS": [],
+"os|Cisco IMC": [],
+"os|Cisco NX-OS": [],
+"os|Cisco Wireless LAN Controller": [
+"recog:x509_subjects"
+],
+"os|Citrix NetScaler Gateway": [],
+"os|Citrix Netscaler Gateway Firmware": [],
+"os|Conectiva Linux": [
+"recog:apache_os",
+"recog:dhcp_vendor_class",
+"recog:dns_versionbind",
+"recog:ftp_banners",
+"recog:html_title",
+"recog:http_servers",
+"recog:mysql_banners",
+"recog:ntp_banners",
+"recog:operating_system",
+"recog:rtsp_servers",
+"recog:sip_banners",
+"recog:smtp_banners",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid",
+"recog:ssh_banners",
+"recog:telnet_banners",
+"recog:x509_subjects"
+],
+"os|Eltex NTP-2 Firmware": [],
+"os|Eltex NTP-RG-1402G Firmware": [],
+"os|FatPipe Networks IPVPN Firmware": [],
+"os|FatPipe Networks MPVPN Firmware": [],
+"os|FatPipe Networks WARP Firmware": [],
+"os|Fedora": [],
+"os|Fortinet FortiOS": [],
+"os|FreshTomato": [
+"recog:x509_issuers"
+],
+"os|Gentoo": [
+"recog:apache_os",
+"recog:dhcp_vendor_class",
+"recog:dns_versionbind",
+"recog:ftp_banners",
+"recog:html_title",
+"recog:http_servers",
+"recog:mysql_banners",
+"recog:ntp_banners",
+"recog:operating_system",
+"recog:rtsp_servers",
+"recog:sip_banners",
+"recog:smtp_banners",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid",
+"recog:ssh_banners",
+"recog:telnet_banners",
+"recog:x509_subjects"
+],
+"os|Gentoo Linux": [
+"recog:apache_os",
+"recog:dhcp_vendor_class",
+"recog:dns_versionbind",
+"recog:ftp_banners",
+"recog:html_title",
+"recog:http_servers",
+"recog:mysql_banners",
+"recog:ntp_banners",
+"recog:operating_system",
+"recog:rtsp_servers",
+"recog:sip_banners",
+"recog:smtp_banners",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid",
+"recog:ssh_banners",
+"recog:telnet_banners",
+"recog:x509_subjects"
+],
+"os|Google Android": [
+"recog:dhcp_vendor_class"
+],
+"os|Google Chrome OS": [],
+"os|HP iLO 2": [],
+"os|HP iLO 3": [],
+"os|HP iLO 4": [],
+"os|HipServ": [
+"recog:ssh_banners"
+],
+"os|LG webOS": [],
+"os|Microsoft Windows 10": [
+"recog:snmp_sysdescr"
+],
+"os|Microsoft Windows 2000": [
+"recog:ftp_banners",
+"recog:http_servers",
+"recog:nntp_banners",
+"recog:smb_native_os",
+"recog:snmp_sysdescr"
+],
+"os|Microsoft Windows 2000 Datacenter Server": [
+"recog:ftp_banners",
+"recog:http_servers",
+"recog:nntp_banners",
+"recog:smb_native_os",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid"
+],
+"os|Microsoft Windows 2000 Server": [
+"recog:ftp_banners",
+"recog:http_servers",
+"recog:nntp_banners",
+"recog:smb_native_os",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid"
+],
+"os|Microsoft Windows 8": [
+"recog:snmp_sysdescr"
+],
+"os|Microsoft Windows 8.1": [
+"recog:snmp_sysdescr"
+],
+"os|Microsoft Windows 95": [
+"recog:http_servers"
+],
+"os|Microsoft Windows Server 2003, Datacenter Edition": [
+"recog:dns_versionbind",
+"recog:http_servers",
+"recog:nntp_banners",
+"recog:ntp_banners",
+"recog:pop_banners",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid"
+],
+"os|Microsoft Windows Server 2016": [
+"recog:dns_versionbind",
+"recog:smtp_banners"
+],
+"os|Microsoft Windows Server 2019": [
+"recog:smtp_banners"
+],
+"os|NetBSD": [
+"recog:ntp_banners",
+"recog:snmp_sysobjid",
+"recog:ssh_banners"
+],
+"os|Netgear Prosafe Firmware": [],
+"os|Oracle ILOM": [
+"nuclei:oracle-integrated-manager",
+"recog:http_servers"
+],
+"os|Palo Alto Networks PAN-OS": [],
+"os|QNAP QTS": [],
+"os|Red Hat": [
+"recog:apache_os",
+"recog:dhcp_vendor_class",
+"recog:dns_versionbind",
+"recog:ftp_banners",
+"recog:html_title",
+"recog:http_servers",
+"recog:mysql_banners",
+"recog:ntp_banners",
+"recog:operating_system",
+"recog:rtsp_servers",
+"recog:sip_banners",
+"recog:smtp_banners",
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid",
+"recog:ssh_banners",
+"recog:telnet_banners",
+"recog:x509_subjects"
+],
+"os|Riverbed RiOS": [
+"whatweb:rios"
+],
+"os|SGI Irix": [
+"recog:snmp_sysdescr",
+"recog:snmp_sysobjid"
+],
+"os|SerenityOS": [],
+"os|Trustix Secure Linux": [
+"recog:apache_os"
+],
+"os|UNIX": [
+"recog:ntp_banners"
+],
+"os|Ubiquiti EdgeOS": [],
+"os|Ubuntu": [],
+"os|WatchGuard Fireware": [],
+"os|YunoHost": [],
+"os|Zyxel USG20-VPN firmware": [],
+"os|Zyxel USG40 firmware": [],
+"os|Zyxel USG60 firmware": [],
+"os|Zyxel ZyNOS firmware": [],
+"os|iXsystems FreeNAS Firmware": [],
+"service|3CX Web Server": [],
+"service|ACME micro_httpd": [],
+"service|ASP.NET Core": [],
+"service|AbanteCart": [],
+"service|AdGuard Home": [],
+"service|Adobe ColdFusion": [],
+"service|Adobe Experience Manager": [],
+"service|Adobe Experience Manager Edge Delivery Services": [],
+"service|Adobe Experience Manager Franklin": [],
+"service|Afterpay": [
+"webappanalyzer:Afterpay"
+],
+"service|Akamai GHost": [],
+"service|Akaunting": [],
+"service|AlternC": [],
+"service|Amazon CloudFront Load Balancer": [],
+"service|Amazon OpenSearch": [],
+"service|Amazon S3": [],
+"service|Ametys": [
+"nuclei:ametys-admin-login"
+],
+"service|Amiro.CMS": [],
+"service|Ampache": [],
+"service|Apache ActiveMQ": [
+"nuclei:activemq-panel",
+"nuclei:apache-activemq-artemis-detect"
+],
+"service|Apache Airflow": [],
+"service|Apache Druid": [],
+"service|Apache Flink": [
+"whatweb:apache-flink"
+],
+"service|Apache Guacamole": [],
+"service|Apache JSPWiki": [
+"nuclei:apache-jspwiki-detect"
+],
+"service|Apache NiFi": [],
+"service|Apache Solr": [
+"nuclei:solr-panel-exposure"
+],
+"service|Apache Spark": [
+"recog:html_title"
+],
+"service|Apache Superset": [
+"nuclei:superset-login"
+],
+"service|Appwrite": [],
+"service|AquilaCMS": [],
+"service|Arc": [],
+"service|Argo CD": [
+"nuclei:argocd-login"
+],
+"service|Aruba Networks ClearPass Policy Manager": [],
+"service|Asgaros Forum": [],
+"service|Atlassian Fisheye": [
+"webappanalyzer:Atlassian FishEye"
+],
+"service|Atlassian Jira Service Management": [],
+"service|Aurelia": [],
+"service|Azuriom": [],
+"service|Backbone.js": [
+"webappanalyzer:Backbone.js"
+],
+"service|Bagisto": [],
+"service|Barracuda WAF": [],
+"service|Batflat": [],
+"service|Bigware": [],
+"service|Bitrix24": [],
+"service|Bitwarden Server": [
+"nuclei:gotify-panel"
+],
+"service|Bitweaver": [],
+"service|Blesta": [],
+"service|Blinger": [],
+"service|Blocksy Companion": [
+"webappanalyzer:Blocksy Companion"
+],
+"service|Bludit": [],
+"service|BoidCMS": [],
+"service|Bold Page Builder": [],
+"service|Bolt CMS": [],
+"service|BookStack": [
+"nuclei:bookstack-panel"
+],
+"service|Bootstrap Table": [],
+"service|Bricks": [],
+"service|Brizy WordPress": [],
+"service|Broadcom SiteMinder": [],
+"service|Burst": [],
+"service|CMS Made Simple": [
+"whatweb:cms-made-simple"
+],
+"service|CS Cart": [],
+"service|Caddy": [],
+"service|CakePHP": [
+"nuclei:default-cakephp-page"
+],
+"service|Calibre-Web": [],
+"service|Check Point Firewall-1": [],
+"service|Check Point Gaia": [],
+"service|Checkmk": [
+"nuclei:checkmk-login"
+],
+"service|Chevereto": [
+"nuclei:chevereto-detect",
+"webappanalyzer:Chevereto"
+],
+"service|Cisco APIC": [],
+"service|Cisco ASA": [
+"nuclei:cisco-asa-detect"
+],
+"service|Cisco Expressway": [
+"nuclei:cisco-expressway-panel",
+"recog:sip_banners"
+],
+"service|Cisco IMC": [],
+"service|Cisco ISE": [
+"nuclei:cisco-ise-admin-panel"
+],
+"service|Cisco Unified Communications Manager": [
+"nuclei:cisco-ucm-version"
+],
+"service|Citrix Gateway": [
+"recog:http_servers"
+],
+"service|Citrix Hypervisor": [
+"nuclei:citrix-hypervisor-page"
+],
+"service|Citrix NetScaler ADC": [],
+"service|Citrix NetScaler Gateway": [],
+"service|Citrix Netscaler": [
+"recog:http_servers",
+"recog:ntp_banners",
+"recog:snmp_sysdescr"
+],
+"service|Citrix StoreFront": [],
+"service|CloudFlare Load Balancer": [],
+"service|Cloudflare": [
+"nuclei:cloudflare"
+],
+"service|Colorlib Activello": [],
+"service|Colorlib Illdy": [],
+"service|Colorlib Shapely": [],
+"service|CometD": [],
+"service|Commerce Server": [],
+"service|Complianz": [
+"webappanalyzer:Complianz"
+],
+"service|Composite Products": [],
+"service|Contao": [
+"whatweb:contao"
+],
+"service|Control Web Panel": [],
+"service|Cosmoshop": [],
+"service|Cotonti": [],
+"service|Couchbase Server": [],
+"service|Covenant": [],
+"service|Craft CMS": [],
+"service|Craft Commerce": [],
+"service|Creativ.eMail": [],
+"service|Croogo": [],
+"service|CrushFTP": [
+"whatweb:crushftp"
+],
+"service|CrushFTP Web Interface": [
+"whatweb:crushftp"
+],
+"service|CubeCart": [
+"whatweb:cubecart"
+],
+"service|Custom Fonts": [],
+"service|CyberChimps Responsive": [],
+"service|D3": [],
+"service|DESTOON": [],
+"service|DNN": [
+"whatweb:dotnetnuke"
+],
+"service|Daphne": [],
+"service|DataLife Engine": [],
+"service|DataTables": [
+"webappanalyzer:DataTables"
+],
+"service|DedeCMS": [],
+"service|Delinea Secret Server": [],
+"service|Dell OpenManage": [],
+"service|DeskPro": [],
+"service|Directus": [],
+"service|Disqus": [],
+"service|Django CMS": [],
+"service|Docker": [],
+"service|Dokeos": [
+"whatweb:dokeos"
+],
+"service|Dokuwiki": [
+"webappanalyzer:DokuWiki",
+"whatweb:dokuwiki"
+],
+"service|Dotclear": [],
+"service|Dovecot": [],
+"service|Drupal Commerce": [],
+"service|EC-CUBE": [],
+"service|ELOG": [],
+"service|EWWW Image Optimizer": [
+"nuclei:ewww-image-optimizer"
+],
+"service|Easy Accordion": [],
+"service|Ektron CMS": [],
+"service|Elastic Kibana": [
+"webappanalyzer:Kibana",
+"whatweb:kibana"
+],
+"service|Elastic Search": [],
+"service|ElasticPress": [],
+"service|Elcom": [],
+"service|Eleanor CMS": [],
+"service|Elgg": [],
+"service|Email Encoder for Wordpress": [],
+"service|EmbedThis GoAhead Webserver": [],
+"service|Encode uvicorn": [],
+"service|Envoy": [],
+"service|Erxes": [],
+"service|EspoCRM": [],
+"service|Essential Addons for Elementor": [],
+"service|Essential Blocks": [],
+"service|Etherpad": [],
+"service|Express": [],
+"service|ExpressionEngine": [
+"nuclei:expressionengine-detect"
+],
+"service|ExtJS": [
+"webappanalyzer:ExtJS"
+],
+"service|ExtendThemes Calliope": [],
+"service|ExtendThemes EmpowerWP": [],
+"service|ExtendThemes Materialis": [],
+"service|ExtendThemes Mesmerize": [],
+"service|EyouCMS": [],
+"service|F5 Advanced WAF (ASM)": [],
+"service|F5 BIG-IP": [
+"nuclei:bigip-detect"
+],
+"service|F5 BIG-IP APM": [],
+"service|F5 BIG-IP LTM": [
+"recog:http_cookies",
+"recog:ntp_banners"
+],
+"service|F5 BigIP": [
+"nuclei:bigip-detect"
+],
+"service|Facebook Proxygen": [],
+"service|FastHTTP": [],
+"service|Fastly": [],
+"service|Fat-Free Framework": [],
+"service|Faveo": [],
+"service|FileRun": [],
+"service|Flarum": [],
+"service|Flurry Analytics": [],
+"service|Flutter": [],
+"service|FluxBB": [
+"whatweb:fluxbb"
+],
+"service|Flyspray": [],
+"service|Forgejo": [
+"webappanalyzer:Forgejo"
+],
+"service|Fork CMS": [],
+"service|Formstone": [],
+"service|Fortinet FortiOS": [],
+"service|Foswiki": [],
+"service|Frappe": [],
+"service|GDPR Cookie Consent Plugin by Webtoffee": [],
+"service|GFI Kerio Control": [],
+"service|Gambio": [],
+"service|Genesis blocks": [],
+"service|GetSimple CMS": [],
+"service|GitLab": [],
+"service|GoAhead": [],
+"service|GoAnywhere": [],
+"service|GoDaddy CoBlocks": [],
+"service|Google Gerrit": [
+"webappanalyzer:Gerrit"
+],
+"service|Google Web Server": [
+"recog:http_servers"
+],
+"service|Google Web Services": [
+"recog:http_servers"
+],
+"service|Google Web Toolkit": [],
+"service|GrandNode": [],
+"service|GraphQL": [],
+"service|Graylog": [],
+"service|Greyd.Suite": [],
+"service|Grin": [],
+"service|GuppY": [
+"whatweb:guppy"
+],
+"service|Gutenberg": [
+"nuclei:gutenberg",
+"webappanalyzer:Gutenberg"
+],
+"service|HAProxy": [],
+"service|HCL Commerce": [],
+"service|HCL Digital Experience": [],
+"service|HCL Domino": [
+"recog:http_servers",
+"recog:imap_banners",
+"recog:pop_banners",
+"recog:smtp_banners",
+"whatweb:lotus-domino"
+],
+"service|HP OpenView": [
+"recog:http_servers"
+],
+"service|Harbor": [
+"nuclei:harbor-detect",
+"nuclei:harbor-panel"
+],
+"service|HashThemes Total": [],
+"service|HashiCorp Consul": [
+"nuclei:hashicorp-consul-agent",
+"nuclei:hashicorp-consul-webgui"
+],
+"service|HashiCorp Nomad": [],
+"service|HashiCorp Vault": [
+"nuclei:hashicorp-vault-detect",
+"nuclei:vault-panel"
+],
+"service|Hasura": [],
+"service|HikaShop": [],
+"service|Home-Assistant": [],
+"service|Hono": [],
+"service|Hostinger": [],
+"service|Hotaru CMS": [
+"whatweb:hotaru-cms"
+],
+"service|IBM DataPower": [],
+"service|IBM DataPower Gateway": [],
+"service|IBM Lotus Sametime": [],
+"service|IBM Tivoli Storage FlashCopy Manager": [],
+"service|IBM Tivoli Storage Manager": [],
+"service|Icinga Web": [],
+"service|Ignite Realtime OpenFire": [],
+"service|Imagely NextGEN Gallery": [
+"webappanalyzer:NextGEN Gallery",
+"whatweb:nextgen-gallery"
+],
+"service|ImpressCMS": [],
+"service|Indexhibit": [],
+"service|Inductive Automation Ignition Gateway": [
+"recog:html_title"
+],
+"service|InstantCMS": [],
+"service|Invision Community": [],
+"service|Invision Power Board": [
+"whatweb:invision-power-board"
+],
+"service|Istio": [],
+"service|Ivanti Connect Secure": [],
+"service|JSZip": [
+"webappanalyzer:JSZip"
+],
+"service|Java": [
+"whatweb:java"
+],
+"service|JetBrains TeamCity": [
+"nuclei:teamcity-login-panel",
+"webappanalyzer:TeamCity"
+],
+"service|JetEngine": [],
+"service|Jetpack": [],
+"service|Jetpack Boost": [],
+"service|Jitsi": [],
+"service|Jive": [],
+"service|JivoChat": [
+"webappanalyzer:JivoChat"
+],
+"service|JobberBase": [],
+"service|Johnson Controls Metasys": [],
+"service|Joomla!": [
+"nuclei:joomla-detect",
+"webappanalyzer:Joomla",
+"whatweb:joomla"
+],
+"service|Juniper J-Web": [
+"nuclei:juniper-panel"
+],
+"service|Jupyter BinderHub": [],
+"service|Jupyter Notebook": [],
+"service|Jupyter Server": [],
+"service|JupyterHub": [],
+"service|Keycloak": [],
+"service|Kirby": [],
+"service|Koa": [],
+"service|Koala Framework": [],
+"service|Kodi Media Server": [],
+"service|Ktor": [],
+"service|Kubernetes API": [
+"nuclei:kubernetes-version"
+],
+"service|Kubernetes NGINX Ingress Controller": [],
+"service|Kubernetes minikube": [],
+"service|LEPTON": [],
+"service|Lansweeper": [
+"nuclei:lansweeper-login"
+],
+"service|Laravel": [
+"nuclei:laravel-eol"
+],
+"service|Lenovo XClarity Controller": [],
+"service|LibreNMS": [],
+"service|Lightbox": [],
+"service|LimeSurvey": [],
+"service|LiteSpeed": [
+"recog:http_servers"
+],
+"service|LiteSpeed Cache": [
+"nuclei:litespeed-cache"
+],
+"service|Litespeed Cache": [
+"nuclei:litespeed-cache"
+],
+"service|Livewire": [],
+"service|Lodash": [
+"webappanalyzer:Lodash"
+],
+"service|Lotus-Domino": [
+"recog:http_servers",
+"recog:imap_banners",
+"recog:pop_banners",
+"recog:smtp_banners",
+"whatweb:lotus-domino"
+],
+"service|Lynx Technology Twonky Media Server": [],
+"service|MITRE CALDERA": [],
+"service|MLflow": [],
+"service|MachoThemes NewsMag": [],
+"service|Macromedia Breeze": [],
+"service|Macromedia JRun": [],
+"service|Magnolia CMS": [],
+"service|MailChimp": [],
+"service|MailEnable": [],
+"service|Mailman": [
+"whatweb:mailman"
+],
+"service|ManageEngine AD360": [],
+"service|ManageEngine ADAudit Plus": [],
+"service|ManageEngine ADManager Plus": [],
+"service|ManageEngine ADSelfService Plus": [
+"nuclei:manageengine-adselfservice"
+],
+"service|ManageEngine Access Manager Plus": [],
+"service|ManageEngine Analytics Plus": [],
+"service|ManageEngine AssetExplorer": [],
+"service|ManageEngine Desktop Central": [],
+"service|ManageEngine Endpoint Central": [],
+"service|ManageEngine OpManager": [],
+"service|ManageEngine PAM360": [],
+"service|ManageEngine Password Manager Pro": [],
+"service|ManageEngine ServiceDesk Plus": [],
+"service|ManageEngine ServiceDesk Plus MSP": [],
+"service|ManageEngine SupportCenter Plus": [],
+"service|Marked": [],
+"service|Mastodon": [],
+"service|Matomo Analytics": [
+"whatweb:matomo"
+],
+"service|Mattermost": [
+"nuclei:mattermost-panel"
+],
+"service|Mautic": [],
+"service|MaxSite CMS": [],
+"service|Mayan-EDMS Mayan EDMS": [],
+"service|McAfee ePolicy Orchestrator": [
+"whatweb:mcafee-epolicy-orchestrator"
+],
+"service|Melis Platform": [],
+"service|Mermaid": [],
+"service|MetaSlider": [],
+"service|Metabase": [
+"nuclei:metabase-panel"
+],
+"service|Meteor": [
+"webappanalyzer:Meteor"
+],
+"service|MeterSphere": [],
+"service|Microsoft Azure App Service on Azure Stack": [],
+"service|Microsoft Commerce Server": [],
+"service|Microsoft Exchange 2007 Server": [
+"nuclei:ms-exchange-server",
+"nuclei:ms-exchange-web-service",
+"recog:nntp_banners",
+"recog:pop_banners",
+"recog:smtp_banners"
+],
+"service|Microsoft Lync Server": [],
+"service|Microsoft Outlook Web Access": [],
+"service|Microsoft SQL Server Reporting Services": [],
+"service|Microsoft Skype for Business": [],
+"service|Microsoft Windows Media Player": [],
+"service|Microweber": [],
+"service|MinIO": [],
+"service|Miniflux": [],
+"service|Misskey": [],
+"service|Modified eCommerce": [],
+"service|Mojolicious": [],
+"service|Mollom": [],
+"service|Moment.js": [
+"webappanalyzer:Moment.js"
+],
+"service|MongoDB": [],
+"service|Mongrel": [
+"recog:http_servers",
+"whatweb:mongrel"
+],
+"service|Mono": [],
+"service|MooTools": [
+"webappanalyzer:MooTools"
+],
+"service|Moodle": [
+"whatweb:moodle"
+],
+"service|MotoCMS": [],
+"service|Movable Type": [
+"whatweb:movable_type"
+],
+"service|Mozilla Bugzilla": [
+"nuclei:bugzilla-detect",
+"webappanalyzer:Bugzilla"
+],
+"service|Munin": [],
+"service|MyBB": [],
+"service|MyCred": [],
+"service|N-able N-central": [
+"nuclei:ncentral-panel"
+],
+"service|Nagios": [],
+"service|Nagios Log Server": [],
+"service|Nagios Network Analyzer": [],
+"service|NcFTPd Server": [],
+"service|Nelio Testing": [],
+"service|Net-SNMP SNMP Agent": [],
+"service|NetApp ONTAP": [],
+"service|Netdata": [
+"nuclei:netdata-panel",
+"recog:http_servers"
+],
+"service|Netgate pfSense": [
+"nuclei:pfsense-login",
+"recog:snmp_sysdescr"
+],
+"service|NextAuth.js": [],
+"service|Nextcloud": [
+"nuclei:nextcloud-detect",
+"webappanalyzer:Nextcloud"
+],
+"service|Nextcloud Server": [
+"nuclei:nextcloud-detect"
+],
+"service|NexusPHP": [],
+"service|Node-RED": [],
+"service|NodeBB": [],
+"service|Northstar Club Management": [],
+"service|Nuxt.js": [],
+"service|OPNSense": [],
+"service|OPNsense": [],
+"service|OWASP Zed Attack Proxy": [],
+"service|OXID eShop": [],
+"service|Observium": [],
+"service|October CMS": [],
+"service|Octopus Deploy": [],
+"service|Odoo": [
+"nuclei:odoo-detect"
+],
+"service|Open Web Analytics": [],
+"service|OpenBSD OpenSMTPD": [],
+"service|OpenBSD httpd": [
+"recog:http_servers",
+"recog:snmp_sysobjid"
+],
+"service|OpenCart": [
+"nuclei:opencart-detect",
+"whatweb:opencart"
+],
+"service|OpenCms": [
+"whatweb:opencms"
+],
+"service|OpenKM": [],
+"service|OpenMediaVault": [],
+"service|OpenStack Horizon": [],
+"service|OpenUI5": [
+"webappanalyzer:OpenUI5"
+],
+"service|OpenVPN Access Server": [],
+"service|OpenWrt LuCI": [
+"whatweb:luci"
+],
+"service|OpenX": [
+"whatweb:openx"
+],
+"service|OpnForm": [],
+"service|Optimizely Content Management": [],
+"service|Oracle Access Manager": [
+"nuclei:oracle-access-management",
+"whatweb:oracle-access-manager"
+],
+"service|Oracle Fusion Middleware": [
+"whatweb:oracle-fusion-middleware"
+],
+"service|Oracle PeopleSoft": [
+"nuclei:oracle-peoplesoft-panel"
+],
+"service|Oracle Secure Global Desktop": [],
+"service|Oracle Transportation Management": [],
+"service|Orchard Core": [],
+"service|Otter Blocks": [],
+"service|OutSystems": [],
+"service|Oxygen": [],
+"service|PHP-Nuke": [],
+"service|PRTG Network Monitor": [
+"whatweb:prtg-network-monitor"
+],
+"service|Pagekit": [],
+"service|Palo Alto GlobalProtect": [],
+"service|Palo Alto Networks PAN-OS": [],
+"service|Papermerge": [],
+"service|PayPal": [],
+"service|Payara Server": [],
+"service|Payload CMS": [],
+"service|Peel": [],
+"service|PeerTube": [],
+"service|Perfmatters": [],
+"service|Phabricator": [],
+"service|Phacility Phabricator": [],
+"service|Phlox": [],
+"service|Phoenix": [],
+"service|Phoenix Cart": [],
+"service|Pimcore": [],
+"service|Piwigo": [
+"nuclei:piwigo-panel"
+],
+"service|PixelYourSite": [],
+"service|Plain Black WebGUI": [
+"webappanalyzer:WebGUI"
+],
+"service|Play": [
+"recog:http_servers",
+"whatweb:play-framework"
+],
+"service|Plesk": [
+"nuclei:plesk-onyx-login",
+"recog:html_title"
+],
+"service|Plex Media Server": [
+"recog:http_servers",
+"recog:x509_subjects"
+],
+"service|Pligg": [],
+"service|Plone": [],
+"service|Poll Maker": [],
+"service|Portainer": [],
+"service|Post Affiliate Pro": [],
+"service|PostHog": [],
+"service|PostgreSQL": [],
+"service|Power BI Report Server": [
+"nuclei:powerbi-report-server-detect"
+],
+"service|Premio Chaty": [],
+"service|PrestaShop": [
+"nuclei:prestashop-admin-panel"
+],
+"service|ProcessWire": [],
+"service|Progress MOVEit Transfer": [],
+"service|Progress OpenEdge Explorer": [],
+"service|Progress WS_FTP": [
+"recog:ftp_banners",
+"recog:ssh_banners"
+],
+"service|Progress WhatsUp Gold": [],
+"service|ProjectPier": [],
+"service|Prometheus Alertmanager": [],
+"service|Proxmox Virtual Environment": [
+"nuclei:proxmox-panel",
+"recog:http_servers"
+],
+"service|Pterodactyl Panel": [],
+"service|Pulse CMS": [],
+"service|Pulse Connect Secure": [
+"nuclei:pulse-secure-version",
+"recog:snmp_sysdescr"
+],
+"service|Pulse Secure": [
+"nuclei:pulse-secure-version",
+"recog:snmp_sysdescr"
+],
+"service|Puppet Enterprise": [],
+"service|PyScript": [],
+"service|Pygments": [],
+"service|PyroCMS": [],
+"service|QNAP QTS": [],
+"service|REDAXO": [],
+"service|RStudio Connect": [],
+"service|RabbitMQ": [
+"nuclei:rabbitmq-dashboard"
+],
+"service|RafflePress": [],
+"service|Rancher": [
+"nuclei:rancher-panel"
+],
+"service|Raneto": [],
+"service|Rapid7 (NeXpose)": [
+"recog:http_servers"
+],
+"service|Rapid7 InsightVM": [],
+"service|Rapid7 Metasploit": [],
+"service|Rapid7 Nexpose": [
+"recog:http_servers"
+],
+"service|Rapid7 Nexpose/InsightVM": [
+"recog:http_servers"
+],
+"service|ReDoc": [
+"webappanalyzer:ReDoc"
+],
+"service|Red Hat OpenShift": [],
+"service|Redis": [],
+"service|Redmine": [],
+"service|Reveal.js": [
+"webappanalyzer:Reveal.js"
+],
+"service|Revel": [],
+"service|Rhymix": [],
+"service|Riot.js": [
+"webappanalyzer:Riot.js"
+],
+"service|Rocket.Chat": [],
+"service|RoundCube": [
+"nuclei:roundcube-webmail-portal",
+"recog:favicons"
+],
+"service|Ruby Rack": [],
+"service|Ruby on Rails": [],
+"service|Rundeck": [
+"nuclei:rundeck-login"
+],
+"service|SABnzbd": [],
+"service|SAP": [
+"recog:http_servers"
+],
+"service|SAP Commerce Cloud": [],
+"service|SAP Internet Graphics Server": [],
+"service|SEOPress": [],
+"service|SEOmatic": [],
+"service|SOPlanning": [],
+"service|SQL Buddy": [],
+"service|SVG Support": [
+"nuclei:svg-support"
+],
+"service|Sakai": [],
+"service|SalesAgility SuiteCRM": [],
+"service|Sangoma Switchvox": [],
+"service|Sawmill": [
+"whatweb:sawmill"
+],
+"service|Select2": [],
+"service|Sharetribe": [],
+"service|ShellInABox": [],
+"service|Shiny": [],
+"service|Siebel CRM": [],
+"service|Silverstripe": [
+"nuclei:silverstripe-detect",
+"whatweb:silverstripe"
+],
+"service|SimpleSAMLphp": [],
+"service|Sitecore": [
+"nuclei:sitecore-version"
+],
+"service|Smart Slider 3": [
+"nuclei:smart-slider-3"
+],
+"service|Smartstore biz": [
+"nuclei:smartstore-detect",
+"webappanalyzer:Smartstore"
+],
+"service|Socket.io": [
+"webappanalyzer:Socket.io"
+],
+"service|SolarWinds Orion": [],
+"service|SolarWinds Orion Platform": [],
+"service|SolarWinds Virtualization Manager": [],
+"service|Sonarr": [],
+"service|SonicWall SonicOS": [
+"recog:html_title",
+"recog:snmp_sysdescr",
+"recog:x509_subjects"
+],
+"service|Sophos Email Appliance": [],
+"service|Sophos Firewall": [
+"nuclei:sophos-fw-version-detect"
+],
+"service|SpeedyCache": [],
+"service|Spiceworks Help Desk Server": [],
+"service|Splunk": [
+"nuclei:splunk-enterprise-panel"
+],
+"service|Splunkd": [
+"nuclei:splunk-enterprise-panel"
+],
+"service|Spree": [],
+"service|Spring": [],
+"service|Spring Boot": [],
+"service|Squiz Matrix": [],
+"service|Starlet": [],
+"service|Statamic": [],
+"service|Strapi": [],
+"service|Streamlit": [],
+"service|Strikingly": [],
+"service|Stripe": [
+"webappanalyzer:Stripe"
+],
+"service|Subrion": [
+"nuclei:subrion-login"
+],
+"service|SuiteCRM": [],
+"service|Supervisor": [],
+"service|SvelteKit": [],
+"service|Swiper": [],
+"service|Sylius": [],
+"service|Symantec Endpoint Protection Manager": [],
+"service|Symantec Mail Security for SMTP": [],
+"service|Symantec Messaging Gateway": [],
+"service|Symfony": [
+"nuclei:default-symfony-page"
+],
+"service|Sympa": [],
+"service|Synology DSM": [],
+"service|Synology Web Station": [],
+"service|TWiki": [],
+"service|TYPO3 CMS": [
+"whatweb:typo3"
+],
+"service|Tableau Server": [
+"nuclei:tableau-server-detect"
+],
+"service|Tenable Nessus": [],
+"service|Tenable Security Center": [],
+"service|Tenable.sc": [],
+"service|Tendenci": [],
+"service|Terminalfour": [],
+"service|Textpattern CMS": [],
+"service|The Events Calendar": [
+"nuclei:the-events-calendar"
+],
+"service|Theme Horse NewsCard": [],
+"service|ThemeGrill ColorMag": [
+"webappanalyzer:ColorMag"
+],
+"service|Themify Builder": [],
+"service|ThinkPHP": [],
+"service|Tickera": [],
+"service|TightVNC Desktop": [],
+"service|Tiki Wiki CMS Groupware": [],
+"service|TinyMCE": [
+"webappanalyzer:TinyMCE"
+],
+"service|TomatoCart": [],
+"service|Tor": [],
+"service|Totara": [],
+"service|Traefik": [],
+"service|Traefik Proxy": [],
+"service|Transmission": [],
+"service|Twik": [],
+"service|Twilight CMS": [],
+"service|UMI.CMS": [],
+"service|Ubercart": [],
+"service|Ubiquiti UniFi": [
+"recog:snmp_sysdescr"
+],
+"service|Ubiquiti UniFi Video": [],
+"service|Ultimate Tables": [],
+"service|Uptime Kuma": [],
+"service|Ushahidi": [],
+"service|Uvicorn": [],
+"service|VMware ESXi": [],
+"service|VMware Horizon": [
+"nuclei:vmware-horizon-version"
+],
+"service|VMware View": [],
+"service|VMware vCenter": [],
+"service|VMware vCenter Converter": [],
+"service|VMware vCenter Server": [],
+"service|Vanilla": [],
+"service|Varnish Cache": [],
+"service|Vaultwarden": [],
+"service|Veeam Backup & Replication": [],
+"service|VirtueMart": [],
+"service|Visual Composer": [],
+"service|Vvveb CMS": [],
+"service|WP Fastest Cache": [
+"nuclei:wp-fastest-cache"
+],
+"service|WP-Optimize": [],
+"service|WSO2 API Manager": [
+"nuclei:wso2-management-console"
+],
+"service|WSO2 Carbon": [],
+"service|WSO2 Enterprise Integrator": [],
+"service|WSO2 Identity Server": [
+"nuclei:identity-server-v3-detect"
+],
+"service|WatchGuard Firebox": [],
+"service|WatchGuard Fireware XTM": [],
+"service|Wazuh": [
+"nuclei:wazuh-panel"
+],
+"service|Web2py": [],
+"service|WebAssembly": [],
+"service|WebSphere": [
+"nuclei:websphere-detect",
+"recog:http_servers"
+],
+"service|Weblate": [],
+"service|Weblication": [],
+"service|Webmin Usermin": [],
+"service|WebsiteBaker": [],
+"service|WikkaWiki": [],
+"service|Windows Admin Center": [],
+"service|Wing FTP Server": [
+"nuclei:wingftp-panel",
+"recog:http_servers",
+"whatweb:wing-ftp-server"
+],
+"service|Wink": [
+"webappanalyzer:Wink"
+],
+"service|Winter CMS": [],
+"service|Wolf CMS": [
+"whatweb:wolfcms"
+],
+"service|WooCommerce Stripe Payment Gateway": [
+"nuclei:woocommerce-gateway-stripe"
+],
+"service|WooCommerce Subscriptions": [],
+"service|XMB": [],
+"service|XOOPS": [],
+"service|XWiki": [
+"nuclei:xwiki-detect",
+"whatweb:xwiki"
+],
+"service|Xajax": [],
+"service|XenForo": [],
+"service|Xerox DocuShare": [],
+"service|XpressEngine": [],
+"service|YUI": [],
+"service|YaBB": [],
+"service|YesWiki": [],
+"service|Yii": [],
+"service|Zabbix": [],
+"service|Zen Cart": [],
+"service|Zimbra": [
+"nuclei:zimbra-detect",
+"nuclei:zimbra-web-client"
+],
+"service|Zimbra Collaboration Server": [],
+"service|Zope": [
+"whatweb:zope"
+],
+"service|Zulip": [],
+"service|a-blog cms": [
+"nuclei:a-blog-cms-detect"
+],
+"service|cPanel WHM": [],
+"service|dotCMS": [],
+"service|e107": [],
+"service|eDirectory": [
+"whatweb:edirectory"
+],
+"service|eSyndiCat": [
+"whatweb:esyndicat"
+],
+"service|eZ Publish": [],
+"service|etherpad": [],
+"service|experiencedCMS": [],
+"service|h5ai": [],
+"service|iThemes Security": [],
+"service|ikiwiki": [],
+"service|jPlayer": [],
+"service|jsPDF": [],
+"service|lwIP": [],
+"service|math.js": [],
+"service|mdBook": [],
+"service|mongo-express": [],
+"service|n8n": [
+"nuclei:n8n-panel"
+],
+"service|noVNC": [],
+"service|nopCommerce": [],
+"service|openHAB": [],
+"service|osCommerce": [
+"nuclei:oscommerce-detect"
+],
+"service|osTicket": [
+"whatweb:osticket"
+],
+"service|ownCloud": [
+"nuclei:nextcloud-owncloud-detect"
+],
+"service|ownCloud Server": [
+"nuclei:nextcloud-owncloud-detect"
+],
+"service|pgAdmin": [],
+"service|phpBB": [
+"whatweb:phpbb"
+],
+"service|phpPgAdmin": [],
+"service|phpwcms": [
+"whatweb:phpwcms"
+],
+"service|prettyPhoto": [],
+"service|sNews": [
+"whatweb:snews"
+],
+"service|script.aculo.us": [
+"webappanalyzer:script.aculo.us"
+],
+"service|status.net": [
+"whatweb:statusnet"
+],
+"service|total.js": [],
+"service|uPortal": [
+"whatweb:uportal"
+],
+"service|webEdition": [],
+"service|xtCommerce": [
+"webappanalyzer:xtCommerce"
+]
+}

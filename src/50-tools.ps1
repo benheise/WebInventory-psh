@@ -417,10 +417,37 @@ function Invoke-SelfTest {
     Assert 'requiresCategory gate drops ungated hit' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 0 }
     $o6.Add('selftest.shop', 'cart')
     Assert 'requiresCategory gate passes with category present' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 1 }
+    # version-only outputs: they add a version to a product another rule detected, and nothing else
+    $voPack = [WebInv.Matcher]::ReadPack('{"name":"votest","rules":[{"id":"st:vo-det","f":"selftest.det","r":"Acme","n":"ST Acme","c":"Web application","p":"cpe:2.3:a:stacme:acme:*","k":80},{"id":"st:vo-ver","f":"selftest.page","r":"Acme v(\\d+\\.\\d+\\.\\d+)","n":"ST Acme","v":"{1}","p":"cpe:2.3:a:stacme:acme:{v}","vo":true},{"id":"st:vo-det2","f":"selftest.det2","r":"Beta ([\\d.]+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","k":80},{"id":"st:vo-ver2","f":"selftest.page","r":"Beta v(\\d+\\.\\d+\\.\\d+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","vo":true},{"id":"st:vo-gate","f":"selftest.det3","r":"Gamma","n":"ST Gamma","c":"Shipping carriers","rc":["Ecommerce"],"p":"cpe:2.3:a:stgamma:gamma:*","k":80},{"id":"st:vo-ver3","f":"selftest.page","r":"Gamma v(\\d+\\.\\d+\\.\\d+)","n":"ST Gamma","v":"{1}","p":"cpe:2.3:a:stgamma:gamma:{v}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($voPack, (New-Object 'System.Collections.Generic.List[string]'))
+    $vo1 = New-Object WebInv.Observation; $vo1.Add('selftest.page', 'Acme v1.2.3 Beta v3.1.4 Gamma v5.6.7')
+    Assert 'version-only rule never creates a detection' { @([WebInv.Matcher]::Evaluate($vo1) | Where-Object { $_.Name -like 'ST *' }).Count -eq 0 }
+    $vo2 = New-Object WebInv.Observation; $vo2.Add('selftest.page', 'Acme v1.2.3'); $vo2.Add('selftest.det', 'Acme')
+    $vo3 = New-Object WebInv.Observation; $vo3.Add('selftest.det', 'Acme'); $vo3.Add('selftest.page', 'Acme v1.2.3')
+    $voA = @([WebInv.Matcher]::Evaluate($vo2) | Where-Object { $_.Name -eq 'ST Acme' }); $voB = @([WebInv.Matcher]::Evaluate($vo3) | Where-Object { $_.Name -eq 'ST Acme' })
+    Assert 'version-only rule adds its version to the detected product (either order), not its confidence or category' {
+        $voA.Count -eq 1 -and $voB.Count -eq 1 -and $voA[0].Version -eq '1.2.3' -and $voB[0].Version -eq '1.2.3' -and $voA[0].Cpe -eq 'cpe:2.3:a:stacme:acme:1.2.3:*:*:*:*:*:*:*' -and
+        $voA[0].Confidence -eq 80 -and $voB[0].Confidence -eq 80 -and $voA[0].Category -eq 'Web application' -and $voB[0].Category -eq 'Web application' }
+    $vo4 = New-Object WebInv.Observation; $vo4.Add('selftest.page', 'Beta v3.1.4'); $vo4.Add('selftest.det2', 'Beta 2.0')
+    Assert 'version-only rule never replaces a version a detection rule captured' { @([WebInv.Matcher]::Evaluate($vo4) | Where-Object { $_.Name -eq 'ST Beta' -and $_.Version -eq '2.0' }).Count -eq 1 }
+    $voPack2 = [WebInv.Matcher]::ReadPack('{"name":"votest2","rules":[{"id":"st:vo-fix","f":"selftest.fav","r":"^ab12$","n":"ST Delta","v":"1.5.0+","p":"cpe:/a:stdelta:delta:1.5.0","k":80},{"id":"st:vo-ver4","f":"selftest.page","r":"Delta v(\\d+\\.\\d+\\.\\d+)","n":"ST Delta","v":"{1}","p":"cpe:2.3:a:stdelta:delta:{v}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($voPack2, (New-Object 'System.Collections.Generic.List[string]'))
+    $vo6 = New-Object WebInv.Observation; $vo6.Add('selftest.fav', 'ab12'); $vo6.Add('selftest.page', 'Delta v1.6.20')
+    Assert 'a captured version-only version replaces one written into a rule (favicon "1.5.0+")' { @([WebInv.Matcher]::Evaluate($vo6) | Where-Object { $_.Name -eq 'ST Delta' -and $_.Version -eq '1.6.20' -and $_.Cpe -eq 'cpe:2.3:a:stdelta:delta:1.6.20:*:*:*:*:*:*:*' }).Count -eq 1 }
+    $vo5 = New-Object WebInv.Observation; $vo5.Add('selftest.page', 'Gamma v5.6.7'); $vo5.Add('selftest.det3', 'Gamma')
+    Assert 'version-only rule does not lift a requiresCategory gate' { @([WebInv.Matcher]::Evaluate($vo5) | Where-Object { $_.Name -eq 'ST Gamma' }).Count -eq 0 }
+    # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
+    $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
+    [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))
+    $b1 = New-Object WebInv.Observation; $b1.Add('selftest.b64', 'eyJyZWwiOiJzdEA0LjUuNiJ9')
+    $b2 = New-Object WebInv.Observation; $b2.Add('selftest.b64', '{"rel":"st@4.5.6"}'); $b2.Add('selftest.b64', 'not base64!')
+    Assert 'base64 rule (o=b) matches the decoded value only' {
+        @([WebInv.Matcher]::Evaluate($b1) | Where-Object { $_.Name -eq 'ST Epsilon' -and $_.Version -eq '4.5.6' }).Count -eq 1 -and
+        @([WebInv.Matcher]::Evaluate($b2) | Where-Object { $_.Name -eq 'ST Epsilon' }).Count -eq 0 }
     $tested = 0; $fails = @([WebInv.Matcher]::TestExamples([ref]$tested))
-    $bFails = @($fails | Where-Object { $_ -like 'b:*' })
+    $bFails = @($fails | Where-Object { $_ -like 'b:*' -or $_ -like 'v:*' })
     Assert ("built-in rule examples") { $bFails.Count -eq 0 }
-    foreach ($f in $fails) { Write-RunLog "example failure: $f" $(if ($f -like 'b:*') { 'ERROR' } else { 'WARN' }) }
+    foreach ($f in $fails) { Write-RunLog "example failure: $f" $(if ($f -like 'b:*' -or $f -like 'v:*') { 'ERROR' } else { 'WARN' }) }
     if ($fails.Count -gt $bFails.Count) { Write-Host ("note: {0} example mismatches in companion rule packs (see run log); run -TestRules for detail" -f ($fails.Count - $bFails.Count)) -ForegroundColor Yellow }
     Write-RunLog ("rule examples tested: {0}; failures: {1} (built-in {2})" -f $tested, $fails.Count, $bFails.Count)
     # output safety

@@ -102,7 +102,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.3.1";
+        public const string Version = "2.3.2";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {

@@ -34,3 +34,6 @@ lab/certs/
 
 # Release archives
 *.zip
+
+# Product responses recorded by tools/version (vlab.py, wplab.py)
+tools/version/out/

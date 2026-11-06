@@ -14,6 +14,14 @@ store = "\n".join((src / n).read_text(encoding="utf-8").rstrip("\n") for n in ("
 extras = (src / "extras.cs").read_text(encoding="utf-8")
 rules = (src / "builtin-rules.json").read_text(encoding="utf-8")
 json.loads(rules)  # fail fast on invalid JSON
+# version-only rules (tools/version/gen_rules.py) are part of the built-in pack: appended after the curated rules
+vr_path = src / "version-rules.json"
+if vr_path.exists():
+    vr = json.loads(vr_path.read_text(encoding="utf-8"))["rules"]
+    if vr:
+        assert rules.rstrip().endswith("\n]}"), "builtin-rules.json must end with a line holding ]}"
+        rules = rules.rstrip()[:-3] + ",\n" + ",\n".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) for r in vr) + "\n]}\n"
+        json.loads(rules)
 cpesup = (src / "cpe-supplement.json").read_text(encoding="utf-8")
 json.loads(cpesup)
 for blob, name in ((engine, "engine.cs"), (store, "store sources"), (extras, "extras.cs"), (rules, "builtin-rules.json"), (cpesup, "cpe-supplement.json")):
