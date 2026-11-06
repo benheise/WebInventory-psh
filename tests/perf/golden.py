@@ -7,7 +7,7 @@ Volatile fields (run id, timestamps, measured response time) are ignored; everyt
 including detections, versions, CPEs, flags, advisories, TLS matrix, certificate fields and notes.
 Exit code 0 = identical, 1 = differences (printed), 2 = usage/IO error.
 """
-import csv, glob, json, os, sys
+import csv, glob, json, os, re, sys
 
 VOLATILE = {"RunId", "ScanTag", "ScannedAt", "ResponseMs"}
 # Which job claims a SAN vhost first (IP target vs hostname target) is a race; the vhost row itself must exist and match.
@@ -15,8 +15,10 @@ RACY = {"VhostOf"}
 
 
 def load(d):
-    c = [p for p in glob.glob(os.path.join(d, "WebInventory_*.csv")) if not p.endswith("_delta.csv")]
-    j = glob.glob(os.path.join(d, "WebInventory_*.jsonl"))
+    # the results files only (not _delta/_vulns/_screenshots/_errors)
+    res = re.compile(r"^WebInventory_\d{8}_\d{6}\.(csv|jsonl)$")
+    c = [p for p in glob.glob(os.path.join(d, "WebInventory_*.csv")) if res.match(os.path.basename(p))]
+    j = [p for p in glob.glob(os.path.join(d, "WebInventory_*.jsonl")) if res.match(os.path.basename(p))]
     if len(c) != 1 or len(j) != 1:
         raise SystemExit("expected exactly one CSV and one JSONL in %s (found %d/%d)" % (d, len(c), len(j)))
     rows = {}

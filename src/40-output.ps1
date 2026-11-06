@@ -34,6 +34,37 @@ function Open-Outputs {
     if ($newCsv) { $script:CsvW.WriteLine((($Columns | ForEach-Object { '"' + $_ + '"' }) -join ',')) }
     $script:JsonW = New-Object System.IO.StreamWriter($script:JsonlPath, $true, $script:Utf8NoBom); $script:JsonW.AutoFlush = $true
     $script:ProgW = New-Object System.IO.StreamWriter($script:ProgressPath, $true, $script:Utf8NoBom); $script:ProgW.AutoFlush = $true
+    $script:ErrJsonPath = Join-Path $Dir ("WebInventory_{0}_errors.jsonl" -f $RunId)
+    $script:ErrJsonW = New-Object System.IO.StreamWriter($script:ErrJsonPath, $true, $script:Utf8NoBom); $script:ErrJsonW.AutoFlush = $true
+    if ($script:ErrJsonPending) { foreach ($v in $script:ErrJsonPending) { $script:ErrJsonW.WriteLine([WebInv.Out]::JsonLine($script:ErrJsonNames, $v)) } }
+    $script:ErrJsonPending = $null
+}
+
+# JSONL next to a CSV that has no JSON form otherwise (delta, screenshot index, store queries, vulnerabilities): one
+# object per row with the CSV's column names. Values are the cells as text, without the CSV formula guard; a column
+# that holds a count, port, size or duration is a number when the cell is one (an empty cell stays ""), as in the
+# results JSONL.
+$script:JsonlIntegers = @('Port', 'StatusCode', 'BodyLength', 'ResponseMs', 'CertDaysLeft', 'CertKeySize', 'FaviconMmh3', 'Versions', 'MissingRuns',
+    'Seq', 'Rows', 'Added', 'Changed', 'Enriched', 'Reappeared', 'Rekeyed', 'Missing', 'Retired', 'Active', 'MissingTotal', 'RetiredTotal',
+    'Incomplete', 'Duplicates', 'RetireAfter', 'Bytes', 'PageRequests', 'ProxyRefused', 'Ms', 'BrowserStatus')
+function Write-JsonlRows {
+    param([string]$Path, [string[]]$Names, [System.Collections.IEnumerable]$Rows, [string[]]$Integer = $script:JsonlIntegers)
+    $w = New-Object System.IO.StreamWriter($Path, $false, $script:Utf8NoBom)
+    try {
+        $isInt = @(foreach ($n in $Names) { $Integer -contains $n })
+        foreach ($r in $Rows) {
+            $v = New-Object object[] $Names.Count
+            for ($i = 0; $i -lt $Names.Count; $i++) {
+                $x = if ($r -is [System.Collections.IList]) { $r[$i] } else { $r.($Names[$i]) }
+                $x = if ($null -eq $x) { '' } else { [string]$x }
+                $n = 0L
+                if ($isInt[$i] -and [long]::TryParse($x, [Globalization.NumberStyles]::AllowLeadingSign, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { $x = $n }
+                $v[$i] = $x
+            }
+            $w.WriteLine([WebInv.Out]::JsonLine($Names, $v))
+        }
+    }
+    finally { $w.Dispose() }
 }
 
 function Close-Outputs {
@@ -105,7 +136,9 @@ function Compare-Baseline {
         }
     }
     foreach ($k in $old.Keys) { if (-not $new.ContainsKey($k)) { $delta.Add([pscustomobject]@{ Change = 'REMOVED'; Key = $k; Field = ''; Old = ('{0} {1}' -f $old[$k].Url, $old[$k].Products); New = '' }) } }
-    $delta | Sort-Object Change, Key, Field | Export-Csv -LiteralPath $DeltaPath -NoTypeInformation -Encoding UTF8
+    $sorted = @($delta | Sort-Object Change, Key, Field)
+    $sorted | Export-Csv -LiteralPath $DeltaPath -NoTypeInformation -Encoding UTF8
+    Write-JsonlRows -Path ([IO.Path]::ChangeExtension($DeltaPath, '.jsonl')) -Names @('Change', 'Key', 'Field', 'Old', 'New') -Rows $sorted -Integer @()
     @{ New = @($delta | Where-Object Change -eq 'NEW').Count; Removed = @($delta | Where-Object Change -eq 'REMOVED').Count; Changed = @($delta | Where-Object Change -eq 'CHANGED' | Select-Object -ExpandProperty Key -Unique).Count }
 }
 #endregion

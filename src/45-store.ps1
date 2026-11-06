@@ -12,7 +12,7 @@ function Initialize-StoreEngine {
         return
     }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
     if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
     Add-Type @addType
     if ($script:RunLog) { Write-RunLog ("Store engine compiled in {0} ms" -f $sw.ElapsedMilliseconds) 'DEBUG' }
@@ -23,14 +23,19 @@ function Format-Iso([datetime]$T) { ([DateTimeOffset]$T).ToString('yyyy-MM-ddTHH
 # run.json: when, how (probe switches) and by whom the run was made. The store uses it for timestamps, for keeping
 # values a probe that was switched off did not collect, and to refuse incomplete runs.
 function Write-RunInfo {
-    param([bool]$Complete, [bool]$Interrupted, [bool]$TimeLimit, [int]$Rows)
+    param([bool]$Complete, [bool]$Interrupted, [bool]$TimeLimit, [int]$Rows, [int]$ExitCode)
     $path = Join-Path $OutputDir ("WebInventory_{0}_run.json" -f $script:RunId)
     $started = Format-Iso $script:ScriptStart
     $sessions = New-Object System.Collections.Generic.List[object]
+    # v2.6: the run's UUID (the Tideline run_id) is made once and kept by every session of a resumed run
+    $uuid = [guid]::NewGuid().ToString()
+    $eng = [string]$Engagement
     if (Test-Path -LiteralPath $path) {
         try {
             $old = [IO.File]::ReadAllText($path) | ConvertFrom-Json
             if ($old.startedAt) { $started = [string]$old.startedAt }
+            if ($old.runUuid) { $uuid = [string]$old.runUuid }
+            if ($old.engagement -and -not $eng) { $eng = [string]$old.engagement }
             foreach ($s in @($old.sessions)) { if ($s) { $sessions.Add($s) } }
         }
         catch { Write-ErrLog 'IO' 'run.json' ("previous run.json unreadable, rewritten: {0}" -f $_.Exception.Message) }
@@ -46,8 +51,9 @@ function Write-RunInfo {
     $checks = 0
     if ($script:ProgressPath -and (Test-Path -LiteralPath $script:ProgressPath)) { foreach ($l in [IO.File]::ReadLines($script:ProgressPath)) { if ($l.Trim()) { $checks++ } } }
     $info = [ordered]@{
-        format = 1; runId = $script:RunId; startedAt = $started; finishedAt = (Format-Iso (Get-Date)); complete = $Complete; synthesized = $false
-        scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
+        format = 1; runId = $script:RunId; runUuid = $uuid; startedAt = $started; finishedAt = (Format-Iso (Get-Date)); complete = $Complete; synthesized = $false
+        scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; engagement = $(if ($eng) { $eng } else { $null }); exitCode = $ExitCode
+        operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
         profile = [ordered]@{
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
@@ -404,9 +410,10 @@ function Invoke-StoreMode {
         # unique name: two queries of the same kind in the same second must not overwrite each other
         $stem = Join-Path (Resolve-Path -LiteralPath $OutputDir).ProviderPath ("WebInventory_store_{0}_{1}" -f $StoreQuery.ToLowerInvariant(), $script:Stamp)
         $base = $stem; $n = 1
-        while ((Test-Path -LiteralPath "$base.csv") -or (Test-Path -LiteralPath "$base.html") -or (Test-Path -LiteralPath "$base.provenance.json")) { $n++; $base = '{0}_{1}' -f $stem, $n }
+        while ((Test-Path -LiteralPath "$base.csv") -or (Test-Path -LiteralPath "$base.jsonl") -or (Test-Path -LiteralPath "$base.html") -or (Test-Path -LiteralPath "$base.provenance.json")) { $n++; $base = '{0}_{1}' -f $stem, $n }
         Write-QueryCsv $q "$base.csv"
-        $files = @("$base.csv")
+        Write-JsonlRows -Path "$base.jsonl" -Names ([string[]]$q.Columns) -Rows $q.Rows
+        $files = @("$base.csv", "$base.jsonl")
         if ($prov) { [IO.File]::WriteAllText("$base.provenance.json", $prov + "`n", $script:Utf8NoBom); $files += "$base.provenance.json" }
         if ($StoreQuery -eq 'Inventory' -and -not $NoHtml -and $q.Rows.Count -gt 0) {
             $meta = @{ RunId = 'inventory store'; Tag = $(if ($AsOf) { 'as of ' + $asOf } else { 'current' }); Started = (Get-Date).ToString('yyyy-MM-dd HH:mm'); Duration = ''; Operator = $script:Operator; Computer = [Environment]::MachineName; Version = $ScriptVersion }

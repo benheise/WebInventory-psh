@@ -1,4 +1,4 @@
-{"name":"builtin-versions","version":"2.5.0",
+{"name":"builtin-versions","version":"2.6.0",
 "source":"Version-only rules for products whose detection rules carry a CPE but no version; each checked against responses of the product itself (container or published samples), see tools/version",
 "rules":[
 {"id":"v:roundcube","f":"body","r":"\"rcversion\":(?<a>[1-9]\\d?)(?:0(?<b>\\d)|(?<b>[1-9]\\d))(?:0(?<c>\\d)|(?<c>[1-9]\\d))[,}]","src":"builtin","n":"RoundCube","v":"{a}.{b}.{c}","p":"cpe:2.3:a:roundcube:webmail:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"locale\":\"en_US\",\"devel_mode\":null,\"rcversion\":10620,\"cookie_domain\":\"\"","exv":"1.6.20"},
