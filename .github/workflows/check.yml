@@ -87,6 +87,7 @@ jobs:
           $out | ForEach-Object { Write-Host $_ }
           $out | Where-Object { $_ -match '^\s*FAIL\b' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error title=Test-WebInventoryStore::$_" }
           Write-Host ("::{0} title=Test-WebInventoryStore::{1} (exit {2})" -f $(if ($rc) { 'error' } else { 'notice' }), (@($out | Where-Object { $_.Trim() }) | Select-Object -Last 1), $rc)
+          if ($rc) { Write-Host ("::warning title=Test-WebInventoryStore output (last lines)::{0}" -f ((@($out | Where-Object { $_.Trim() }) | Select-Object -Last 12) -join ' | ' -replace '::', ': :' -replace '[\r\n%]', ' ')) }
           exit $rc
       - name: Keep the logs
         if: always()
