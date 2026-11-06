@@ -42,7 +42,7 @@
     Off Windows: where the certificate and key are kept (default ~/.config/webinventory/tideline-sensor.pfx).
 .PARAMETER GrantKeyAccess
     Windows: accounts that may use the private key (for example the account of the scheduled scan), besides
-    SYSTEM and Administrators.
+    SYSTEM and Administrators. Written to the key's own security descriptor; a renewal carries it over.
 .PARAMETER KeepPrevious
     -Renew: leave the previous certificate and key in place.
 .PARAMETER Force
@@ -215,24 +215,15 @@ function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Wor
     $script:PendingMarker = $null
     $c
 }
-function Get-KeyFile($Cert) {
-    $k = [WebInv.SensorCert]::PrivateKey($Cert)
-    try { $name = $k.Key.UniqueName } finally { $k.Dispose() }
-    if (-not $name) { throw "the key of $($Cert.Thumbprint) has no unique name" }
-    $f = Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
-    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "the key file of $($Cert.Thumbprint) is not where machine keys live ($f)" }
-    $f
-}
 function Grant-Key($Cert, [string[]]$Accounts) {
-    if (-not $Accounts) { return }
-    $f = Get-KeyFile $Cert
-    $acl = Get-Acl -LiteralPath $f
-    foreach ($a in $Accounts) {
-        $sid = (New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier])
-        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Read', 'Allow')))
-        Write-Line ("  key readable by {0} ({1})" -f $a, (Split-Path -Leaf $f))
+    foreach ($a in @($Accounts | Where-Object { $_ })) {
+        [WebInv.SensorCert]::GrantKeyRead($Cert, $a)
+        Write-Line ("  key usable by {0}" -f $a)
     }
-    Set-Acl -LiteralPath $f -AclObject $acl
+    if (@($Accounts | Where-Object { $_ }).Count) {
+        $now = @([WebInv.SensorCert]::KeyReaders($Cert))
+        foreach ($a in @($Accounts | Where-Object { $_ })) { if ($now -notcontains $a -and $now -notcontains ((New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier]).Translate([Security.Principal.NTAccount]).Value)) { throw "the key's security descriptor does not list $a after the change (it lists: $($now -join ', '))" } }
+    }
 }
 function Test-NotExportable($Cert) {
     try { [void]$Cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12); $false } catch { $true }
@@ -368,8 +359,10 @@ try {
         $cert = Install-WindowsCert $j.Str('crt') $chain $work $req.Marker
         $grant = @($GrantKeyAccess)
         if (-not $grant.Count) {
-            # the accounts that could read the previous key keep that right on the new one
-            try { $grant = @((Get-Acl -LiteralPath (Get-KeyFile $old)).Access | Where-Object { $_.FileSystemRights -match 'Read' -and $_.AccessControlType -eq 'Allow' } | ForEach-Object { [string]$_.IdentityReference } | Where-Object { $_ -notmatch '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators)$' } | Select-Object -Unique) } catch { $grant = @() }
+            # the accounts that could use the previous key keep that right on the new one
+            $was = @(); try { $was = @([WebInv.SensorCert]::KeyReaders($old)) } catch { Write-Line ("  the previous key's readers could not be read: {0}" -f (Get-Inner $_)) 'Yellow' }
+            $base = @(); try { $base = @([WebInv.SensorCert]::KeyReaders($cert)) } catch { }
+            $grant = @($was | Where-Object { $base -notcontains $_ })
         }
         Grant-Key $cert $grant
         $where = 'LocalMachine\My'

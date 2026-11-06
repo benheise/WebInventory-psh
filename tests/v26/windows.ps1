@@ -71,12 +71,13 @@ try {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -TypeDefinition $Matches[1] -ReferencedAssemblies System.Core, System.IO.Compression -IgnoreWarnings
     function Get-SensorCerts { $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadOnly'); try { @($st.Certificates | Where-Object { [WebInv.SensorCert]::SensorId($_) -eq 'wi-ci01' }) } finally { $st.Close() } }
-    function Get-KeyAcl($c) { $k = [WebInv.SensorCert]::PrivateKey($c); try { $n = $k.Key.UniqueName } finally { $k.Dispose() }; (Get-Acl -LiteralPath (Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$n")).Access | ForEach-Object { [string]$_.IdentityReference } }
+    function Get-KeyAcl($c) { @([WebInv.SensorCert]::KeyReaders($c)) }
     function Test-Exportable($c) { try { [void]$c.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12); $true } catch { $false } }
 
     # ---- enroll
     $tok = (& $step ca token wi-ci01 --san urn:tideline:sensor:wi-ci01 --ca-url https://127.0.0.1:19100 --root $rootCrt --provisioner sensors@tideline --password-file $pw 2>$null).Trim()
     $rc = Run 'enroll' (Join-Path $dist 'Register-WebInventorySensor.ps1') @('-Token', $tok, '-GrantKeyAccess', (Quote 'NT AUTHORITY\NETWORK SERVICE'))
+    Write-Host ("::notice title=Tideline (Windows) enroll output::{0}" -f ((Get-Content (Join-Path $Work 'enroll.txt')) -join ' | ' -replace '::', ': :'))
     $certs = @(Get-SensorCerts)
     $pinned = Join-Path $env:ProgramData 'WebInventory\tideline-root.crt'
     $pinFp = if (Test-Path $pinned) { [WebInv.SensorCert]::Sha256Hex([WebInv.SensorCert]::LoadPem($pinned)[0].RawData) } else { '' }
@@ -127,7 +128,7 @@ try {
     $acl2 = if ($c2) { @(Get-KeyAcl $c2) } else { @() }
     $k2 = if ($c2) { [WebInv.SensorCert]::PrivateKey($c2) } else { $null }
     $newKey = $k2 -and $k2.Key.UniqueName -ne $k1.Key.UniqueName
-    $oldKeyGone = -not (Test-Path (Join-Path $env:ProgramData ("Microsoft\Crypto\Keys\{0}" -f $k1.Key.UniqueName)))
+    $oldKeyGone = $(try { [void][Security.Cryptography.CngKey]::Open($k1.Key.KeyName, [Security.Cryptography.CngProvider]::MicrosoftSoftwareKeyStorageProvider, [Security.Cryptography.CngKeyOpenOptions]::MachineKey); $false } catch { $true })
     if ($ok -and $newKey -and $oldKeyGone -and $acl2 -contains 'NT AUTHORITY\NETWORK SERVICE') { Pass ("renewed: {0} -> {1}, new non-exportable key, previous certificate and key removed, NETWORK SERVICE kept" -f $c1.Thumbprint.Substring(0, 8), $c2.Thumbprint.Substring(0, 8)) }
     else { Fail ("renew (exit $rc, $($certs.Count) certificates, new key $newKey, old key gone $oldKeyGone, ACL $($acl2 -join ','))") (Join-Path $Work 'renew.txt') }
     $out2 = Join-Path $Work 'out2'

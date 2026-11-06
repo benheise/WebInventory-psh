@@ -42,7 +42,7 @@
     Off Windows: where the certificate and key are kept (default ~/.config/webinventory/tideline-sensor.pfx).
 .PARAMETER GrantKeyAccess
     Windows: accounts that may use the private key (for example the account of the scheduled scan), besides
-    SYSTEM and Administrators.
+    SYSTEM and Administrators. Written to the key's own security descriptor; a renewal carries it over.
 .PARAMETER KeepPrevious
     -Renew: leave the previous certificate and key in place.
 .PARAMETER Force
@@ -82,6 +82,8 @@ using System.IO.Compression;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -726,6 +728,47 @@ namespace WebInv
             }
             if (first != null) throw new CryptographicException(first.Message, first);
             return null;
+        }
+
+        // who may use a Windows CNG key: its own security descriptor (NCRYPT_SECURITY_DESCR_PROPERTY), which the key
+        // storage provider keeps with the key; editing the key file's NTFS ACL is not the documented way for CNG keys
+        const CngPropertyOptions DaclInfo = (CngPropertyOptions)0x4;   // DACL_SECURITY_INFORMATION
+        static CommonSecurityDescriptor KeyDescriptor(CngKey key)
+        {
+            byte[] sd = key.GetProperty("Security Descr", DaclInfo).GetValue();
+            return new CommonSecurityDescriptor(false, false, sd, 0);
+        }
+        public static string[] KeyReaders(X509Certificate2 cert)
+        {
+            List<string> r = new List<string>();
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) return r.ToArray();
+                foreach (GenericAce a in KeyDescriptor(k.Key).DiscretionaryAcl)
+                {
+                    CommonAce c = a as CommonAce;
+                    if (c == null || c.AceQualifier != AceQualifier.AccessAllowed) continue;
+                    string n;
+                    try { n = c.SecurityIdentifier.Translate(typeof(NTAccount)).Value; } catch { n = c.SecurityIdentifier.Value; }
+                    if (!r.Contains(n)) r.Add(n);
+                }
+            }
+            return r.ToArray();
+        }
+        public static void GrantKeyRead(X509Certificate2 cert, string account)
+        {
+            SecurityIdentifier sid = account.StartsWith("S-1-", StringComparison.Ordinal) ? new SecurityIdentifier(account) : (SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier));
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) throw new CryptographicException("the key of " + cert.Thumbprint + " is not a Windows CNG key");
+                CommonSecurityDescriptor d = KeyDescriptor(k.Key);
+                d.DiscretionaryAcl.AddAccess(AccessControlType.Allow, sid, unchecked((int)0x80000000), InheritanceFlags.None, PropagationFlags.None);   // GENERIC_READ: use the key
+                byte[] b = new byte[d.BinaryLength];
+                d.GetBinaryForm(b, 0);
+                k.Key.SetProperty(new CngProperty("Security Descr", b, DaclInfo));
+            }
         }
 
         // ES256 (ECDSA P-256, SHA-256) over the exact bytes; IEEE P1363 (r || s), as .NET produces it
@@ -1516,24 +1559,15 @@ function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Wor
     $script:PendingMarker = $null
     $c
 }
-function Get-KeyFile($Cert) {
-    $k = [WebInv.SensorCert]::PrivateKey($Cert)
-    try { $name = $k.Key.UniqueName } finally { $k.Dispose() }
-    if (-not $name) { throw "the key of $($Cert.Thumbprint) has no unique name" }
-    $f = Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
-    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "the key file of $($Cert.Thumbprint) is not where machine keys live ($f)" }
-    $f
-}
 function Grant-Key($Cert, [string[]]$Accounts) {
-    if (-not $Accounts) { return }
-    $f = Get-KeyFile $Cert
-    $acl = Get-Acl -LiteralPath $f
-    foreach ($a in $Accounts) {
-        $sid = (New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier])
-        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Read', 'Allow')))
-        Write-Line ("  key readable by {0} ({1})" -f $a, (Split-Path -Leaf $f))
+    foreach ($a in @($Accounts | Where-Object { $_ })) {
+        [WebInv.SensorCert]::GrantKeyRead($Cert, $a)
+        Write-Line ("  key usable by {0}" -f $a)
     }
-    Set-Acl -LiteralPath $f -AclObject $acl
+    if (@($Accounts | Where-Object { $_ }).Count) {
+        $now = @([WebInv.SensorCert]::KeyReaders($Cert))
+        foreach ($a in @($Accounts | Where-Object { $_ })) { if ($now -notcontains $a -and $now -notcontains ((New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier]).Translate([Security.Principal.NTAccount]).Value)) { throw "the key's security descriptor does not list $a after the change (it lists: $($now -join ', '))" } }
+    }
 }
 function Test-NotExportable($Cert) {
     try { [void]$Cert.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12); $false } catch { $true }
@@ -1669,8 +1703,10 @@ try {
         $cert = Install-WindowsCert $j.Str('crt') $chain $work $req.Marker
         $grant = @($GrantKeyAccess)
         if (-not $grant.Count) {
-            # the accounts that could read the previous key keep that right on the new one
-            try { $grant = @((Get-Acl -LiteralPath (Get-KeyFile $old)).Access | Where-Object { $_.FileSystemRights -match 'Read' -and $_.AccessControlType -eq 'Allow' } | ForEach-Object { [string]$_.IdentityReference } | Where-Object { $_ -notmatch '^(NT AUTHORITY\\SYSTEM|BUILTIN\\Administrators)$' } | Select-Object -Unique) } catch { $grant = @() }
+            # the accounts that could use the previous key keep that right on the new one
+            $was = @(); try { $was = @([WebInv.SensorCert]::KeyReaders($old)) } catch { Write-Line ("  the previous key's readers could not be read: {0}" -f (Get-Inner $_)) 'Yellow' }
+            $base = @(); try { $base = @([WebInv.SensorCert]::KeyReaders($cert)) } catch { }
+            $grant = @($was | Where-Object { $base -notcontains $_ })
         }
         Grant-Key $cert $grant
         $where = 'LocalMachine\My'

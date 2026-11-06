@@ -77,6 +77,8 @@ using System.IO.Compression;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -721,6 +723,47 @@ namespace WebInv
             }
             if (first != null) throw new CryptographicException(first.Message, first);
             return null;
+        }
+
+        // who may use a Windows CNG key: its own security descriptor (NCRYPT_SECURITY_DESCR_PROPERTY), which the key
+        // storage provider keeps with the key; editing the key file's NTFS ACL is not the documented way for CNG keys
+        const CngPropertyOptions DaclInfo = (CngPropertyOptions)0x4;   // DACL_SECURITY_INFORMATION
+        static CommonSecurityDescriptor KeyDescriptor(CngKey key)
+        {
+            byte[] sd = key.GetProperty("Security Descr", DaclInfo).GetValue();
+            return new CommonSecurityDescriptor(false, false, sd, 0);
+        }
+        public static string[] KeyReaders(X509Certificate2 cert)
+        {
+            List<string> r = new List<string>();
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) return r.ToArray();
+                foreach (GenericAce a in KeyDescriptor(k.Key).DiscretionaryAcl)
+                {
+                    CommonAce c = a as CommonAce;
+                    if (c == null || c.AceQualifier != AceQualifier.AccessAllowed) continue;
+                    string n;
+                    try { n = c.SecurityIdentifier.Translate(typeof(NTAccount)).Value; } catch { n = c.SecurityIdentifier.Value; }
+                    if (!r.Contains(n)) r.Add(n);
+                }
+            }
+            return r.ToArray();
+        }
+        public static void GrantKeyRead(X509Certificate2 cert, string account)
+        {
+            SecurityIdentifier sid = account.StartsWith("S-1-", StringComparison.Ordinal) ? new SecurityIdentifier(account) : (SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier));
+            using (ECDsa e = PrivateKey(cert))
+            {
+                ECDsaCng k = e as ECDsaCng;
+                if (k == null) throw new CryptographicException("the key of " + cert.Thumbprint + " is not a Windows CNG key");
+                CommonSecurityDescriptor d = KeyDescriptor(k.Key);
+                d.DiscretionaryAcl.AddAccess(AccessControlType.Allow, sid, unchecked((int)0x80000000), InheritanceFlags.None, PropagationFlags.None);   // GENERIC_READ: use the key
+                byte[] b = new byte[d.BinaryLength];
+                d.GetBinaryForm(b, 0);
+                k.Key.SetProperty(new CngProperty("Security Descr", b, DaclInfo));
+            }
         }
 
         // ES256 (ECDSA P-256, SHA-256) over the exact bytes; IEEE P1363 (r || s), as .NET produces it
