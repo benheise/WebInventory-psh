@@ -3749,8 +3749,9 @@ try {
     }
     else {
         # Add-Type treats compiler warnings as errors; a newer .NET marking an API obsolete must not stop the tool from starting
+        # (nor print compiler warnings on every run: PowerShell 7.5+ shows them, for example SYSLIB0057 on .NET 9)
         # (CI compiles every block with warnings as errors on Windows PowerShell 5.1: .github/workflows/check.yml)
-        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
         Add-Type @addType
     }
@@ -8116,7 +8117,7 @@ function Initialize-Extras {
     }
     else {
         $swc = [Diagnostics.Stopwatch]::StartNew()
-        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
         Add-Type @addType
         Write-RunLog ("Extras compiled in {0} ms" -f $swc.ElapsedMilliseconds) 'DEBUG'
@@ -13141,7 +13142,7 @@ function Initialize-StoreEngine {
         return
     }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
+    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }   # see the engine compile
     if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
     Add-Type @addType
     if ($script:RunLog) { Write-RunLog ("Store engine compiled in {0} ms" -f $sw.ElapsedMilliseconds) 'DEBUG' }
@@ -15208,8 +15209,9 @@ namespace WebInv
             for (int i = 0; i < chunks.Count; i++)
             {
                 ShipPart p = new ShipPart();
-                p.Kind = kind; p.Schema = schema; p.Media = "application/x-ndjson"; p.Name = name; p.Path = path; p.Ndjson = true; p.Gzip = true;
+                p.Kind = kind; p.Schema = schema; p.Media = "application/x-ndjson"; p.Name = name; p.Path = path; p.Ndjson = true;
                 p.Offset = chunks[i][0]; p.Bytes = chunks[i][1];
+                p.Gzip = p.Bytes > 0;   // an empty part goes as it is: .NET 9's GZipStream writes no gzip member for no data
                 long rec = 0; long last = p.Offset - 1;
                 for (long j = p.Offset; j < p.Offset + p.Bytes; j++)
                     if (all[j] == (byte)'\n') { if (j - last > 1 && !(j - last == 2 && all[j - 1] == (byte)'\r')) rec++; last = j; }
@@ -15227,7 +15229,7 @@ namespace WebInv
             if (!File.Exists(path)) return;
             byte[] b = File.ReadAllBytes(path);
             ShipPart p = new ShipPart();
-            p.Kind = "artifact"; p.Role = role; p.Media = media; p.Name = name ?? Rel(path); p.Path = path; p.Gzip = gzip;
+            p.Kind = "artifact"; p.Role = role; p.Media = media; p.Name = name ?? Rel(path); p.Path = path; p.Gzip = gzip && b.LongLength > 0;
             p.Bytes = b.LongLength; p.Sha256 = SensorCert.Sha256Hex(b);
             CheckTool(p.Name, p.Sha256, p.Bytes);
             Parts.Add(p);
@@ -15591,7 +15593,7 @@ function Initialize-ShipCode([string]$Version) {
         if ([WebInv.ShipInfo]::Version -ne $Version) { throw ("WebInv shipping code v{0} is already loaded in this PowerShell session (script is v{1}). Open a new PowerShell window." -f [WebInv.ShipInfo]::Version, $Version) }
         return
     }
-    $addType = @{ TypeDefinition = $ShipSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+    $addType = @{ TypeDefinition = $ShipSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
     if ($PSVersionTable.PSEdition -ne 'Core') {
         Add-Type -AssemblyName System.IO.Compression
         $addType.ReferencedAssemblies = @('System.Core', 'System.IO.Compression')

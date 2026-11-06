@@ -14,7 +14,7 @@ function Initialize-ShipCode([string]$Version) {
         if ([WebInv.ShipInfo]::Version -ne $Version) { throw ("WebInv shipping code v{0} is already loaded in this PowerShell session (script is v{1}). Open a new PowerShell window." -f [WebInv.ShipInfo]::Version, $Version) }
         return
     }
-    $addType = @{ TypeDefinition = $ShipSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+    $addType = @{ TypeDefinition = $ShipSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
     if ($PSVersionTable.PSEdition -ne 'Core') {
         Add-Type -AssemblyName System.IO.Compression
         $addType.ReferencedAssemblies = @('System.Core', 'System.IO.Compression')

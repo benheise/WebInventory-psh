@@ -435,8 +435,9 @@ try {
     }
     else {
         # Add-Type treats compiler warnings as errors; a newer .NET marking an API obsolete must not stop the tool from starting
+        # (nor print compiler warnings on every run: PowerShell 7.5+ shows them, for example SYSLIB0057 on .NET 9)
         # (CI compiles every block with warnings as errors on Windows PowerShell 5.1: .github/workflows/check.yml)
-        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
+        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true; WarningAction = 'SilentlyContinue' }
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
         Add-Type @addType
     }

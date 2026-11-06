@@ -797,8 +797,9 @@ namespace WebInv
             for (int i = 0; i < chunks.Count; i++)
             {
                 ShipPart p = new ShipPart();
-                p.Kind = kind; p.Schema = schema; p.Media = "application/x-ndjson"; p.Name = name; p.Path = path; p.Ndjson = true; p.Gzip = true;
+                p.Kind = kind; p.Schema = schema; p.Media = "application/x-ndjson"; p.Name = name; p.Path = path; p.Ndjson = true;
                 p.Offset = chunks[i][0]; p.Bytes = chunks[i][1];
+                p.Gzip = p.Bytes > 0;   // an empty part goes as it is: .NET 9's GZipStream writes no gzip member for no data
                 long rec = 0; long last = p.Offset - 1;
                 for (long j = p.Offset; j < p.Offset + p.Bytes; j++)
                     if (all[j] == (byte)'\n') { if (j - last > 1 && !(j - last == 2 && all[j - 1] == (byte)'\r')) rec++; last = j; }
@@ -816,7 +817,7 @@ namespace WebInv
             if (!File.Exists(path)) return;
             byte[] b = File.ReadAllBytes(path);
             ShipPart p = new ShipPart();
-            p.Kind = "artifact"; p.Role = role; p.Media = media; p.Name = name ?? Rel(path); p.Path = path; p.Gzip = gzip;
+            p.Kind = "artifact"; p.Role = role; p.Media = media; p.Name = name ?? Rel(path); p.Path = path; p.Gzip = gzip && b.LongLength > 0;
             p.Bytes = b.LongLength; p.Sha256 = SensorCert.Sha256Hex(b);
             CheckTool(p.Name, p.Sha256, p.Bytes);
             Parts.Add(p);
