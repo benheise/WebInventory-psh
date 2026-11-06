@@ -74,6 +74,38 @@ jobs:
               Get-ChildItem -Filter 'WebInventory_*_error.log' | Get-Content | Select-Object -First 9 | ForEach-Object { Write-Output "::warning title=error log::$_" }
               exit 1
           }
+      - name: Cloud ranges against a Python oracle; CNAME chains against Resolve-DnsName (Windows DNS client)
+        if: success() || failure()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          trap { Write-Host ("::error title=cloud/CNAME step::{0}" -f (($_ | Out-String) -replace '\r?\n', ' ')); exit 1 }
+          $rc = 0
+          $o = @(python tests/cloud/oracle.py --shell powershell --n 20000 2>&1 | ForEach-Object { "$_" }); $orc = $LASTEXITCODE
+          $o | ForEach-Object { Write-Host $_ }
+          Write-Host ("::{0} title=cloud lookup (Windows PowerShell 5.1)::{1}" -f $(if ($orc) { 'error' } else { 'notice' }), ($o | Where-Object { $_ -match 'mismatches' } | Select-Object -Last 1))
+          if ($orc) { $rc = 1 }
+          # the same answers through the same DNS client cache: our DnsQuery_W chain first, then Resolve-DnsName's CNAME records
+          $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'))
+          if ($script -notmatch "(?s)\`$ExtrasSource = @'\r?\n(.*?)\r?\n'@") { throw 'extras block not found' }
+          Add-Type -TypeDefinition $Matches[1] -ReferencedAssemblies System.Core -IgnoreWarnings
+          $same = 0; $names = 'www.github.com', 'www.microsoft.com', 'www.office.com', 'docs.python.org', 'learn.microsoft.com'
+          foreach ($n in $names) {
+              # CDN names can answer differently from one query to the next: a difference is asked once more
+              for ($try = 0; $try -lt 2; $try++) {
+                  $e = $null; $mine = @([WebInv.Cname]::Chain($n, $null, 5000, [ref]$e))
+                  $ref = @(Resolve-DnsName -Name $n -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'CNAME' } | ForEach-Object { $_.NameHost.ToLowerInvariant().TrimEnd('.') })
+                  $ok = $null -eq $e -and ($mine -join ' > ') -eq ($ref -join ' > ')
+                  if ($ok) { break }
+              }
+              if ($ok) { $same++ }
+              $line = "{0}: DnsQuery_W [{1}] Resolve-DnsName [{2}] {3}" -f $n, ($mine -join ' > '), ($ref -join ' > '), $(if ($ok) { 'same' } else { "DIFFERENT $e" })
+              Write-Host $line
+              if (-not $ok) { Write-Host ("::warning title=CNAME differs::{0}" -f $line) }
+          }
+          Write-Host ("::{0} title=CNAME (Windows DNS client)::{1} of {2} names give the same chain as Resolve-DnsName" -f $(if ($same -eq $names.Count) { 'notice' } else { 'error' }), $same, $names.Count)
+          if ($same -ne $names.Count) { $rc = 1 }
+          exit $rc
       - name: Store validation (ESENT against the portable engine, hard kills, rebuild)
         if: success() || failure()
         shell: powershell
@@ -126,6 +158,36 @@ jobs:
           check 'SelfTest (PowerShell 7)' -SelfTest || rc=1
           check 'TestRules (PowerShell 7)' -TestRules || rc=1
           if [ $rc != 0 ]; then head -9 WebInventory_*_error.log 2>/dev/null | sed 's/^/::warning title=error log::/'; fi
+          exit $rc
+      - name: Cloud ranges against a Python oracle; CNAME chains over UDP against dig
+        if: success() || failure()
+        run: |
+          rc=0
+          python3 tests/cloud/oracle.py --n 20000 > oracle.txt 2>&1 || rc=1
+          cat oracle.txt
+          echo "::$([ $rc = 0 ] && echo notice || echo error) title=cloud lookup (PowerShell 7)::$(grep mismatches oracle.txt | tail -1)"
+          command -v dig > /dev/null || sudo apt-get install -y -qq dnsutils > /dev/null
+          cat > cn.ps1 <<'PS'
+          $code = [IO.File]::ReadAllText("$env:GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1")
+          if ($code -notmatch "(?s)\`$ExtrasSource = @'\r?\n(.*?)\r?\n'@") { throw 'extras block not found' }
+          Add-Type -TypeDefinition $Matches[1] -IgnoreWarnings
+          foreach ($n in $args) { $e = $null; $c = [WebInv.Cname]::Chain($n, $null, 5000, [ref]$e); "{0} {1} {2}" -f $n, (@($c) -join '>'), $e }
+          PS
+          names="www.github.com www.microsoft.com www.office.com docs.python.org learn.microsoft.com"
+          same=0; total=0
+          for n in $names; do
+            total=$((total+1))
+            for try in 1 2; do   # CDN names can answer differently from one query to the next: ask a difference once more
+              got=$(pwsh -NoProfile -File cn.ps1 "$n" | awk -v n="$n" '$1==n {print $2}')
+              ref=$(dig +short "$n" A | grep -E '\.$' | sed 's/\.$//' | tr 'A-Z' 'a-z' | paste -sd '>' -)
+              [ "$got" = "$ref" ] && break
+            done
+            echo "$n: UDP [$got] dig [$ref]"
+            [ "$got" = "$ref" ] || echo "::warning title=CNAME differs::$n: UDP [$got] dig [$ref]"
+            [ "$got" = "$ref" ] && same=$((same+1))
+          done
+          echo "::$([ $same = $total ] && echo notice || echo error) title=CNAME (UDP, PowerShell 7)::$same of $total names give the same chain as dig"
+          [ $same = $total ] || rc=1
           exit $rc
       - name: Checksums match
         working-directory: dist

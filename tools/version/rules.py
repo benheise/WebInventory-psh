@@ -538,7 +538,6 @@ NO_VERSION = {
     'OpenBSD httpd': ('hidden', ''),
     'Lotus-Domino': ('hidden', 'Server: Lotus-Domino without version (the mail banners of the same server carry it, on other ports)'),
     'HCL Domino': ('hidden', 'see Lotus-Domino'),
-    'Cloudflare': ('not-version', "the Cloudflare detection is the CDN (headers, cookies); NVD's cloudflare:cloudflare entries are the WordPress plugin, whose readme says nothing about the CDN"),
     'UNIX': ('platform', 'a generic OS name'),
     'Red Hat': ('platform', 'Red Hat Enterprise Linux from a Server token'), 'Gentoo': ('platform', ''), 'Gentoo Linux': ('platform', ''),
     'Conectiva Linux': ('platform', ''), 'Trustix Secure Linux': ('platform', ''), 'SGI Irix': ('platform', ''), 'NetBSD': ('platform', ''),

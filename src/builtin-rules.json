@@ -1,4 +1,4 @@
-{"name":"builtin","version":"2.4.1","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.5.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -164,6 +164,8 @@
 {"id":"b:t-pbirs","f":"title","r":"^Power BI Report Server","n":"Power BI Report Server","c":"Web application","k":95,"p":"cpe:2.3:a:microsoft:power_bi_report_server:{v}"},
 {"id":"b:t-jenkins","f":"title","r":"\\[Jenkins\\]$|^Jenkins$","n":"Jenkins","c":"CI/CD","p":"cpe:2.3:a:jenkins:jenkins:*","k":90},
 {"id":"b:t-gitlab","f":"title","r":"(?:^|· )GitLab$","n":"GitLab","c":"CI/CD","p":"cpe:2.3:a:gitlab:gitlab:*","k":90},
+{"id":"b:m-forgejo","f":"meta:keywords","r":"(?:^|,)\\s*forgejo\\s*(?:,|$)","o":"i","n":"Forgejo","c":"CI/CD","p":"cpe:2.3:a:forgejo:forgejo:*","k":90,"xs":["Gitea"],"ex":"git,forge,forgejo"},
+{"id":"b:b-forgejo","f":"body","r":"<html\\b[^>]*\\bdata-theme=\"forgejo-","n":"Forgejo","c":"CI/CD","p":"cpe:2.3:a:forgejo:forgejo:*","k":90,"xs":["Gitea"],"ex":"<html lang=\"en-US\" data-theme=\"forgejo-auto\">"},
 {"id":"b:t-gitea","f":"title","r":"Gitea(?:: Git with a cup of tea)?$","n":"Gitea","c":"CI/CD","p":"cpe:2.3:a:gitea:gitea:*","k":85},
 {"id":"b:t-gogs","f":"title","r":"\\bGogs\\b","n":"Gogs","c":"CI/CD","k":85,"p":"cpe:2.3:a:gogs:gogs:{v}"},
 {"id":"b:t-jira","f":"title","r":"\\b(?:JIRA|Jira)\\b","n":"Atlassian Jira","c":"Collaboration","p":"cpe:2.3:a:atlassian:jira:*","k":75},

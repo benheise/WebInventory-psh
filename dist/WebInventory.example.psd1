@@ -15,6 +15,7 @@
     # VersionPaths = $true          # one GET to a detected product's version URL when the page showed no version
     ProbeSans     = $true            # vhosts from certificate SANs that resolve to the same IP
     ReverseDns    = $true
+    # Cname       = $true          # CNAME chain of each hostname target (one DNS query per name to this host's resolvers)
     # TlsFingerprint = $true         # JARM (+10 handshakes per TLS service) and JA4S (see the FoxIO licence note)
     # Smb  = $true                   # TCP 445: dialect, signing, SMBv1, names/domain/build (no login)
     # Rdp  = $true                   # TCP 3389: NLA, security protocol, certificate, names/build (no login)

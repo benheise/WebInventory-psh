@@ -13,7 +13,16 @@ $Columns = @(
     # v2.3 (appended so existing CSV consumers keep their column positions)
     'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s',
     # v2.4 (appended)
-    'VersionPaths')
+    'VersionPaths',
+    # v2.5 (appended)
+    'Cname', 'Cloud', 'CloudRegion', 'CloudService')
+
+# a results CSV with at least one data row (exit code 4 of a resumed run counts earlier sessions' rows)
+function Test-CsvHasRows([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    $sr = New-Object IO.StreamReader($Path)
+    try { [void]$sr.ReadLine(); while ($null -ne ($l = $sr.ReadLine())) { if ($l.Trim()) { return $true } }; return $false } finally { $sr.Dispose() }
+}
 
 function Open-Outputs {
     param([string]$Dir, [string]$RunId)
@@ -129,7 +138,10 @@ function New-HtmlReport {
                 cd = $_.CertDaysLeft; cs = $_.CertSubject; ci = $_.CertIssuer; san = $_.CertSANs; f = $_.Flags; fav = $_.FaviconMmh3; cpe = $_.CPEs
                 vh = $_.VhostOf; rd = $_.ReverseDns; au = $_.Auth; fu = $_.FinalUrl; rc = $_.RedirectChain; b = $_.Banner; n = $_.Notes; adv = $_.Advisories
                 dn = $_.DeviceName; dom = $_.Domain; pi = $_.ProtocolInfo; jarm = $_.Jarm; ja4s = $_.Ja4s
-                shot = $(if ($Screenshots -and $Screenshots.ContainsKey([string]$_.Url)) { $Screenshots[[string]$_.Url] } else { '' }) } })
+                cn = $_.Cname; cl = (@($_.Cloud, $_.CloudRegion, $_.CloudService) | Where-Object { $_ }) -join ' / '
+                shot = $(if ($Screenshots -and $Screenshots.ContainsKey([string]$_.Url)) { $Screenshots[[string]$_.Url] } else { '' })
+                shs = $(if ($script:ShotMeta -and $script:ShotMeta.ContainsKey([string]$_.Url)) { $script:ShotMeta[[string]$_.Url][0] } else { '' })
+                shr = $(if ($script:ShotMeta -and $script:ShotMeta.ContainsKey([string]$_.Url)) { $script:ShotMeta[[string]$_.Url][1] } else { '' }) } })
     # strip control characters (ANSI escapes etc. from hostile headers) - they are inert in textContent but unreadable
     foreach ($o in $data) { foreach ($k in @($o.Keys)) { $o[$k] = [WebInv.Util]::Printable([string]$o[$k], 8000) } }
     $json = if ($data.Count) { ConvertTo-Json -InputObject $data -Compress -Depth 3 } else { '[]' }
@@ -179,7 +191,7 @@ var crit=/CertExpired|WeakCipher|CleartextAuth|ADCSWebEnrollment|DirectoryListin
 var meta=document.getElementById('meta');meta.textContent='Run '+(M.RunId||'')+(M.Tag?' \u00b7 '+M.Tag:'')+' \u00b7 '+(M.Started||'')+' \u00b7 '+(M.Duration||'')+' \u00b7 '+(M.Operator||'')+' on '+(M.Computer||'')+' \u00b7 v'+(M.Version||'');
 var web=D.filter(function(r){return r.w==='True'}),hosts={},tlsN=0,flagged=0,exp=0,mg=0,adv=0;
 D.forEach(function(r){hosts[r.ip]=1;if(r.tls||r.tsup)tlsN++;if(r.f)flagged++;var d=parseInt(r.cd,10);if(!isNaN(d)&&d<=30)exp++;if(/MgmtInterface/.test(r.f))mg++;if(/PHP2Shell:(vulnerable|eol)/.test(r.f))adv++});
-[['Web services',web.length],['Hosts',Object.keys(hosts).length],['Open services',D.length],['TLS endpoints',tlsN],['Flagged',flagged],['Certs \u2264 30 days',exp],['Mgmt interfaces',mg],['Advisory exposures',adv]].forEach(function(c){var d=el('div','card');d.appendChild(el('b',null,c[1]));d.appendChild(el('span',null,c[0]));document.getElementById('cards').appendChild(d)});
+[['Web services',web.length],['Hosts',Object.keys(hosts).length],['Open services',D.length],['TLS endpoints',tlsN],['Flagged',flagged],['Certs \u2264 30 days',exp],['Mgmt interfaces',mg],['Advisory exposures',adv],['In cloud / CDN ranges',D.filter(function(r){return r.cl}).length]].forEach(function(c){var d=el('div','card');d.appendChild(el('b',null,c[1]));d.appendChild(el('span',null,c[0]));document.getElementById('cards').appendChild(d)});
 function tally(key,split){var m={};D.forEach(function(r){(r[key]||'').split(split).forEach(function(x){x=x.trim();if(!x)return;if(key==='f')x=x.split(':')[0];m[x]=(m[x]||0)+1})});return Object.keys(m).map(function(k){return[k,m[k]]}).sort(function(a,b){return b[1]-a[1]}).slice(0,12)}
 function bars(id,list){var box=document.getElementById(id),max=list.length?list[0][1]:1;list.forEach(function(p){var b=el('div','bar');var i=el('i');i.style.width=Math.max(4,Math.round(120*p[1]/max))+'px';b.appendChild(i);b.appendChild(el('span',null,p[0]));b.appendChild(el('em',null,p[1]));b.onclick=function(){q.value=p[0];render()};box.appendChild(b)});if(!list.length)box.appendChild(el('span','count','none'))}
 bars('lp',tally('pr',';'));bars('lf',tally('f',';'));bars('lc',tally('c',';'));
@@ -192,7 +204,7 @@ var p=el('td');(r.pr||'').split(';').forEach(function(x){if(x.trim())p.appendChi
 tr.appendChild(el('td',null,(r.tls||'')+(r.h2==='True'?' h2':'')+(r.tsup&&!r.tls?' raw:'+r.tsup:'')));
 var d=parseInt(r.cd,10),cd=el('td',isNaN(d)?null:(d<0?'bad':(d<=30?'warn':'ok')),r.cd);tr.appendChild(cd);
 var fl=el('td');(r.f||'').split(';').forEach(function(x){if(x)fl.appendChild(el('span','chip '+(crit.test(x)?'bad':'warn'),x))});tr.appendChild(fl);
-tr.onclick=function(){var n=tr.nextSibling;if(n&&n.className==='d'){n.remove();return}var dr=el('tr','d'),td=el('td');td.colSpan=7;var lines=[['Host',r.h],['IP',r.ip],['Port',r.p],['Reverse DNS',r.rd],['Service',r.sv],['Device name',r.dn],['Domain',r.dom],['Protocol',r.pi],['Final URL',r.fu],['Redirects',r.rc],['Server',r.srv],['Auth',r.au],['Categories',r.c],['OS hint',r.os],['Hardware',r.hw],['CPEs',r.cpe],['TLS supported',r.tsup],['Cert subject',r.cs],['Cert issuer',r.ci],['SANs',r.san],['Favicon mmh3',r.fav],['JARM',r.jarm],['JA4S',r.ja4s],['Advisories',r.adv],['Banner',r.b],['Notes',r.n]].filter(function(x){return x[1]}).map(function(x){return x[0]+': '+x[1]}).join('\n');td.appendChild(el('pre',null,lines));if(r.shot&&/^[\w.\-]+\/[\w.\-]+\.png$/.test(r.shot)){var a=el('a');a.href=r.shot;a.target='_blank';a.rel='noopener';var im=el('img');im.src=r.shot;im.alt='screenshot of '+r.u;im.loading='lazy';im.style.maxWidth='min(100%,960px)';im.style.border='1px solid var(--bd,#888)';a.appendChild(im);td.appendChild(a)}dr.appendChild(td);tr.parentNode.insertBefore(dr,tr.nextSibling)};
+tr.onclick=function(){var n=tr.nextSibling;if(n&&n.className==='d'){n.remove();return}var dr=el('tr','d'),td=el('td');td.colSpan=7;var lines=[['Host',r.h],['IP',r.ip],['Port',r.p],['Reverse DNS',r.rd],['CNAME',(r.cn||'').split(';').join(' > ')],['Cloud',r.cl],['Service',r.sv],['Device name',r.dn],['Domain',r.dom],['Protocol',r.pi],['Final URL',r.fu],['Redirects',r.rc],['Server',r.srv],['Auth',r.au],['Categories',r.c],['OS hint',r.os],['Hardware',r.hw],['CPEs',r.cpe],['TLS supported',r.tsup],['Cert subject',r.cs],['Cert issuer',r.ci],['SANs',r.san],['Favicon mmh3',r.fav],['JARM',r.jarm],['JA4S',r.ja4s],['Advisories',r.adv],['Banner',r.b],['Notes',r.n]].filter(function(x){return x[1]}).map(function(x){return x[0]+': '+x[1]}).join('\n');td.appendChild(el('pre',null,lines));if(r.shs&&r.shs!=='ok'){td.appendChild(el('div','chip '+(r.shs==='failed'?'bad':'warn'),'Screenshot '+r.shs+(r.shr?': '+r.shr:'')))}if(r.shot&&/^[\w.\-]+\/[\w.\-]+\.png$/.test(r.shot)){var a=el('a');a.href=r.shot;a.target='_blank';a.rel='noopener';var im=el('img');im.src=r.shot;im.alt='screenshot of '+r.u;im.loading='lazy';im.style.maxWidth='min(100%,960px)';im.style.border='1px solid var(--bd,#888)';a.appendChild(im);td.appendChild(a)}dr.appendChild(td);tr.parentNode.insertBefore(dr,tr.nextSibling)};
 tb.appendChild(tr)})}
 Array.prototype.forEach.call(document.querySelectorAll('th'),function(th){th.onclick=function(){var k=th.getAttribute('data-k');if(sortK===k)sortD=-sortD;else{sortK=k;sortD=1}render()}});
 q.oninput=render;sv.onchange=render;

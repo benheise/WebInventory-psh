@@ -898,6 +898,8 @@ REPLACE = [
     ('Sitecore', 'a:sitecore:*', 'a:sitecore:experience_platform'),
     ('Okta', 'a:okta:*', ''),
     ('Salesforce', 'a:salesforce:*', ''),
+    # v2.5: NVD's cloudflare:cloudflare is "Cloudflare for WordPress" (a plugin); the detection is Cloudflare's CDN edge
+    ('Cloudflare', 'a:cloudflare:cloudflare', ''),
 ]
 
 # NVD files the same product under several names over time (vendor renames, product renames, firmware vs software);

@@ -246,3 +246,34 @@ and the scan phases are unchanged. The difference is within the 0.35 s spread v2
 Kelvin sign, long s, dotted and dotless I now fold onto k, s and i on every runtime). One run each of the lab, the
 200-service farm and the closed-port sweep: identical to 2.4.0 field by field (farm 10.98 s, lab 38.96 s, closed
 11.41 s).
+
+## v2.5.0: same scan path; cloud lookup only on public addresses; `-Cname` costs one DNS query per name
+
+v2.5.0 adds:
+- the cloud/CDN range lookup (offline; the 3.2 MB file loads in about 0.27 s, only when a service on a public address
+  answers);
+- `-Cname` (opt-in, one DNS query per hostname target);
+- the screenshot checks (after the scan);
+- exit code 4;
+- the raw-ClientHello certificate fallback for RDP. The engine's raw TLS hello now runs on a given stream; the HTTPS
+  probe calls it on its own connection as before.
+
+Interleaved A/B against v2.4.1 on the same lab, two runs each (PowerShell 7.4, 2 vCPU):
+
+| Scenario | v2.4.1 wall (s) | v2.5.0 wall (s) |
+|---|---|---|
+| farm (200 services) | 10.94, 11.40 | 11.28, 11.36 |
+| lab (26 services, all probes of the lab profile) | 38.92, 38.62 | 38.90, 38.85 |
+| closed ports | 10.69, 10.73 (exit 0) | 10.41, 10.28 (exit 4: nothing answered) |
+| startup only | 3.16, 3.29 | 3.01, 3.15 |
+
+Accuracy, field by field (`tests/perf/golden.py`, CSV and JSONL): lab, farm and closed-port runs of v2.5.0 are
+identical to v2.4.1 (0 differences; the four new columns are empty, since every lab address is loopback and no target
+was looked up with `-Cname`). The cloud ranges were never loaded in these runs, because no service had a public
+address.
+
+With `-Cname` the lab run is identical too. Its target phase took 0.65 s instead of about 0.2 s: one query per lab
+name to the workspace's resolvers, which do not know the lab names, so they come back with no CNAME.
+
+Cloud lookup on its own: loading the 92,358 prefixes takes about 0.27 s; a lookup takes about 10 µs (80,000 lookups,
+including PowerShell's loop overhead, in 0.84 s).

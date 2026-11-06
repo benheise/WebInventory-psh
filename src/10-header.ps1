@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.4.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.5.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -12,6 +12,10 @@
     enumeration. The optional -IdentifyPaths switch requests a fixed list of 16 public product
     landing/version pages; the optional -VersionPaths switch requests a product's documented version URL only
     after that product was detected without a version. Both are off by default.
+
+    Each service's IP is matched offline against the IP ranges cloud and CDN providers publish
+    (WebInventory.cloud.json next to the script): Cloud, CloudRegion and CloudService columns. The optional -Cname
+    switch records the CNAME chain of every hostname target (one DNS query per name to this host's resolvers).
 
     Console output shows positive hits only (nmap --open behaviour). A run log and an error log are
     written to the CURRENT directory; results go to CSV + JSONL (+ HTML report) in -OutputDir.
@@ -48,6 +52,18 @@
     Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
     that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
     their status codes are listed in the VersionPaths column.
+.PARAMETER Cname
+    Opt-in: record the CNAME chain of each hostname target in the Cname column (targets given as names; SAN virtual hosts
+    are not looked up). One A query per name to this host's DNS resolvers, never to the targets. On Windows through the
+    system DNS client (same servers, suffix search and policy table as the OS); elsewhere a standard UDP query.
+.PARAMETER DnsServer
+    With -Cname: ask this DNS server (IP address, optionally :port; several separated by commas) instead of the system
+    resolvers. The name is sent exactly as given (no suffix search).
+.PARAMETER CloudFile
+    Cloud/CDN IP ranges to match each service's IP against (default: WebInventory.cloud.json next to the script, when
+    present). Built from the providers' own published lists by tools/cloud/build.py; refreshed weekly in the repository.
+.PARAMETER NoCloud
+    Do not load the cloud/CDN IP ranges: the Cloud, CloudRegion and CloudService columns stay empty.
 .PARAMETER ProbeSans
     For HTTPS services, re-request / using each certificate SAN that resolves to the SAME IP as Host/SNI and
     record distinct virtual hosts as extra rows.
@@ -61,8 +77,9 @@
     Also check TCP 445 on every target host: SMB dialect, signing, SMBv1, and the server's NetBIOS/DNS names, domain and
     Windows build from the first (unauthenticated) NTLM challenge. No login, no null session, no share listing.
 .PARAMETER Rdp
-    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate, and
-    the server names and Windows build from the NTLM challenge. No login.
+    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate (with a
+    raw ClientHello when Schannel cannot handshake), and the server names and Windows build from the NTLM challenge.
+    No login.
 .PARAMETER Snmp
     Also query UDP 161 for sysDescr, sysObjectID, sysName and sysLocation. Needs -SnmpCommunity (v1/v2c) or
     -SnmpCredential (v3); a community is never guessed. With neither, only SNMPv3 engine discovery is sent (no credentials).
@@ -162,7 +179,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.4.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.5.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -206,6 +223,10 @@ param(
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
+    [switch]$Cname,
+    [string]$DnsServer,
+    [string]$CloudFile,
+    [switch]$NoCloud,
     [switch]$FollowOffHost,
     [string]$UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebInventory/2.0 (authorized asset inventory)',
     [ValidateRange(1, 3650)][int]$CertWarnDays = 30,
@@ -285,7 +306,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.4.1'
+$ScriptVersion = '2.5.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 

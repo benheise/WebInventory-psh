@@ -86,6 +86,7 @@ function Remove-ProfileDir([string]$Dir) {
 function Invoke-Screenshots {
     param([string]$CsvFile)
     $index = @{}
+    $script:ShotMeta = @{}
     $rows = @(Import-Csv -LiteralPath $CsvFile | Where-Object { $_.IsWeb -eq 'True' -and $_.Url -match '^https?://' })
     $folderName = 'WebInventory_{0}_screenshots' -f $script:RunId
     $folder = Join-Path $OutputDir $folderName
@@ -131,7 +132,13 @@ function Invoke-Screenshots {
         $n = 0
         foreach ($r in $rows) {
             $n++
-            if ($prev.ContainsKey($r.Url)) { $out.Add($prev[$r.Url]); $index[$r.Url] = ($prev[$r.Url].File -replace '\\', '/'); continue }
+            if ($prev.ContainsKey($r.Url)) {
+                # an image a previous session of this run took (resumed run); index files before v2.5 lack the newer columns
+                $pv = $prev[$r.Url]
+                $o = [ordered]@{}; foreach ($c in 'Url', 'Host', 'IP', 'Port', 'File', 'Sha256', 'Bytes', 'Status', 'Reason', 'PageTitle', 'PageRequests', 'BlockedOrigins', 'ProxyRefused', 'Ms', 'BrowserUrl', 'BrowserStatus', 'Capture') { $o[$c] = [string]$pv.$c }
+                $out.Add([pscustomobject]$o); $index[$r.Url] = ($pv.File -replace '\\', '/'); $script:ShotMeta[[string]$r.Url] = @('ok', [string]$pv.Reason)
+                continue
+            }
             $uh = ([Uri]$r.Url).Host.Trim('[', ']')
             $name = ('{0:D4}_{1}_{2}.png' -f $n, ($uh -replace '[^\w.\-]', '_'), $r.Port)
             $queue.Enqueue([pscustomobject]@{ Row = $r; Name = $name })
@@ -158,8 +165,8 @@ function Invoke-Screenshots {
                 Stop-ProcessTree $j.Proc; [void]$j.Proc.WaitForExit(5000)
                 $j.Proxy.Dispose()
                 $status = if ($j.Cap.Done) { $j.Cap.Status } elseif ($j.Proc.HasExited -and -not $timedOut) { 'failed: the browser exited' } else { 'timeout' }
-                $sha = ''; $bytes = 0
-                if ($status -like 'ok*' -and (Test-Path -LiteralPath $j.File)) { $b = [IO.File]::ReadAllBytes($j.File); $bytes = $b.Length; $sha = [WebInv.Hash]::Sha256Hex($b) }
+                $sha = ''; $bytes = 0; $img = $null
+                if ($status -like 'ok*' -and (Test-Path -LiteralPath $j.File)) { $b = [IO.File]::ReadAllBytes($j.File); $bytes = $b.Length; $sha = [WebInv.Hash]::Sha256Hex($b); $img = [WebInv.Png]::Analyze($b) }
                 elseif (Test-Path -LiteralPath $j.File) { Remove-Item -LiteralPath $j.File -Force -ErrorAction SilentlyContinue }
                 # resources the page asked for outside the scanned origins (refused by the proxy); browser chatter is not counted
                 $allow = $byIp[$j.Q.Row.IP]
@@ -172,12 +179,22 @@ function Invoke-Screenshots {
                     $o2 = ('{0}:{1}' -f $u2.Host.Trim('[', ']'), $u2.Port).ToLowerInvariant()
                     if (-not $allow.ContainsKey($o2) -and -not $denied.Contains($o2)) { $denied.Add($o2) }
                 }
+                # does the image show this service? (the page the browser ended on, its HTTP status, pixels, title)
+                # the page the main document came from (MainUrl; location.href is chrome-error://... on the browser's error page)
+                $fin = [string]$j.Cap.FinalUrl
+                $land = if ($j.Cap.MainUrl -match '^https?://') { [string]$j.Cap.MainUrl } else { $fin }
+                $landIn = $true
+                if ($land -match '^https?://') { try { $lu = [Uri]$land; $landIn = $allow.ContainsKey(('{0}:{1}' -f $lu.Host.Trim('[', ']'), $lu.Port).ToLowerInvariant()) } catch { $landIn = $true } }
+                $cls = [WebInv.ShotCheck]::Classify([string]$status, [bool]$bytes, $img, [string]$j.Q.Row.Title, [string]$j.Cap.Title, [string]$j.Q.Row.StatusCode, [int]$j.Cap.MainStatus, $(if ($landIn) { $fin } else { $land }), $landIn, [string]$j.Q.Row.BodyLength, ($denied.ToArray() -join ';'), [int]$j.Cap.TextLength)
                 $out.Add([pscustomobject][ordered]@{ Url = $j.Q.Row.Url; Host = $j.Q.Row.Host; IP = $j.Q.Row.IP; Port = $j.Q.Row.Port
-                        File = $(if ($bytes) { '{0}/{1}' -f $folderName, $j.Q.Name } else { '' }); Sha256 = $sha; Bytes = $bytes; Status = $status
+                        File = $(if ($bytes) { '{0}/{1}' -f $folderName, $j.Q.Name } else { '' }); Sha256 = $sha; Bytes = $bytes; Status = $cls[0]; Reason = [WebInv.Util]::Printable($cls[1], 400)
                         PageTitle = [WebInv.Util]::Printable($j.Cap.Title, 200); PageRequests = $pageReq; BlockedOrigins = ($denied.ToArray() -join ';'); ProxyRefused = $j.Proxy.Denied; Ms = $j.Sw.ElapsedMilliseconds
+                        BrowserUrl = [WebInv.Util]::Printable($fin, 400); BrowserStatus = $(if ($j.Cap.MainStatus -gt 0) { $j.Cap.MainStatus } else { '' }); Capture = $status
                     })
                 if ($bytes) { $index[$j.Q.Row.Url] = '{0}/{1}' -f $folderName, $j.Q.Name }
+                $script:ShotMeta[[string]$j.Q.Row.Url] = @($cls[0], [string]$cls[1])
                 if ($status -notlike 'ok*') { Write-ErrLog 'SCREENSHOT' $j.Q.Row.Url $status }
+                elseif ($cls[0] -ne 'ok') { Write-RunLog ("screenshot {0}: {1} - {2}" -f $j.Q.Row.Url, $cls[0], $cls[1]) 'WARN' }
                 Remove-ProfileDir $j.Dir
                 [void]$running.Remove($j); $done++
             }
@@ -189,13 +206,27 @@ function Invoke-Screenshots {
         # (no @() around the List: PowerShell 7.4 throws 'Argument types do not match' for some empty generic lists)
         if ($running) { foreach ($j in $running.ToArray()) { Stop-ProcessTree $j.Proc; try { $j.Proxy.Dispose() } catch { } } }
         Remove-ProfileDir $tmpRoot
+        # the same image for pages the scan saw with different titles: a shared error or proxy page, not each service
+        $titleOf = @{}; foreach ($r in $rows) { $titleOf[[string]$r.Url] = ([string]$r.Title).ToLowerInvariant() -replace '[^\p{L}\p{N}]', '' }
+        foreach ($g in @($out | Where-Object { $_.Sha256 } | Group-Object Sha256 | Where-Object { $_.Count -gt 1 })) {
+            $titles = @($g.Group | ForEach-Object { $titleOf[[string]$_.Url] } | Where-Object { $_ } | Sort-Object -Unique)
+            if ($titles.Count -lt 2) { continue }
+            foreach ($o in $g.Group) {
+                if ($o.Status -ne 'ok') { continue }
+                $others = @($g.Group | Where-Object { $_.Url -ne $o.Url } | ForEach-Object { $_.Url })
+                $o.Status = 'suspect'; $o.Reason = [WebInv.Util]::Printable(('the same image as {0}, whose page the scan saw with a different title' -f ($others -join ', ')), 400)
+                $script:ShotMeta[[string]$o.Url] = @($o.Status, $o.Reason)
+                Write-RunLog ("screenshot {0}: suspect - {1}" -f $o.Url, $o.Reason) 'WARN'
+            }
+        }
         if ($out.Count) {
             $lines = @($out | Sort-Object { [string]$_.File } | ConvertTo-Csv -NoTypeInformation)
             [IO.File]::WriteAllLines($script:ShotIndexPath, [string[]]$lines, $script:Utf8Bom)
         }
     }
-    $ok = @($out | Where-Object { $_.Status -like 'ok*' }).Count
-    $msg = 'Screenshots: {0} of {1} web services captured -> {2}' -f $ok, $rows.Count, $folder
+    $ok = @($out | Where-Object { $_.Status -eq 'ok' }).Count
+    $cnt = @{}; foreach ($o in $out) { $cnt[$o.Status] = 1 + [int]$cnt[$o.Status] }
+    $msg = 'Screenshots: {0} of {1} web services captured and checked (ok {2}, blank {3}, suspect {4}, failed {5}) -> {6}' -f @($out | Where-Object { $_.Bytes }).Count, $rows.Count, $ok, [int]$cnt['blank'], [int]$cnt['suspect'], [int]$cnt['failed'], $folder
     Write-RunLog $msg
     if (-not $Quiet) { Write-Host $msg -ForegroundColor Cyan }
     $index
@@ -253,6 +284,68 @@ function Invoke-ExtrasSelfTest {
             ([Text.Encoding]::ASCII.GetString($buf, 0, $n) -like 'HTTP/1.1 403*') -and ([Text.Encoding]::ASCII.GetString($buf2, 0, $n2) -like 'HTTP/1.1 403*') -and $px.Denied -eq 2
         }
         finally { $px.Dispose() }
+    }
+    # -Cname: the UDP path end to end against a loopback responder (name compression, NXDOMAIN, silence)
+    Assert 'extras: CNAME chain over UDP (loopback DNS responder: chain, no CNAME, not in DNS, no answer)' {
+        $tab = New-Object 'System.Collections.Generic.Dictionary[string,string[]]'
+        $tab['www.example.test'] = [string[]]@('edge.example.net', 'lb7.cdn.example'); $tab['plain.example.test'] = [string[]]@(); $tab['quiet.example.test'] = [string[]]@('SILENT')
+        $rsp = [WebInv.DnsTestResponder]::new($tab)
+        try {
+            $srv = "127.0.0.1:$($rsp.Port)"; $e1 = $null; $e2 = $null; $e3 = $null; $e4 = $null
+            $c1 = [WebInv.Cname]::Chain('www.example.test', $srv, 1500, [ref]$e1)
+            $c2 = [WebInv.Cname]::Chain('plain.example.test', $srv, 1500, [ref]$e2)
+            $c3 = [WebInv.Cname]::Chain('missing.example.test', $srv, 1500, [ref]$e3)
+            $c4 = [WebInv.Cname]::Chain('quiet.example.test', $srv, 600, [ref]$e4)
+            $me = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+            $m = [WebInv.Cname]::Many([string[]]@('www.example.test', 'plain.example.test', 'missing.example.test'), $srv, 1500, 4, $me)
+            ((@($c1) -join '>') -eq 'edge.example.net>lb7.cdn.example') -and $null -eq $e1 -and @($c2).Count -eq 0 -and $null -ne $c2 -and $null -eq $e2 -and
+            $null -ne $c3 -and @($c3).Count -eq 0 -and $null -eq $e3 -and $null -eq $c4 -and $e4 -like '*no answer*' -and
+            $m['www.example.test'] -eq 'edge.example.net;lb7.cdn.example' -and $m['plain.example.test'] -eq '' -and $m['missing.example.test'] -eq '' -and $me.Count -eq 0
+        }
+        finally { $rsp.Dispose() }
+    }
+    Assert 'extras: DNS message parsing (query layout, pointer loop refused, chain order from unordered records)' {
+        $q = [WebInv.Cname]::BuildQuery(0x1234, 'a.bc', 1)
+        $loop = [byte[]]@(0x12, 0x34, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0, 0xC0, 12, 0, 5, 0, 1, 0, 0, 0, 1, 0, 2, 0xC0, 12)
+        $rc = 0; $tc = $false; $er = $null
+        $pl = [WebInv.Cname]::Parse($loop, [ref]$rc, [ref]$tc, [ref]$er)
+        $recs = New-Object 'System.Collections.Generic.List[string[]]'
+        $recs.Add([string[]]@('b.example.', 'c.example.')); $recs.Add([string[]]@('A.example', 'b.example')); $recs.Add([string[]]@('c.example', 'd.example'))
+        ((($q | ForEach-Object { '{0:x2}' -f $_ }) -join '') -eq '123401000001000000000000016102626300000100 01'.Replace(' ', '')) -and
+        $null -eq $pl -and $er -like '*malformed*' -and ((@([WebInv.Cname]::Follow($recs)) -join '>') -eq 'b.example>c.example>d.example') -and
+        ([WebInv.Cname]::ParseServer('[::1]:5353').Port -eq 5353) -and ([WebInv.Cname]::ParseServer('2001:db8::53').Port -eq 53)
+    }
+    # -Screenshot checks: PNG decoding (every filter type), one-colour detection, and the classification rules
+    Assert 'extras: PNG decoder (all five filter types round-trip) and one-colour share' {
+        $w = 37; $h = 23; $rgb = New-Object byte[] ($w * $h * 3)
+        for ($i = 0; $i -lt $rgb.Length; $i++) { $rgb[$i] = [byte](($i * 7 + [Math]::Floor($i / 111) * 13) % 256) }
+        $png = [WebInv.Png]::Encode($w, $h, $rgb)
+        $px = $null; $pw = 0; $ph = 0; $bpp = 0
+        $ok = [WebInv.Png]::Decode($png, [ref]$px, [ref]$pw, [ref]$ph, [ref]$bpp)
+        $same = $ok -and $pw -eq $w -and $ph -eq $h -and $bpp -eq 3 -and ([BitConverter]::ToString($px) -eq [BitConverter]::ToString($rgb))
+        $white = New-Object byte[] (64 * 48 * 3); for ($i = 0; $i -lt $white.Length; $i++) { $white[$i] = 255 }
+        $aw = [WebInv.Png]::Analyze([WebInv.Png]::Encode(64, 48, $white))
+        for ($i = 0; $i -lt 300; $i++) { $white[$i] = 0 }
+        $ad = [WebInv.Png]::Analyze([WebInv.Png]::Encode(64, 48, $white))
+        $same -and $aw[2] -eq 1000 -and $aw[3] -eq 0xffffff -and $ad[2] -lt 995 -and $null -eq [WebInv.Png]::Analyze([byte[]]@(1, 2, 3))
+    }
+    Assert 'extras: screenshot classification (failed, off-scope, browser error page, blank, suspect, ok)' {
+        $one = [int[]]@(1366, 768, 1000, 0xffffff, 1); $mostly = [int[]]@(1366, 768, 997, 0xffffff, 40); $busy = [int[]]@(1366, 768, 610, 0xffffff, 300)
+        $k = { param($cap, $has, $img, $st, $bt, $ss, $bs, $fu, $fin, $bl, $blk, $tl) [WebInv.ShotCheck]::Classify($cap, $has, $img, $st, $bt, $ss, $bs, $fu, $fin, $bl, $blk, $tl) }
+        $r1 = & $k 'failed: net::ERR_BLOCKED_BY_CLIENT' $false $null 'A' '' '302' 0 '' $true '0' 'login.example.com:80' -1
+        $r2 = & $k 'ok' $true $busy 'App' '' '200' 403 'https://login.example.com/' $false '10' '' -1
+        $r3 = & $k 'ok' $true $busy 'App' '' '200' 403 'chrome-error://chromewebdata/' $true '10' '' -1
+        $r4 = & $k 'ok' $true $one '' '' '200' 200 'http://h/' $true '0' '' 0
+        $r5 = & $k 'ok' $true $one 'App' 'App' '200' 200 'http://h/' $true '512' 'cdn.example.org:80;x.example:443;y.example:443' 0
+        $r6 = & $k 'ok' $true $mostly 'App' 'App' '200' 503 'http://h/' $true '512' '' 0
+        $r7 = & $k 'ok' $true $busy 'Grafana' 'Proxy Error' '200' 200 'http://h/' $true '512' '' 9
+        $r8 = & $k 'ok' $true $busy 'Grafana' 'Home - Grafana' '200' 200 'http://h/' $true '512' '' 9
+        $r9 = & $k 'ok-timeout' $true $busy 'App' 'App' '200' 200 'http://h/' $true '512' '' 9
+        $r10 = & $k 'ok' $true $mostly 'It works' 'It works' '200' 200 'http://h/' $true '45' '' 8
+        $r1[0] -eq 'failed' -and $r1[1] -like '*ERR_BLOCKED_BY_CLIENT*login.example.com:80*' -and $r2[0] -eq 'failed' -and $r2[1] -like '*https://login.example.com*outside*' -and
+        $r3[0] -eq 'failed' -and $r3[1] -like '*own error page (HTTP 403)*' -and $r4[0] -eq 'blank' -and $r4[1] -like '*0-byte body*' -and
+        $r5[0] -eq 'blank' -and $r5[1] -like '*#ffffff*' -and $r5[1] -like '*3 origins*' -and $r6[0] -eq 'suspect' -and $r6[1] -like '*HTTP 503*HTTP 200*one colour*' -and
+        $r7[0] -eq 'suspect' -and $r7[1] -like "*'Proxy Error'*" -and $r8[0] -eq 'ok' -and $r9[0] -eq 'ok' -and $r9[1] -like '*load event*' -and $r10[0] -eq 'ok'
     }
 }
 #endregion

@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.4.1
+# Invoke-WebInventory.ps1 v2.5.0
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -6,6 +6,12 @@ With `-Store`, every complete run also goes into an inventory store with first/l
 service, kept in Windows' built-in ESENT database engine and backed by an append-only, hash-chained archive of every run
 (see "Inventory store"). The store's inventory can be joined offline with NVD, CISA KEV and FIRST EPSS files to list
 the known vulnerabilities of what was found (see "What v2.3 adds").
+
+Each service's IP is also matched offline against the IP ranges that cloud and CDN providers publish (AWS, Azure
+including Azure Government, Google Cloud, Oracle Cloud, DigitalOcean, Akamai/Linode, Cloudflare, Fastly). This fills
+the `Cloud`, `CloudRegion` and `CloudService` columns. `-Cname` adds the CNAME chain of hostname targets, and
+`-Screenshot` captures are now checked: each is labelled ok, blank, suspect or failed, with a reason (see "What v2.5.0
+adds").
 
 It does not exploit, brute-force, guess credentials or enumerate paths. The optional `-IdentifyPaths` set is a fixed list
 of 16 public landing/version pages; the optional `-VersionPaths` sends one GET to a product's documented version URL,
@@ -16,17 +22,18 @@ with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM messa
 
 | File | Purpose |
 |---|---|
-| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 513 curated rules, 114 version-only rules and the reviewed CPE supplement) |
+| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 515 curated rules, 114 version-only rules and the reviewed CPE supplement) |
 | `WebInventory.rules.recog.json` | 3,098 Rapid7 Recog rules converted to .NET regex (BSD-2), including SNMP sysDescr/sysObjectID, SMB NativeOS/NativeLM and JARM fingerprints. Auto-loaded when it sits next to the script |
 | `WebInventory.rules.wappalyzer.json` | 7,824 webappanalyzer (Wappalyzer fork) rules covering 5,926 technologies: JS libraries, CMS, frameworks, analytics, CDNs, e-commerce (GPL-3.0 data). Auto-loaded |
+| `WebInventory.cloud.json` | 92,358 IP ranges published by AWS, Azure (public, Government, China), Google Cloud, Google, Oracle Cloud, DigitalOcean, Akamai (Linode), Cloudflare and Fastly, with region and service. Matched offline against each service's IP; auto-loaded when it sits next to the script (only once a service on a public address answers). Rebuilt weekly in the repository |
 | `WebInventory.example.psd1` | Example settings file for scheduled runs (`-ConfigFile`) |
 | `THIRD-PARTY-NOTICES.txt` | Licences, upstream commits and how to regenerate each pack |
 | `LICENSE-GPL-3.0.txt` | Full GPL-3.0 text, which must travel with the Wappalyzer pack |
-| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1, v2.3.2 and v2.4.0 A/B runs showing the scan path unchanged |
+| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1, v2.3.2, v2.4.0 and v2.5.0 A/B runs showing the scan path unchanged |
 | `Test-WebInventoryStore.ps1` | One-off validation of the inventory store on the scanner host (ESENT vs portable engine, hard kills, verify, rebuild) |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-All three rule sets load together: 11,549 rules (with the 114 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
+All three rule sets load together: 11,551 rules (with the 114 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
 
 ### The Wappalyzer pack
 - **Generated from** enthec/webappanalyzer commit `d91f7e510e93` (2026-10-19), passive HTTP patterns only:
@@ -45,13 +52,14 @@ All three rule sets load together: 11,549 rules (with the 114 version-only rules
 ## Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                   # 140 offline checks on Windows (133 without ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                   # 146 offline checks on Windows (139 without ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                    # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 10.0.0.5
 .\Invoke-WebInventory.ps1 10.0.0.0/24 web01:8443 '10.0.1.1-50' -Port web -Exclude 10.0.0.1 -Scope 10.0.0.0/16
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -PortFile .\ports.txt -ScopeFile .\authorized.txt -Pace Polite -BaselineCsv auto
 .\Invoke-WebInventory.ps1 -TargetFile .\hostports.txt -IdentifyPaths -ProbeSans -ReverseDns -Tag Weekly-DMZ
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -VersionPaths -Store D:\WebInventoryStore   # + version URLs of detected products
+.\Invoke-WebInventory.ps1 -HostFile .\dmz-names.txt -Cname -Screenshot                    # + CNAME chains, checked screenshots
 .\Invoke-WebInventory.ps1 -ConfigFile .\WebInventory.example.psd1    # scheduled-task style
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore   # ...and keep history (see "Inventory store")
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore
@@ -67,6 +75,78 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.5.0 adds
+
+- **Cloud and CDN attribution (offline).** `WebInventory.cloud.json` holds the IP ranges these providers publish for
+  their customers' firewalls:
+  - AWS;
+  - Azure Service Tags for the public cloud, Azure Government and Azure China;
+  - Google Cloud and Google;
+  - Oracle Cloud, DigitalOcean and Akamai (Linode);
+  - Cloudflare and Fastly.
+
+  That is 92,358 prefixes, built from each provider's own list by `tools/cloud/build.py`. Each service's IP is
+  matched against them, and the most specific range wins:
+  - `Cloud` is the provider (`AWS`, `Azure Government`, `Cloudflare`).
+  - `CloudRegion` is the region (`us-east-1`, `usgovvirginia`, `us-central1`, a city for the geofeed providers).
+  - `CloudService` is the service the provider names (`EC2`, `CLOUDFRONT`, `AppService`, `AzureFrontDoor.Frontend`,
+    `CDN`).
+
+  How it behaves:
+  - Nothing is sent anywhere.
+  - Private, loopback, link-local and shared (CGNAT) addresses never match. The file is loaded only when the first
+    service on a public address answers, so an internal scan does not pay its 0.3 s load time.
+  - `-CloudFile` points at another file (loaded before the scan, so a bad file stops the run); `-NoCloud` turns the
+    lookup off.
+  - A service behind a CDN shows the CDN, which is the address the scanner reached. The run log warns when the file
+    is more than 45 days old; the repository's weekly refresh rebuilds it.
+  - The store gates the three columns. The first run with the ranges records `Enriched`, not `Changed`, and a run
+    with `-NoCloud` keeps the previous values.
+- **`-Cname` (opt-in): CNAME chains of hostname targets.** For every target given as a name, the `Cname` column lists
+  the chain in order (`www.example.com` → `example.trafficmanager.net;example.azurewebsites.net`). This shows which
+  load balancer, CDN or SaaS front end a name points at.
+  - Each name gets one A query to this host's own resolvers; nothing goes to the targets.
+  - On Windows the query goes through the system DNS client (`DnsQuery_W`: the same servers, suffix search, cache and
+    name resolution policy as the OS). Elsewhere it is a standard UDP query to the resolvers in `/etc/resolv.conf`.
+  - `-DnsServer 10.0.0.53` (or `ip:port`) asks one server directly.
+  - A name that is not in DNS (hosts file, NetBIOS) has no CNAME; a resolver that does not answer is logged as a
+    `CNAME` error.
+  - SAN virtual hosts and IP targets are not looked up. Gated in the store like the cloud columns.
+- **Screenshot checks.** After each capture the browser reports:
+  - the page it ended on;
+  - the HTTP status of the main document;
+  - its title and how much text it shows.
+
+  The PNG is decoded to measure how much of it is a single colour. Each capture gets a `Status` and a `Reason` in the
+  screenshot index, the run log and the HTML report:
+  - **failed**: no image (navigation error, timeout, browser exit). Also when the page went to an origin outside the
+    scan, so the image shows the scope proxy's refusal, or when the browser showed its own error page.
+  - **blank**: the page is empty (0-byte body), or the image is at least 99.5 % one colour and the page shows no
+    text. The reason names the origins the page asked for that the scope proxy refused; a single-page app whose
+    scripts come from a CDN renders blank behind the proxy.
+  - **suspect**: the browser received an error status while the scan saw success; or the title the browser rendered
+    is not the one the scan saw (a contained title such as `Home - Grafana` for `Grafana` is fine); or the same image
+    stands for several services the scan saw with different titles (a shared error or proxy page).
+  - **ok**: otherwise. A capture taken before the load event fired is still ok, and its reason says so.
+
+  New index columns: `Reason`, `BrowserUrl`, `BrowserStatus`, `Capture` (the raw capture result). The checks follow
+  run-recon's ok/blank/suspect/failed scheme and add the pixel test.
+- **Exit code 4: nothing answered.** The run completed, but no service answered: every port closed or filtered,
+  every name unresolved, or the network was down. Before, such a run exited 0 like a quiet success. Exit 4 takes
+  precedence over 2 (logged errors). A resumed run counts the rows of its earlier sessions. Scheduled tasks should
+  alert on 1, 3 and 4. The store still ingests such a run: its services are recorded as missing, as before.
+- **RDP certificates past Schannel.** When Schannel cannot handshake with an RDP server (a TLS 1.0-only server on
+  a scanner host where TLS 1.0 is disabled), the certificate is now read with the scan engine's raw ClientHello
+  after a fresh X.224 exchange, as the HTTPS probe already does. All certificate columns and flags (`WeakTLS`,
+  `SelfSigned`, expiry) then apply. `CertSource` is `rdp-raw` and `ProtocolInfo` says so. There is no chain check,
+  and the NTLM names need the full handshake.
+- **Detection fixes:**
+  - Forgejo pages were also reported as Gitea (Forgejo 9 still carries Gitea markers). Two built-in Forgejo rules
+    (its default `keywords` meta tag and its `data-theme="forgejo-…"` page attribute) now exclude Gitea.
+  - The Cloudflare CDN detection carried `cpe:2.3:a:cloudflare:cloudflare`, which NVD uses for the "Cloudflare for
+    WordPress" plugin. The CPE supplement now clears it, so a site behind Cloudflare no longer lists that plugin's
+    CVEs.
 
 ## What v2.4.1 fixes: Windows PowerShell 5.1
 
@@ -300,8 +380,10 @@ ports. Rows have `Service`/`Scheme` `smb`, `rdp` or `snmp` and are printed even 
   RDP certificate (all certificate columns and flags apply, `CertSource` = `rdp`); a CredSSP TSRequest with an NTLM
   NEGOTIATE returns the CHALLENGE (names, domain, build). Two more connection requests check whether NLA is enforced
   (the server answers HYBRID_REQUIRED_BY_SERVER to a TLS-only request) and whether standard RDP security is still
-  accepted. Flags: `RdpNlaNotRequired`, `RdpStandardSecurity`. The TLS handshake goes through Schannel, so a server that
-  only speaks TLS 1.0 yields no certificate on a host where TLS 1.0 is disabled.
+  accepted. Flags: `RdpNlaNotRequired`, `RdpStandardSecurity`. The TLS handshake goes through Schannel. When Schannel
+  cannot complete it (a server that only speaks TLS 1.0, on a host where TLS 1.0 is disabled), v2.5 reads the
+  certificate with the scan engine's raw ClientHello on a fresh connection (`CertSource` `rdp-raw`, no chain check;
+  the NTLM names need the full handshake and stay empty).
 - **SNMP:** a GET of sysDescr (in `Banner`), sysObjectID, sysName (`DeviceName`) and sysLocation. v1/v2c only with the
   `-SnmpCommunity` you give; SNMPv3 with `-SnmpCredential` (user + authentication password; MD5, SHA or SHA-256 with
   `-SnmpAuthProtocol`) and optionally `-SnmpPrivPassword` (AES-128 or DES with `-SnmpPrivProtocol`). With no
@@ -529,7 +611,7 @@ on Windows before quoting these numbers.
 - **Retries and watchdog.** `-Retries` re-tries silent ports, which reduces false "filtered" results. A per-check watchdog stops hung workers. `-MaxRuntimeMinutes` stops dispatching cleanly and leaves a resumable progress file.
 - **ReDoS guard.** Every rule regex runs with a 200 ms timeout, and timeouts are counted in the summary. One Recog rule with catastrophic backtracking was caught this way and is dropped at import.
 - **Hostile-content handling.** Scanned hosts control titles and headers. CSV cells starting with `= + - @` are prefixed with `'` to block Excel formula injection (`-NoCsvSanitize` turns this off). Control characters and ANSI escapes are stripped before console output. The HTML report never uses `innerHTML` for data, and the embedded JSON is escaped.
-- **Exit codes and audit evidence.** `0` clean, `1` fatal/refused, `2` completed with logged errors, `3` interrupted or time limit hit. Each run also writes a `_manifest.txt` with SHA-256 of every output and both logs.
+- **Exit codes and audit evidence.** `0` clean, `1` fatal/refused, `2` completed with logged errors, `3` interrupted or time limit hit, `4` (v2.5) completed but nothing answered. Each run also writes a `_manifest.txt` with SHA-256 of every output and both logs.
 
 ### Detection quality
 - **Raw TLS ClientHello probes**, independent of the scanning host's Schannel policy:
@@ -577,13 +659,14 @@ on Windows before quoting these numbers.
 - Rule tooling: `-SelfTest`, `-TestRules`, `-ImportRules` (Recog / webappanalyzer), `-ExportRules`.
 
 ## Outputs (in `-OutputDir`; logs always in the current directory)
-`WebInventory_<RunId>.csv` (79 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
+`WebInventory_<RunId>.csv` (83 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
 
 Columns that matter most for a CMDB import:
 - **Identity:** `Host`, `IP`, `Port`, `Service`, `Url`/`FinalUrl`, `Title`, `Server`
 - **Fingerprint:** `Products` (name + version), `CPEs` (CPE 2.3), `Categories`, `OsHint`, `Hardware`
 - **TLS and certificate:** `TlsSupported`, `CertSubject`/`CertSANs`/`CertNotAfter`/`CertSha256`
 - **Review:** `Flags`
+- **Hosting:** `Cloud`, `CloudRegion`, `CloudService` (published cloud/CDN ranges), `Cname` (`-Cname`)
 - **Requests beyond the default set:** `IdentifiedPaths` (`-IdentifyPaths`), `VersionPaths` (`-VersionPaths`: each version URL requested and its status)
 
 CPEs built from banners are hints: distros backport fixes without changing version strings.
@@ -604,7 +687,7 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
 - **Signing and placement.** Sign the script (`Set-AuthenticodeSignature`), run it under AllSigned/RemoteSigned, and keep it plus the rule packs in a write-protected folder. The run log records the signature status and pack hashes, so tampering shows up.
 - **Evidence.** Run with `-ScopeFile` that mirrors your written authorisation, and keep run log, error log and manifest together as the record of each run. With `-Store` this happens automatically: the archive keeps them per run and the ledger chains their hashes; `-VerifyStore` proves them intact, and the ledger head printed after each ingest can be recorded somewhere outside the store.
 - **Inventory review.** `-StoreQuery Inventory` is the current inventory with first/last seen; `-StoreQuery Changes -WithinDays 30` lists additions and removals for review; `-AsOf` answers "what did we have on date X" from the archive.
-- **Scheduled tasks.** Use `-ConfigFile` with `-Quiet -NoProgress`. Alert on exit code 1 or 3; review 2.
+- **Scheduled tasks.** Use `-ConfigFile` with `-Quiet -NoProgress`. Alert on exit code 1, 3 or 4 (4: nothing answered); review 2.
 - **Air-gapped enclaves.** If HTTPS handshakes are slow there, Windows is trying to fetch intermediate certificates (AIA). The raw TLS probe is unaffected; consider the "Turn off Automatic Root Certificates Update" policy on the scanner host.
 - **Network sign-off.** Register the scanner host with the SOC. The User-Agent ends in `(authorized asset inventory)`; set your own with `-UserAgent`.
 
@@ -666,6 +749,39 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
     `-SelfTest` and `Test-WebInventoryStore.ps1` (now also backfill on ESENT and event-log anchoring) on the scanner
     host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
     canary reports it).
+
+- **v2.5.0 additions** (Linux workspace and GitHub's Windows and Ubuntu runners):
+  - **Compile and static checks.** The three C# blocks compile with Windows PowerShell 5.1's compiler (CI) and as
+    C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0 warnings. PSScriptAnalyzer
+    findings are unchanged.
+  - **Tests.** Self-test 146/146 on Windows PowerShell 5.1 (ESENT) and 139/139 on PowerShell 7. All 3,225 rule
+    examples pass on both. The 30 lab regression scenarios pass, including the new exit-code and option checks.
+    Store scenarios v2.2 40/40 and v2.3 34/34; gating v2.3 4/4 and v2.5 4/4; `Test-WebInventoryStore.ps1` 10/10 on
+    Windows.
+  - **Cloud lookup.** Compared with a Python longest-prefix match over the same file: 80,000 addresses (inside
+    ranges, on every edge and its neighbours, anywhere) with 0 mismatches on PowerShell 7, and 40,000 with 0 on
+    Windows PowerShell 5.1. No published range overlaps private, loopback, link-local, CGNAT, multicast or reserved
+    space. A service on a public address in a test range loaded the ranges and filled all three columns; a run with
+    only internal addresses did not load them.
+  - **CNAME.** Loopback responder in the self-test. Five public names give the same chain as `Resolve-DnsName`
+    (Windows DNS client) and as `dig` (UDP, Linux) in CI. A lab scan with `-DnsServer` put the expected chain on
+    every row of the name.
+  - **Screenshot checks.** Real headless Chromium against eight lab cases
+    (`lab/shotcases.py`):
+    - ok: a normal page;
+    - blank: an empty body;
+    - blank: a white app shell whose script comes from a CDN, with the refused origin named;
+    - failed: a redirect to another host, with both refused origins named;
+    - suspect: a 503 to the browser and a 200 to the scanner;
+    - suspect, both: two identical pages under two titles;
+    - suspect: a script that renames the page.
+  - **RDP.** A TLS 1.0-only fake RDP server, which the PowerShell 7/OpenSSL client refuses, gives its certificate,
+    TLS 1.0 and `WeakTLS:TLS1.0` through the raw ClientHello. An NLA server keeps the Schannel path and its NTLM build
+    (`tests/v25/rdp-raw.sh`).
+  - **Forgejo.** Replayed container recordings: Forgejo 9.0.3 and 17.0.1 give Forgejo only; Gitea 1.22.3 and
+    1.27.3 are unchanged. The re-imported Wappalyzer pack differs from v2.4.1's only in the five Cloudflare rules.
+  - **A/B against v2.4.1.** Two interleaved runs each (`PERFORMANCE.md`): lab, 200-service farm and closed ports are
+    identical field by field, and wall times are within run-to-run noise. The closed-port run now exits 4.
 
 - **v2.4.0 additions** (same Linux workspace):
   - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
@@ -763,6 +879,32 @@ The `Advisories` column holds the reasoning for each finding, including "fixed" 
 - The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
 
 Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.5.0
+- **Cloud/CDN attribution:** `WebInventory.cloud.json` (`tools/cloud/build.py`, refreshed weekly), engine lookup
+  `WebInv.Cloud` (longest prefix, IPv4/IPv6/mapped), new columns `Cloud`, `CloudRegion`, `CloudService`,
+  `-CloudFile`, `-NoCloud`. The file is loaded only when a service on a public address answers.
+- **`-Cname`, `-DnsServer`:** new column `Cname`. Windows `DnsQuery_W`, otherwise UDP (RFC 1035 parser with
+  compression and loop guards).
+- **Screenshot checks:** `WebInv.Png` (8-bit PNG decoder) and `WebInv.ShotCheck`; the capture also records the final
+  URL, the main document's status and the visible text length. Index columns `Reason`, `BrowserUrl`,
+  `BrowserStatus`, `Capture`; the HTML report shows the status of every capture that is not ok.
+- **Exit code 4** when a completed run found no open service; a run whose every target name failed to resolve also
+  exits 4.
+- **RDP:** the certificate through a raw ClientHello when Schannel cannot handshake (`CertSource` `rdp-raw`). The
+  engine's raw hello (`Tls.HelloOn`) now runs on an existing stream; the HTTPS path is unchanged.
+- **Store:** `Cname` and the cloud columns are material and gated (`cname`, `cloud` profile flags). Their first fill
+  is `Enriched`; `run.json` records the cloud range version and `-DnsServer`.
+- **Rules:** `b:m-forgejo`, `b:b-forgejo` (exclude Gitea), 515 built-in rules. The CPE supplement (2026.11.06.2)
+  clears `cloudflare:cloudflare` from the CDN detection. The Wappalyzer pack was re-imported from the same upstream
+  commit; only the five Cloudflare rules changed.
+- **Self-test:** 139 checks (146 on Windows), adding:
+  - the cloud lookup (longest prefix, IPv6, mapped addresses, bad entries, private addresses, the shipped file);
+  - CNAME over UDP against a loopback responder (chain, no CNAME, not in DNS, no answer, compression loop);
+  - the PNG decoder (all five filter types);
+  - the screenshot rules.
+- **CI:** the cloud lookup is cross-checked against a Python longest-prefix oracle (40,000 addresses). CNAME chains
+  are compared with `Resolve-DnsName` on Windows and `dig` on Linux.
 
 ## Changes in 2.4.1
 - **Windows PowerShell 5.1:** the engine compiles (OID parser without a sign-extended OR, CS0675); every C# block is
@@ -912,15 +1054,12 @@ Treat these flags as a prioritised work list for the owning teams, not as confir
 ## Further recommendations (not implemented)
 1. **Screenshots in the store.** Screenshots stay in `-OutputDir`; archiving them (and diffing them across runs) would
    make the store several times larger, so it was left out.
-2. **RDP certificates from TLS 1.0-only servers on hardened scanner hosts.** The RDP probe uses Schannel; a raw
-   ClientHello after the X.224 exchange (as the HTTPS probe already does) would read the certificate regardless of the
-   host's TLS policy.
-3. **Version capture, continued.** 636 of the 1,327 products with a CPE still get no version by default (630 with
+2. **Version capture, continued.** 635 of the 1,326 products with a CPE still get no version by default (629 with
    `-VersionPaths`), mostly because nothing a scan receives shows it (the reasons are listed per product in
    `docs/web-inventory-coverage.md`). Six have a candidate that could not be checked here (Sophos Firewall: no image or
    sample of the value; Rancher: its image needs a cgroup v2 host; QNAP QTS (service and OS), N-central, Contao: no sample of how the
    version is printed); `tools/version/coverage.py` lists them as `unverified`. The weekly refresh pull request lists
    new candidates as upstream databases add them.
-4. **From the run-recon comparison** (`docs/web-inventory-v2.4.0-run-recon.md`): hosting attribution from the
-   providers' published IP ranges (offline), screenshot capture validation, a distinct exit code for a run in which
-   nothing answered, and the CNAME chain of hostname targets as inventory data.
+3. **Hosting attribution, continued.** Akamai's CDN, IBM Cloud, Alibaba Cloud, Hetzner and OVH publish no
+   machine-readable range list, so their addresses stay unattributed (their CNAMEs, with `-Cname`, usually name
+   them). SAN virtual hosts get no CNAME lookup.

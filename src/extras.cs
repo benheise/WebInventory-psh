@@ -1,7 +1,7 @@
 
 // ============================================================================
 // WebInv extras - opt-in identification probes, compiled only when a run enables one of them
-// (-TlsFingerprint, -Smb, -Rdp, -Snmp, -Screenshot). C# 5 / .NET Framework 4.7.2. No credentials are ever guessed:
+// (-TlsFingerprint, -Smb, -Rdp, -Snmp, -Screenshot, -Cname). C# 5 / .NET Framework 4.7.2. No credentials are ever guessed:
 // SMB and RDP stop after the server's NTLM challenge (the first, unauthenticated leg); SNMP uses only the community
 // or v3 user the operator supplies.
 //   JARM  - port of salesforce/jarm 1.0 (BSD 3-Clause, Copyright (c) 2020 salesforce.com, inc.)
@@ -14,6 +14,7 @@ namespace WebInv
     using System.Diagnostics;
     using System.Globalization;
     using System.IO;
+    using System.IO.Compression;
     using System.Net;
     using System.Net.Security;
     using System.Net.Sockets;
@@ -24,12 +25,15 @@ namespace WebInv
     using System.Threading;
 
     public delegate TcpClient TcpConnector(string ip, int port, int timeoutMs, out string state);
+    public delegate byte[] RawCertReader(Stream s, string sni, string mode, out int version, out string error);
 
     public static class Extras
     {
-        public const string Version = "2.4.1";
+        public const string Version = "2.5.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
+        // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
+        public static RawCertReader RawCert;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
 
         // binds Connect to WebInv.Net.Connect of the scan engine loaded in this AppDomain (no compile-time reference:
@@ -45,6 +49,11 @@ namespace WebInv
                     new Type[] { typeof(string), typeof(int), typeof(int), typeof(string).MakeByRefType() }, null);
                 if (mi == null) continue;
                 Connect = (TcpConnector)Delegate.CreateDelegate(typeof(TcpConnector), mi);
+                Type tt = null;
+                try { tt = a.GetType("WebInv.Tls", false); } catch (Exception) { }
+                System.Reflection.MethodInfo rc = tt == null ? null : tt.GetMethod("CertOverStream", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null,
+                    new Type[] { typeof(Stream), typeof(string), typeof(string), typeof(int).MakeByRefType(), typeof(string).MakeByRefType() }, null);
+                if (rc != null) RawCert = (RawCertReader)Delegate.CreateDelegate(typeof(RawCertReader), rc);
                 return true;
             }
             return false;
@@ -654,6 +663,7 @@ namespace WebInv
     {
         public string Selected = "", Nla = "", StandardRdp = "", Error = "", TlsProtocol = "", PolicyErrors = "", ChainStatus = "";
         public byte[] CertDer;
+        public string CertVia = "";      // "" = Schannel handshake; "raw" = raw ClientHello after Schannel failed (no chain check)
         public NtlmInfo Ntlm = new NtlmInfo();
         public int Probes;
         public bool IsRdp;
@@ -663,6 +673,7 @@ namespace WebInv
             if (Selected.Length > 0) p.Add("security=" + Selected);
             if (Nla.Length > 0) p.Add("nla=" + Nla);
             if (StandardRdp.Length > 0) p.Add("standardRdpSecurity=" + StandardRdp);
+            if (CertVia == "raw") p.Add("certificate=raw ClientHello (Schannel handshake failed)");
             return string.Join("; ", p.ToArray());
         }
     }
@@ -723,6 +734,9 @@ namespace WebInv
             }
             catch (Exception ex) { r.Error = ex.Message; return r; }
             finally { Extras.Close(c); }
+            // TLS was selected but Schannel could not complete the handshake (a TLS 1.0-only server on a host where TLS 1.0
+            // is disabled): read the certificate with the scan engine's raw ClientHello on a fresh connection
+            if (r.CertDer == null && sel > 0 && sel != ProtoRdp && Extras.RawCert != null) RawCertificate(ip, port, sni, timeoutMs, sel, r);
             // NLA enforced? ask for TLS only: HYBRID_REQUIRED_BY_SERVER (5) means yes
             if (sel == ProtoHybrid || sel == ProtoHybridEx)
             {
@@ -740,6 +754,32 @@ namespace WebInv
                 if (sel < 0 && u == ProtoRdp) r.Selected = "rdp only (" + r.Selected + ")";
             }
             return r;
+        }
+        static void RawCertificate(string ip, int port, string sni, int timeoutMs, int sel, RdpResult r)
+        {
+            foreach (string mode in new[] { "tls12", "tls10" })
+            {
+                string st;
+                r.Probes++;
+                TcpClient c = Extras.Open(ip, port, timeoutMs, out st);
+                if (c == null) return;
+                try
+                {
+                    c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
+                    NetworkStream s = c.GetStream();
+                    if (Negotiate(s, ProtoSsl | ProtoHybrid | ProtoHybridEx) != sel) return;
+                    int ver; string err;
+                    byte[] der = Extras.RawCert(s, sni, mode, out ver, out err);
+                    if (der != null && der.Length > 0)
+                    {
+                        r.CertDer = der; r.CertVia = "raw";
+                        r.TlsProtocol = ver == 0x0303 ? "Tls12" : ver == 0x0302 ? "Tls11" : ver == 0x0301 ? "Tls" : ver == 0x0300 ? "Ssl3" : r.TlsProtocol;
+                        return;
+                    }
+                }
+                catch (Exception) { }
+                finally { Extras.Close(c); }
+            }
         }
         static string FailureName(int code)
         {
@@ -1174,6 +1214,355 @@ namespace WebInv
         }
     }
 
+    // ------------------------------------------------------------------ CNAME chains of hostname targets (-Cname)
+    // One A query per name to the resolvers this host already uses; the answer carries the CNAME records. Nothing is
+    // sent to the targets. Windows: the system DNS client (DnsQuery_W: same servers, suffix search and policy table as
+    // the OS); elsewhere, or with -DnsServer, a standard DNS query over UDP.
+    public static class Cname
+    {
+        [System.Runtime.InteropServices.DllImport("dnsapi.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "DnsQuery_W")]
+        static extern int DnsQuery(string name, ushort type, uint options, IntPtr extra, out IntPtr results, IntPtr reserved);
+        [System.Runtime.InteropServices.DllImport("dnsapi.dll", EntryPoint = "DnsRecordListFree")]
+        static extern void DnsRecordListFree(IntPtr list, int freeType);
+
+        public static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
+
+        // name -> CNAME targets in order ("" = no CNAME); errors[name] for names whose lookup failed
+        public static Dictionary<string, string> Many(string[] names, string server, int timeoutMs, int parallel, Dictionary<string, string> errors)
+        {
+            Dictionary<string, string> res = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            object gate = new object();
+            System.Threading.Tasks.ParallelOptions po = new System.Threading.Tasks.ParallelOptions();
+            po.MaxDegreeOfParallelism = Math.Max(1, parallel);
+            System.Threading.Tasks.Parallel.ForEach(names, po, delegate(string n)
+            {
+                string err;
+                string[] chain = Chain(n, server, timeoutMs, out err);
+                lock (gate) { if (chain != null) res[n] = string.Join(";", chain); if (err != null) errors[n] = err; }
+            });
+            return res;
+        }
+
+        public static string[] Chain(string name, string server, int timeoutMs, out string error)
+        {
+            error = null;
+            try
+            {
+                if (string.IsNullOrEmpty(server) && IsWindows) return SystemChain(name, out error);
+                return UdpChain(name, server, timeoutMs, out error);
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
+        }
+
+        static string[] SystemChain(string name, out string error)
+        {
+            error = null;
+            IntPtr list;
+            int rc = DnsQuery(name, 1, 0, IntPtr.Zero, out list, IntPtr.Zero);
+            List<string[]> recs = new List<string[]>();
+            try
+            {
+                if (rc == 9003) return new string[0];   // not in DNS (a hosts-file or NetBIOS name): no CNAME
+                if (rc != 0 && rc != 9501) { error = "DnsQuery error " + rc; return null; }
+                int ps = IntPtr.Size;
+                for (IntPtr r = list; r != IntPtr.Zero; r = System.Runtime.InteropServices.Marshal.ReadIntPtr(r))
+                {
+                    ushort type = (ushort)System.Runtime.InteropServices.Marshal.ReadInt16(r, 2 * ps);
+                    uint flags = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(r, 2 * ps + 4);
+                    if (type != 5 || (flags & 3) != 1) continue;            // CNAME records of the answer section
+                    string owner = System.Runtime.InteropServices.Marshal.PtrToStringUni(System.Runtime.InteropServices.Marshal.ReadIntPtr(r, ps));
+                    string target = System.Runtime.InteropServices.Marshal.PtrToStringUni(System.Runtime.InteropServices.Marshal.ReadIntPtr(r, 2 * ps + 16));
+                    recs.Add(new string[] { owner, target });
+                }
+            }
+            finally { if (list != IntPtr.Zero) DnsRecordListFree(list, 1); }
+            return Follow(recs);
+        }
+
+        // the chain from the queried name: the CNAME whose owner is no other record's target, then each target in turn
+        public static string[] Follow(List<string[]> recs)
+        {
+            Dictionary<string, string> next = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string[] r in recs) { string o = r[0].TrimEnd('.'), t = r[1].TrimEnd('.'); if (!next.ContainsKey(o)) next[o] = t; targets.Add(t); }
+            string head = null;
+            foreach (string[] r in recs) { string o = r[0].TrimEnd('.'); if (!targets.Contains(o)) { head = o; break; } }
+            List<string> chain = new List<string>();
+            string cur = head;
+            while (cur != null && next.ContainsKey(cur) && chain.Count < 16) { cur = next[cur]; chain.Add(cur.ToLowerInvariant()); }
+            return chain.ToArray();
+        }
+
+        static List<IPEndPoint> Resolvers(string server)
+        {
+            List<IPEndPoint> l = new List<IPEndPoint>();
+            if (!string.IsNullOrEmpty(server))
+            {
+                foreach (string one in server.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)) l.Add(ParseServer(one));
+                return l;
+            }
+            HashSet<string> seen = new HashSet<string>();
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up && ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                System.Net.NetworkInformation.IPAddressCollection dns;
+                try { dns = ni.GetIPProperties().DnsAddresses; } catch (Exception) { continue; }
+                foreach (IPAddress a in dns)
+                {
+                    if (a.AddressFamily == AddressFamily.InterNetworkV6 && a.IsIPv6SiteLocal && a.ToString().StartsWith("fec0:", StringComparison.OrdinalIgnoreCase)) continue;  // deprecated well-known placeholders
+                    if (seen.Add(a.ToString())) l.Add(new IPEndPoint(a, 53));
+                }
+            }
+            if (l.Count == 0 && File.Exists("/etc/resolv.conf"))
+                foreach (string line in File.ReadAllLines("/etc/resolv.conf"))
+                {
+                    string[] f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    IPAddress a;
+                    if (f.Length >= 2 && f[0] == "nameserver" && IPAddress.TryParse(f[1], out a) && seen.Add(a.ToString())) l.Add(new IPEndPoint(a, 53));
+                }
+            if (l.Count == 0) throw new InvalidOperationException("no DNS server configured on this host (use -DnsServer)");
+            return l;
+        }
+
+        public static IPEndPoint ParseServer(string s)
+        {
+            s = s.Trim();
+            IPAddress a; int port = 53;
+            if (s.StartsWith("[", StringComparison.Ordinal))
+            {
+                int e = s.IndexOf(']');
+                if (e < 0) throw new FormatException("bad DNS server '" + s + "'");
+                if (e + 1 < s.Length && s[e + 1] == ':') port = int.Parse(s.Substring(e + 2), CultureInfo.InvariantCulture);
+                s = s.Substring(1, e - 1);
+            }
+            else if (s.IndexOf(':') >= 0 && s.IndexOf(':') == s.LastIndexOf(':'))   // host:port (a bare IPv6 address has several colons)
+            {
+                int c2 = s.IndexOf(':');
+                port = int.Parse(s.Substring(c2 + 1), CultureInfo.InvariantCulture); s = s.Substring(0, c2);
+            }
+            if (!IPAddress.TryParse(s, out a) || port < 1 || port > 65535) throw new FormatException("bad DNS server '" + s + "' (an IP address, optionally :port)");
+            return new IPEndPoint(a, port);
+        }
+
+        static List<string> SearchList()
+        {
+            List<string> l = new List<string>();
+            try
+            {
+                if (File.Exists("/etc/resolv.conf"))
+                    foreach (string line in File.ReadAllLines("/etc/resolv.conf"))
+                    {
+                        string[] f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (f.Length >= 2 && (f[0] == "search" || f[0] == "domain")) { l.Clear(); for (int i = 1; i < f.Length; i++) l.Add(f[i].TrimEnd('.')); }
+                    }
+            }
+            catch (Exception) { }
+            return l;
+        }
+
+        static string[] UdpChain(string name, string server, int timeoutMs, out string error)
+        {
+            error = null;
+            List<IPEndPoint> rs = Resolvers(server);
+            List<string> cands = new List<string>();
+            string n0 = name.TrimEnd('.');
+            if (n0.IndexOf('.') < 0 && string.IsNullOrEmpty(server)) foreach (string sfx in SearchList()) cands.Add(n0 + "." + sfx);
+            cands.Add(n0);
+            string lastErr = null; bool nx = false;
+            foreach (string q in cands)
+            {
+                int rcode; bool tc; string perr;
+                List<string[]> recs = Query(q, rs, timeoutMs, out rcode, out tc, out perr);
+                if (recs == null) { lastErr = perr; continue; }
+                if (rcode == 3) { nx = true; continue; }
+                if (rcode != 0) { lastErr = "DNS error rcode " + rcode; continue; }
+                if (tc && recs.Count == 0) { error = "answer truncated (UDP)"; return null; }
+                return Follow(recs);
+            }
+            // NXDOMAIN for every candidate: the name is not in DNS (it resolved from a hosts file or NetBIOS): no CNAME
+            if (nx && lastErr == null) return new string[0];
+            error = lastErr ?? "no answer";
+            return null;
+        }
+
+        static readonly Random Rnd = new Random();
+        static List<string[]> Query(string name, List<IPEndPoint> servers, int timeoutMs, out int rcode, out bool tc, out string error)
+        {
+            rcode = -1; tc = false; error = null;
+            ushort id; lock (Rnd) id = (ushort)Rnd.Next(1, 65535);
+            byte[] q = BuildQuery(id, name, 1);
+            foreach (IPEndPoint ep in servers)
+            {
+                using (Socket s = new Socket(ep.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    try
+                    {
+                        s.ReceiveTimeout = Math.Max(500, timeoutMs);
+                        s.SendTo(q, ep);
+                        byte[] buf = new byte[4096];
+                        Stopwatch sw = Stopwatch.StartNew();
+                        while (sw.ElapsedMilliseconds < Math.Max(500, timeoutMs))
+                        {
+                            EndPoint from = new IPEndPoint(ep.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);
+                            int n = s.ReceiveFrom(buf, ref from);
+                            if (n < 12 || buf[0] != (byte)(id >> 8) || buf[1] != (byte)(id & 0xff) || (buf[2] & 0x80) == 0) continue;   // not our answer
+                            byte[] msg = new byte[n]; Buffer.BlockCopy(buf, 0, msg, 0, n);
+                            string perr;
+                            List<string[]> recs = Parse(msg, out rcode, out tc, out perr);
+                            if (recs == null) { error = perr; break; }
+                            if (rcode == 2 || rcode == 5) { error = "server " + ep + " answered rcode " + rcode; break; }  // SERVFAIL / REFUSED: next server
+                            return recs;
+                        }
+                    }
+                    catch (SocketException ex) { error = "server " + ep + ": " + (ex.SocketErrorCode == SocketError.TimedOut ? "no answer within " + timeoutMs + " ms" : ex.Message); }
+                }
+            }
+            return null;
+        }
+
+        public static byte[] BuildQuery(ushort id, string name, ushort type)
+        {
+            MemoryStream m = new MemoryStream();
+            m.Write(new byte[] { (byte)(id >> 8), (byte)(id & 0xff), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 }, 0, 12);   // RD, one question
+            foreach (string label in name.TrimEnd('.').Split('.'))
+            {
+                byte[] b = Encoding.ASCII.GetBytes(IdnLabel(label));
+                if (b.Length == 0 || b.Length > 63) throw new FormatException("bad DNS name '" + name + "'");
+                m.WriteByte((byte)b.Length); m.Write(b, 0, b.Length);
+            }
+            m.WriteByte(0);
+            m.Write(new byte[] { (byte)(type >> 8), (byte)(type & 0xff), 0, 1 }, 0, 4);   // QTYPE, QCLASS IN
+            return m.ToArray();
+        }
+        static string IdnLabel(string label)
+        {
+            foreach (char c in label) if (c > 127) return new IdnMapping().GetAscii(label);
+            return label;
+        }
+
+        // CNAME records of a DNS answer (owner, target); null when the message is malformed
+        public static List<string[]> Parse(byte[] m, out int rcode, out bool tc, out string error)
+        {
+            rcode = -1; tc = false; error = null;
+            try
+            {
+                if (m.Length < 12) { error = "short DNS message"; return null; }
+                rcode = m[3] & 0x0f; tc = (m[2] & 0x02) != 0;
+                int qd = (m[4] << 8) + m[5], an = (m[6] << 8) + m[7];
+                int p = 12;
+                for (int i = 0; i < qd; i++) { ReadName(m, ref p); p += 4; }
+                List<string[]> recs = new List<string[]>();
+                for (int i = 0; i < an; i++)
+                {
+                    string owner = ReadName(m, ref p);
+                    if (p + 10 > m.Length) throw new IndexOutOfRangeException();
+                    int type = (m[p] << 8) + m[p + 1], rdlen = (m[p + 8] << 8) + m[p + 9];
+                    p += 10;
+                    if (p + rdlen > m.Length) throw new IndexOutOfRangeException();
+                    if (type == 5) { int q = p; recs.Add(new string[] { owner, ReadName(m, ref q) }); }
+                    p += rdlen;
+                }
+                return recs;
+            }
+            catch (Exception) { error = "malformed DNS answer"; return null; }
+        }
+
+        static string ReadName(byte[] m, ref int p)
+        {
+            StringBuilder sb = new StringBuilder();
+            int q = p, jumps = 0; bool jumped = false;
+            while (true)
+            {
+                int len = m[q];
+                if (len == 0) { q++; break; }
+                if ((len & 0xC0) == 0xC0)
+                {
+                    int ptr = ((len & 0x3F) << 8) + m[q + 1];
+                    if (!jumped) p = q + 2;
+                    jumped = true;
+                    if (++jumps > 32 || ptr >= m.Length) throw new InvalidDataException("DNS name pointer loop");
+                    q = ptr; continue;
+                }
+                if (q + 1 + len > m.Length) throw new IndexOutOfRangeException();
+                if (sb.Length > 0) sb.Append('.');
+                sb.Append(Encoding.ASCII.GetString(m, q + 1, len));
+                q += 1 + len;
+                if (sb.Length > 255) throw new InvalidDataException("DNS name too long");
+            }
+            if (!jumped) p = q;
+            return sb.ToString();
+        }
+    }
+
+    // Loopback DNS responder for the self-test: answers A queries from a table (name -> CNAME chain, or NXDOMAIN),
+    // with name compression, so the UDP path is tested end to end without the network
+    public sealed class DnsTestResponder : IDisposable
+    {
+        readonly Socket sock; readonly Dictionary<string, string[]> table; volatile bool stop;
+        public int Port { get { return ((IPEndPoint)sock.LocalEndPoint).Port; } }
+        public int Queries;
+        public DnsTestResponder(Dictionary<string, string[]> chains)
+        {
+            table = new Dictionary<string, string[]>(chains, StringComparer.OrdinalIgnoreCase);
+            sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            sock.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            sock.ReceiveTimeout = 200;
+            Thread t = new Thread(Loop); t.IsBackground = true; t.Start();
+        }
+        void Loop()
+        {
+            byte[] buf = new byte[1500];
+            while (!stop)
+            {
+                EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                int n;
+                try { n = sock.ReceiveFrom(buf, ref from); } catch (Exception) { continue; }
+                Interlocked.Increment(ref Queries);
+                try { byte[] r = Answer(buf, n); if (r != null) sock.SendTo(r, from); } catch (Exception) { }
+            }
+        }
+        byte[] Answer(byte[] q, int n)
+        {
+            int p = 12; StringBuilder sb = new StringBuilder();
+            while (q[p] != 0) { if (sb.Length > 0) sb.Append('.'); sb.Append(Encoding.ASCII.GetString(q, p + 1, q[p])); p += 1 + q[p]; }
+            int qend = p + 5;
+            string name = sb.ToString();
+            string[] chain;
+            bool known = table.TryGetValue(name, out chain);
+            if (known && chain.Length == 1 && chain[0] == "SILENT") return null;
+            MemoryStream m = new MemoryStream();
+            m.Write(q, 0, 2);
+            m.WriteByte(0x81); m.WriteByte((byte)(known ? 0x80 : 0x83));            // QR RD, RA (+NXDOMAIN)
+            int an = known ? chain.Length + 1 : 0;
+            m.Write(new byte[] { 0, 1, (byte)(an >> 8), (byte)an, 0, 0, 0, 0 }, 0, 8);
+            m.Write(q, 12, qend - 12);
+            if (known)
+            {
+                int ownerPtr = 12;                     // the question's name
+                foreach (string target in chain)
+                {
+                    m.WriteByte((byte)(0xC0 | (ownerPtr >> 8))); m.WriteByte((byte)ownerPtr);
+                    m.Write(new byte[] { 0, 5, 0, 1, 0, 0, 0, 60 }, 0, 8);
+                    byte[] tn = EncodeName(target);
+                    m.WriteByte((byte)(tn.Length >> 8)); m.WriteByte((byte)tn.Length);
+                    ownerPtr = (int)m.Position;
+                    m.Write(tn, 0, tn.Length);
+                }
+                m.WriteByte((byte)(0xC0 | (ownerPtr >> 8))); m.WriteByte((byte)ownerPtr);
+                m.Write(new byte[] { 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 7 }, 0, 14);   // A 192.0.2.7
+            }
+            return m.ToArray();
+        }
+        static byte[] EncodeName(string name)
+        {
+            MemoryStream m = new MemoryStream();
+            foreach (string l in name.TrimEnd('.').Split('.')) { byte[] b = Encoding.ASCII.GetBytes(l); m.WriteByte((byte)b.Length); m.Write(b, 0, b.Length); }
+            m.WriteByte(0);
+            return m.ToArray();
+        }
+        public void Dispose() { stop = true; try { sock.Close(); } catch { } }
+    }
+
     // ------------------------------------------------------------------ Screenshot capture over the DevTools protocol
     // The browser is started by the caller with --remote-debugging-port=0 and a fresh --user-data-dir; it writes its
     // port to <profile>\DevToolsActivePort. One page: set the viewport, navigate, wait for the load event (or the
@@ -1182,7 +1571,12 @@ namespace WebInv
     {
         public volatile bool Done;
         public string Status = "", NavError = "", Title = "";
+        public string FinalUrl = "";      // location.href when the image was taken (chrome-error://... for the browser's own error page)
+        public int MainStatus;            // HTTP status of the page's main document as the browser received it (0 = unknown)
+        public string MainUrl = "";
+        public int TextLength = -1;       // characters of visible text (document.body.innerText), -1 = unknown
         public long Ms;
+        string mainFrame;
         readonly string profile, url, file;
         readonly int width, height, budgetMs;
         System.Net.WebSockets.ClientWebSocket ws;
@@ -1232,6 +1626,8 @@ namespace WebInv
             Call("Network.enable", "{}", 10000);
             Call("Emulation.setDeviceMetricsOverride", "{\"width\":" + width + ",\"height\":" + height + ",\"deviceScaleFactor\":1,\"mobile\":false}", 10000);
             string nav = Call("Page.navigate", "{\"url\":" + JsonStr(url) + "}", 15000);
+            System.Text.RegularExpressions.Match fm = System.Text.RegularExpressions.Regex.Match(nav, "\"frameId\"\\s*:\\s*\"([^\"]+)\"");
+            if (fm.Success) lock (Requests) mainFrame = fm.Groups[1].Value;
             System.Text.RegularExpressions.Match ne = System.Text.RegularExpressions.Regex.Match(nav, "\"errorText\"\\s*:\\s*\"([^\"]*)\"");
             if (ne.Success && ne.Groups[1].Value.Length > 0) { NavError = ne.Groups[1].Value; return "failed: " + NavError; }
             bool loaded = WaitEvent("Page.loadEventFired", (int)Math.Max(1000, budgetMs - sw.ElapsedMilliseconds - 3000));
@@ -1245,8 +1641,15 @@ namespace WebInv
                 string t = Call("Runtime.evaluate", "{\"expression\":\"document.title\",\"returnByValue\":true}", 3000);
                 System.Text.RegularExpressions.Match tm = System.Text.RegularExpressions.Regex.Match(t, "\"value\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
                 if (tm.Success) Title = System.Text.RegularExpressions.Regex.Unescape(tm.Groups[1].Value);
+                string h = Call("Runtime.evaluate", "{\"expression\":\"location.href\",\"returnByValue\":true}", 3000);
+                System.Text.RegularExpressions.Match hm = System.Text.RegularExpressions.Regex.Match(h, "\"value\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+                if (hm.Success) FinalUrl = System.Text.RegularExpressions.Regex.Unescape(hm.Groups[1].Value);
+                string n = Call("Runtime.evaluate", "{\"expression\":\"(document.body && document.body.innerText || '').trim().length\",\"returnByValue\":true}", 3000);
+                System.Text.RegularExpressions.Match nm = System.Text.RegularExpressions.Regex.Match(n, "\"value\"\\s*:\\s*(\\d+)");
+                if (nm.Success) TextLength = int.Parse(nm.Groups[1].Value, CultureInfo.InvariantCulture);
             }
             catch (Exception) { }
+            ResolveMain();
             return loaded ? "ok" : "ok-timeout";
         }
 
@@ -1292,11 +1695,36 @@ namespace WebInv
         // every URL the page itself requested (Network.requestWillBeSent): tells page resources from browser chatter
         public readonly List<string> Requests = new List<string>();
         static readonly System.Text.RegularExpressions.Regex ReqUrl = new System.Text.RegularExpressions.Regex("\"request\"\\s*:\\s*\\{\\s*\"url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        static readonly System.Text.RegularExpressions.Regex RespStatus = new System.Text.RegularExpressions.Regex("\"response\"\\s*:\\s*\\{\\s*\"url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"[^{}]*?\"status\"\\s*:\\s*(\\d{3})");
+        static readonly System.Text.RegularExpressions.Regex RespFrame = new System.Text.RegularExpressions.Regex("\"frameId\"\\s*:\\s*\"([^\"]+)\"");
+        readonly Dictionary<string, KeyValuePair<int, string>> docResp = new Dictionary<string, KeyValuePair<int, string>>();
         void Note(string msg)
         {
+            if (msg.IndexOf("\"Network.responseReceived\"", StringComparison.Ordinal) >= 0 && msg.IndexOf("\"type\":\"Document\"", StringComparison.Ordinal) >= 0)
+            {
+                // the last document response per frame; the main frame's is the page the image shows
+                System.Text.RegularExpressions.Match rm = RespStatus.Match(msg), fr = RespFrame.Match(msg);
+                if (rm.Success && fr.Success)
+                    lock (Requests)
+                    {
+                        docResp[fr.Groups[1].Value] = new KeyValuePair<int, string>(int.Parse(rm.Groups[2].Value, CultureInfo.InvariantCulture), System.Text.RegularExpressions.Regex.Unescape(rm.Groups[1].Value));
+                        KeyValuePair<int, string> kv;
+                        if (mainFrame != null && docResp.TryGetValue(mainFrame, out kv)) { MainStatus = kv.Key; MainUrl = kv.Value; }
+                    }
+                return;
+            }
             if (msg.IndexOf("\"Network.requestWillBeSent\"", StringComparison.Ordinal) < 0) return;
             System.Text.RegularExpressions.Match m = ReqUrl.Match(msg);
             if (m.Success) lock (Requests) { if (Requests.Count < 2000) Requests.Add(System.Text.RegularExpressions.Regex.Unescape(m.Groups[1].Value)); }
+        }
+        // the main frame's document response, also when its event arrived before Page.navigate answered with the frame id
+        public void ResolveMain()
+        {
+            lock (Requests)
+            {
+                KeyValuePair<int, string> kv;
+                if (mainFrame != null && docResp.TryGetValue(mainFrame, out kv)) { MainStatus = kv.Key; MainUrl = kv.Value; }
+            }
         }
         string Receive(int timeoutMs)
         {
@@ -1340,6 +1768,197 @@ namespace WebInv
             }
             return false;
         }
+    }
+
+    // ------------------------------------------------------------------ Screenshot checks: does the image show the service?
+    // PNG pixels (8-bit grey/RGB/RGBA, non-interlaced: what Chromium writes) and the page state the browser reported
+    public static class Png
+    {
+        // {width, height, dominant colour share in permille, dominant colour 0xRRGGBB, distinct colours (4 bits per channel)}
+        // or null when the file is not a PNG this decoder reads
+        public static int[] Analyze(byte[] png)
+        {
+            byte[] px; int w, h, bpp;
+            if (!Decode(png, out px, out w, out h, out bpp)) return null;
+            int[] hist = new int[4096];
+            long total = (long)w * h;
+            for (long i = 0; i < total; i++)
+            {
+                long o = i * bpp;
+                int r, g, b;
+                if (bpp >= 3) { r = px[o]; g = px[o + 1]; b = px[o + 2]; } else { r = g = b = px[o]; }
+                hist[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)]++;
+            }
+            int best = 0, distinct = 0;
+            for (int i = 0; i < 4096; i++) { if (hist[i] > 0) distinct++; if (hist[i] > hist[best]) best = i; }
+            int share = total == 0 ? 0 : (int)(1000L * hist[best] / total);
+            int rgb = (((best >> 8) & 15) * 17 << 16) | (((best >> 4) & 15) * 17 << 8) | ((best & 15) * 17);
+            return new int[] { w, h, share, rgb, distinct };
+        }
+
+        public static bool Decode(byte[] d, out byte[] px, out int w, out int h, out int bpp)
+        {
+            px = null; w = h = bpp = 0;
+            byte[] sig = { 137, 80, 78, 71, 13, 10, 26, 10 };
+            if (d == null || d.Length < 33) return false;
+            for (int i = 0; i < 8; i++) if (d[i] != sig[i]) return false;
+            int p = 8, depth = 0, ctype = -1, inter = 0;
+            MemoryStream idat = new MemoryStream();
+            while (p + 8 <= d.Length)
+            {
+                int len = (d[p] << 24) | (d[p + 1] << 16) | (d[p + 2] << 8) | d[p + 3];
+                string type = Encoding.ASCII.GetString(d, p + 4, 4);
+                if (len < 0 || p + 12 + len > d.Length) return false;
+                if (type == "IHDR")
+                {
+                    w = (d[p + 8] << 24) | (d[p + 9] << 16) | (d[p + 10] << 8) | d[p + 11];
+                    h = (d[p + 12] << 24) | (d[p + 13] << 16) | (d[p + 14] << 8) | d[p + 15];
+                    depth = d[p + 16]; ctype = d[p + 17]; inter = d[p + 20];
+                }
+                else if (type == "IDAT") idat.Write(d, p + 8, len);
+                else if (type == "IEND") break;
+                p += 12 + len;
+            }
+            bpp = ctype == 0 ? 1 : ctype == 4 ? 2 : ctype == 2 ? 3 : ctype == 6 ? 4 : 0;
+            if (depth != 8 || bpp == 0 || inter != 0 || w <= 0 || h <= 0 || (long)w * h > 40000000L || idat.Length < 3) return false;
+            byte[] z = idat.ToArray();
+            int stride = w * bpp;
+            byte[] raw = new byte[(long)(stride + 1) * h];
+            using (DeflateStream ds = new DeflateStream(new MemoryStream(z, 2, z.Length - 2), CompressionMode.Decompress))
+            {
+                int got = 0, n;
+                while (got < raw.Length && (n = ds.Read(raw, got, raw.Length - got)) > 0) got += n;
+                if (got < raw.Length) return false;
+            }
+            px = new byte[(long)stride * h];
+            for (int y = 0; y < h; y++)
+            {
+                int f = raw[(long)y * (stride + 1)];
+                long src = (long)y * (stride + 1) + 1, dst = (long)y * stride, up = dst - stride;
+                for (int x = 0; x < stride; x++)
+                {
+                    int a = x >= bpp ? px[dst + x - bpp] : 0;
+                    int b = y > 0 ? px[up + x] : 0;
+                    int c = (x >= bpp && y > 0) ? px[up + x - bpp] : 0;
+                    int v = raw[src + x];
+                    switch (f)
+                    {
+                        case 0: break;
+                        case 1: v += a; break;
+                        case 2: v += b; break;
+                        case 3: v += (a + b) >> 1; break;
+                        case 4: { int pp = a + b - c, pa = Math.Abs(pp - a), pb = Math.Abs(pp - b), pc = Math.Abs(pp - c); v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
+                        default: return false;
+                    }
+                    px[dst + x] = (byte)v;
+                }
+            }
+            return true;
+        }
+
+        // test images for the self-test: rows cycle through the five filter types
+        public static byte[] Encode(int w, int h, byte[] rgb)
+        {
+            int stride = w * 3;
+            MemoryStream raw = new MemoryStream();
+            for (int y = 0; y < h; y++)
+            {
+                int f = y % 5;
+                raw.WriteByte((byte)f);
+                for (int x = 0; x < stride; x++)
+                {
+                    int cur = rgb[y * stride + x];
+                    int a = x >= 3 ? rgb[y * stride + x - 3] : 0, b = y > 0 ? rgb[(y - 1) * stride + x] : 0, c = (x >= 3 && y > 0) ? rgb[(y - 1) * stride + x - 3] : 0;
+                    int pr = f == 0 ? 0 : f == 1 ? a : f == 2 ? b : f == 3 ? (a + b) >> 1 : Paeth(a, b, c);
+                    raw.WriteByte((byte)(cur - pr));
+                }
+            }
+            byte[] rb = raw.ToArray();
+            MemoryStream z = new MemoryStream();
+            z.WriteByte(0x78); z.WriteByte(0x9C);
+            using (DeflateStream ds = new DeflateStream(z, CompressionMode.Compress, true)) ds.Write(rb, 0, rb.Length);
+            uint s1 = 1, s2 = 0; foreach (byte x in rb) { s1 = (s1 + x) % 65521; s2 = (s2 + s1) % 65521; }
+            uint ad = (s2 << 16) | s1;
+            z.WriteByte((byte)(ad >> 24)); z.WriteByte((byte)(ad >> 16)); z.WriteByte((byte)(ad >> 8)); z.WriteByte((byte)ad);
+            MemoryStream o = new MemoryStream();
+            o.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
+            byte[] ihdr = { (byte)(w >> 24), (byte)(w >> 16), (byte)(w >> 8), (byte)w, (byte)(h >> 24), (byte)(h >> 16), (byte)(h >> 8), (byte)h, 8, 2, 0, 0, 0 };
+            Chunk(o, "IHDR", ihdr); Chunk(o, "IDAT", z.ToArray()); Chunk(o, "IEND", new byte[0]);
+            return o.ToArray();
+        }
+        static int Paeth(int a, int b, int c) { int p = a + b - c, pa = Math.Abs(p - a), pb = Math.Abs(p - b), pc = Math.Abs(p - c); return (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); }
+        static uint[] crcTable;
+        static void Chunk(Stream o, string type, byte[] data)
+        {
+            if (crcTable == null)
+            {
+                uint[] t = new uint[256];
+                for (uint n = 0; n < 256; n++) { uint c = n; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1; t[n] = c; }
+                crcTable = t;
+            }
+            byte[] tb = Encoding.ASCII.GetBytes(type);
+            o.WriteByte((byte)(data.Length >> 24)); o.WriteByte((byte)(data.Length >> 16)); o.WriteByte((byte)(data.Length >> 8)); o.WriteByte((byte)data.Length);
+            o.Write(tb, 0, 4); o.Write(data, 0, data.Length);
+            uint crc = 0xFFFFFFFFu;
+            foreach (byte x in tb) crc = crcTable[(crc ^ x) & 0xff] ^ (crc >> 8);
+            foreach (byte x in data) crc = crcTable[(crc ^ x) & 0xff] ^ (crc >> 8);
+            crc ^= 0xFFFFFFFFu;
+            o.WriteByte((byte)(crc >> 24)); o.WriteByte((byte)(crc >> 16)); o.WriteByte((byte)(crc >> 8)); o.WriteByte((byte)crc);
+        }
+    }
+
+    public static class ShotCheck
+    {
+        public const int BlankPermille = 995;   // 99.5 % of the pixels one colour (4 bits per channel)
+
+        static string Norm(string s)
+        {
+            StringBuilder b = new StringBuilder();
+            foreach (char c in (s ?? "").ToLowerInvariant()) if (char.IsLetterOrDigit(c)) b.Append(c);
+            return b.ToString();
+        }
+
+        // {status, reason}: ok | blank | suspect | failed. image = Png.Analyze result (null: none or unreadable);
+        // blocked = origins outside the scan the page asked for (refused by the scope proxy), ';'-separated
+        public static string[] Classify(string capture, bool hasImage, int[] image, string scanTitle, string browserTitle, string scanStatus,
+            int browserStatus, string finalUrl, bool finalInScope, string scanBodyLength, string blocked, int textLength)
+        {
+            capture = capture ?? "";
+            string[] bl = (blocked ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            string blockedNote = bl.Length == 0 ? "" : "; the page went to or asked for " + (bl.Length == 1 ? "an origin" : bl.Length + " origins")
+                + " outside the scan, refused by the scope proxy (" + string.Join(", ", bl, 0, Math.Min(3, bl.Length)) + (bl.Length > 3 ? ", ..." : "") + ")";
+            if (!hasImage || !capture.StartsWith("ok", StringComparison.Ordinal))
+            {
+                string why = capture.StartsWith("failed: ", StringComparison.Ordinal) ? capture.Substring(8) : (capture.Length > 0 && !capture.StartsWith("ok", StringComparison.Ordinal) ? capture : "no image");
+                return new[] { "failed", why + blockedNote };
+            }
+            string fu = finalUrl ?? "";
+            if (fu.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !finalInScope)
+            {
+                Uri u; string origin = Uri.TryCreate(fu, UriKind.Absolute, out u) ? u.Scheme + "://" + u.Authority : fu;
+                return new[] { "failed", "the page went to " + origin + ", outside the scanned origins (refused by the scope proxy): the image does not show this service" };
+            }
+            if (fu.StartsWith("chrome-error:", StringComparison.OrdinalIgnoreCase) || fu.StartsWith("edge-error:", StringComparison.OrdinalIgnoreCase) || fu.StartsWith("about:neterror", StringComparison.OrdinalIgnoreCase))
+                return new[] { "failed", "the browser showed its own error page" + (browserStatus > 0 ? " (HTTP " + browserStatus + ")" : "") + ", not the service's" + blockedNote };
+            // one colour: blank unless the page shows text (a short line of text covers well under 0.5 % of the image)
+            bool oneColour = image != null && (textLength == 0 ? image[2] >= BlankPermille : textLength < 0 && image[2] >= 999);
+            string colourNote = image == null ? "" : string.Format(CultureInfo.InvariantCulture, "the image is {0} one colour (#{1}, {2:0.0} %)",
+                image[2] >= 1000 ? "entirely" : "almost entirely", image[3].ToString("x6", CultureInfo.InvariantCulture), image[2] / 10.0);
+            int ss;
+            bool scanOk = int.TryParse(scanStatus, NumberStyles.None, CultureInfo.InvariantCulture, out ss) && ss > 0 && ss < 400;
+            if (browserStatus >= 400 && scanOk)
+                return new[] { "suspect", "the browser received HTTP " + browserStatus + ", the scan HTTP " + ss + (oneColour ? "; " + colourNote : "") };
+            if (scanBodyLength == "0" && (oneColour || textLength <= 0))
+                return new[] { "blank", "the page is empty (0-byte body)" };
+            if (oneColour)
+                return new[] { "blank", colourNote + (textLength == 0 ? "; the page shows no text" : "") + blockedNote };
+            string a = Norm(scanTitle), b = Norm(browserTitle);
+            if (a.Length > 0 && b.Length > 0 && a.IndexOf(b, StringComparison.Ordinal) < 0 && b.IndexOf(a, StringComparison.Ordinal) < 0)
+                return new[] { "suspect", "the browser rendered '" + Trunc(browserTitle) + "', the scan saw '" + Trunc(scanTitle) + "'" };
+            if (capture == "ok-timeout") return new[] { "ok", "captured before the page finished loading (no load event within the time limit)" };
+            return new[] { "ok", "" };
+        }
+        static string Trunc(string s) { s = (s ?? "").Trim(); return s.Length > 80 ? s.Substring(0, 80) + "..." : s; }
     }
 
     // ------------------------------------------------------------------ Screenshot scope proxy (loopback only)

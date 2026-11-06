@@ -1183,55 +1183,72 @@ namespace WebInv
             try
             {
                 c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
-                NetworkStream s = c.GetStream();
-                byte[] ch = BuildClientHello(mode, sni);
-                s.Write(ch, 0, ch.Length);
-                MemoryStream hsBuf = new MemoryStream();
-                byte[] hdr = new byte[5];
-                int total = 0; bool haveHello = false;
-                while (total < 262144)
-                {
-                    if (!ReadExact(s, hdr, 5)) break;
-                    int ct = hdr[0];
-                    if (ct < 20 || ct > 23 || hdr[1] > 3)
-                    {
-                        if (!h.IsTls) h.NotTls = true;
-                        break;
-                    }
-                    int rl = (hdr[3] << 8) | hdr[4];
-                    if (rl > 18432) { h.Error = "oversized record"; break; }
-                    byte[] frag = new byte[rl];
-                    if (!ReadExact(s, frag, rl)) break;
-                    total += rl + 5;
-                    h.IsTls = true;
-                    if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
-                    if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
-                    if (ct != 22) break;
-                    hsBuf.Write(frag, 0, frag.Length);
-                    byte[] hb = hsBuf.ToArray();
-                    int p = 0; bool done = false;
-                    while (p + 4 <= hb.Length)
-                    {
-                        int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
-                        if (p + 4 + ml > hb.Length) break;
-                        int b = p + 4;
-                        if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
-                        else if (mt == 11 && ml >= 6)
-                        {
-                            int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
-                            if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
-                            done = true;
-                        }
-                        else if (mt == 14) done = true;
-                        p += 4 + ml;
-                    }
-                    if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
-                    if (done) break;
-                }
+                HelloOn(c.GetStream(), sni, mode, wantCert, h);
             }
             catch (Exception ex) { h.Error = Net.Flatten(ex); }
             finally { Net.SafeClose(c); }
             return h;
+        }
+
+        // the ClientHello and the server's answer on a stream that is already connected (also after RDP's X.224 exchange)
+        public static void HelloOn(Stream s, string sni, string mode, bool wantCert, TlsHello h)
+        {
+            byte[] ch = BuildClientHello(mode, sni);
+            s.Write(ch, 0, ch.Length);
+            MemoryStream hsBuf = new MemoryStream();
+            byte[] hdr = new byte[5];
+            int total = 0; bool haveHello = false;
+            while (total < 262144)
+            {
+                if (!ReadExact(s, hdr, 5)) break;
+                int ct = hdr[0];
+                if (ct < 20 || ct > 23 || hdr[1] > 3)
+                {
+                    if (!h.IsTls) h.NotTls = true;
+                    break;
+                }
+                int rl = (hdr[3] << 8) | hdr[4];
+                if (rl > 18432) { h.Error = "oversized record"; break; }
+                byte[] frag = new byte[rl];
+                if (!ReadExact(s, frag, rl)) break;
+                total += rl + 5;
+                h.IsTls = true;
+                if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
+                if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
+                if (ct != 22) break;
+                hsBuf.Write(frag, 0, frag.Length);
+                byte[] hb = hsBuf.ToArray();
+                int p = 0; bool done = false;
+                while (p + 4 <= hb.Length)
+                {
+                    int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
+                    if (p + 4 + ml > hb.Length) break;
+                    int b = p + 4;
+                    if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
+                    else if (mt == 11 && ml >= 6)
+                    {
+                        int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
+                        if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
+                        done = true;
+                    }
+                    else if (mt == 14) done = true;
+                    p += 4 + ml;
+                }
+                if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
+                if (done) break;
+            }
+        }
+
+        // -Rdp: the server certificate with a raw ClientHello when Schannel cannot complete the handshake (a TLS 1.0-only
+        // RDP server on a scanner host where TLS 1.0 is disabled). Primitive types only: the extras bind it by reflection.
+        public static byte[] CertOverStream(Stream s, string sni, string mode, out int version, out string error)
+        {
+            TlsHello h = new TlsHello();
+            try { HelloOn(s, sni, mode, true, h); }
+            catch (Exception ex) { h.Error = Net.Flatten(ex); }
+            version = h.Version;
+            error = h.Error ?? (h.CertDer == null ? (h.Alert >= 0 ? "alert " + h.Alert : (h.NotTls ? "not TLS" : "no certificate")) : "");
+            return h.CertDer;
         }
 
         static void ParseServerHello(byte[] d, int p, int len, TlsHello h)
@@ -3071,9 +3088,154 @@ namespace WebInv
     }
 
     // ------------------------------------------------------------------ Misc helpers
+    // ------------------------------------------------------------------ Cloud / CDN attribution from published IP ranges
+    // WebInventory.cloud.json (tools/cloud/build.py): "<network>/<len>|<provider>|<region>|<service>", names as indices.
+    // Longest-prefix match per address; offline, nothing is sent anywhere.
+    [DataContract]
+    public class CloudPack
+    {
+        [DataMember(Name = "format")] public int Format;
+        [DataMember(Name = "version")] public string Version;
+        [DataMember(Name = "names")] public string[] Names;
+        [DataMember(Name = "v4")] public string[] V4;
+        [DataMember(Name = "v6")] public string[] V6;
+    }
+
+    public static class Cloud
+    {
+        struct K6 : IEquatable<K6>
+        {
+            public ulong Hi, Lo;
+            public bool Equals(K6 o) { return Hi == o.Hi && Lo == o.Lo; }
+            public override bool Equals(object o) { return o is K6 && Equals((K6)o); }
+            public override int GetHashCode() { return (Hi ^ (Lo * 0x9E3779B97F4A7C15UL)).GetHashCode(); }
+        }
+        static Dictionary<uint, int>[] t4 = new Dictionary<uint, int>[33];
+        static Dictionary<K6, int>[] t6 = new Dictionary<K6, int>[129];
+        static int[] lens4 = new int[0], lens6 = new int[0];
+        static string[] names = new string[] { "" };
+        static int[] attr = new int[0];          // 3 name indices per entry: provider, region, service
+        public static string Version = "";
+        public static int Count;
+        public static bool Loaded { get { return Count > 0; } }
+
+        public static void Clear()
+        {
+            t4 = new Dictionary<uint, int>[33]; t6 = new Dictionary<K6, int>[129]; lens4 = new int[0]; lens6 = new int[0];
+            names = new string[] { "" }; attr = new int[0]; Version = ""; Count = 0;
+        }
+
+        public static CloudPack Read(string json)
+        {
+            DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(CloudPack));
+            using (MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(json))) return (CloudPack)ser.ReadObject(ms);
+        }
+
+        // returns the number of prefixes loaded; malformed entries are reported (first 20) and skipped
+        public static int Load(CloudPack p, List<string> errors)
+        {
+            if (p == null || p.Format != 1 || p.Names == null) throw new InvalidDataException("not a WebInventory cloud-range file (format 1)");
+            Dictionary<uint, int>[] n4 = new Dictionary<uint, int>[33];
+            Dictionary<K6, int>[] n6 = new Dictionary<K6, int>[129];
+            List<int> at = new List<int>();
+            int bad = 0;
+            foreach (string[] fam in new[] { p.V4 ?? new string[0], p.V6 ?? new string[0] })
+            {
+                foreach (string e in fam)
+                {
+                    string[] f = e.Split('|');
+                    int slash = f[0].IndexOf('/');
+                    IPAddress ip; int len, a, b, c;
+                    if (f.Length != 4 || slash < 0 || !IPAddress.TryParse(f[0].Substring(0, slash), out ip)
+                        || !int.TryParse(f[0].Substring(slash + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out len)
+                        || !int.TryParse(f[1], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out a)
+                        || !int.TryParse(f[2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out b)
+                        || !int.TryParse(f[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out c)
+                        || a < 0 || b < 0 || c < 0 || a >= p.Names.Length || b >= p.Names.Length || c >= p.Names.Length)
+                    { if (bad++ < 20 && errors != null) errors.Add("cloud ranges: bad entry '" + e + "'"); continue; }
+                    byte[] ab = ip.GetAddressBytes();
+                    int id = at.Count / 3;
+                    if (ab.Length == 4)
+                    {
+                        if (len > 32) { bad++; continue; }
+                        uint k = Mask4(ToU4(ab), len);
+                        if (n4[len] == null) n4[len] = new Dictionary<uint, int>();
+                        if (n4[len].ContainsKey(k)) continue;
+                        n4[len][k] = id;
+                    }
+                    else
+                    {
+                        if (len > 128) { bad++; continue; }
+                        K6 k = Mask6(ab, len);
+                        if (n6[len] == null) n6[len] = new Dictionary<K6, int>();
+                        if (n6[len].ContainsKey(k)) continue;
+                        n6[len][k] = id;
+                    }
+                    at.Add(a); at.Add(b); at.Add(c);
+                }
+            }
+            List<int> l4 = new List<int>(), l6 = new List<int>();
+            for (int i = 32; i >= 0; i--) if (n4[i] != null) l4.Add(i);
+            for (int i = 128; i >= 0; i--) if (n6[i] != null) l6.Add(i);
+            t4 = n4; t6 = n6; lens4 = l4.ToArray(); lens6 = l6.ToArray(); names = p.Names; attr = at.ToArray();
+            Version = p.Version ?? ""; Count = attr.Length / 3;
+            if (bad > 0 && errors != null) errors.Add("cloud ranges: " + bad + " malformed entries skipped");
+            return Count;
+        }
+
+        static uint ToU4(byte[] b) { return ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]; }
+        static uint Mask4(uint v, int len) { return len == 0 ? 0u : v & (0xFFFFFFFFu << (32 - len)); }
+        static K6 Mask6(byte[] b, int len)
+        {
+            ulong hi = 0, lo = 0;
+            for (int i = 0; i < 8; i++) { hi = (hi << 8) | b[i]; lo = (lo << 8) | b[i + 8]; }
+            K6 k;
+            if (len == 0) { k.Hi = 0; k.Lo = 0; }
+            else if (len <= 64) { k.Hi = len == 64 ? hi : hi & (0xFFFFFFFFFFFFFFFFUL << (64 - len)); k.Lo = 0; }
+            else { k.Hi = hi; k.Lo = len == 128 ? lo : lo & (0xFFFFFFFFFFFFFFFFUL << (128 - len)); }
+            return k;
+        }
+
+        // private, loopback, link-local, shared (CGNAT), multicast and reserved addresses: no published range holds them,
+        // so a scan of internal networks never needs the ranges loaded
+        public static bool IsPrivate(string ip)
+        {
+            IPAddress a;
+            if (string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip.Trim('[', ']'), out a)) return true;
+            if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+            byte[] b = a.GetAddressBytes();
+            if (b.Length == 4)
+                return b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 || (b[0] == 169 && b[1] == 254) || (b[0] == 172 && (b[1] & 0xF0) == 16)
+                    || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && (b[1] & 0xC0) == 64);
+            bool zero = true; for (int i = 0; i < 15; i++) if (b[i] != 0) { zero = false; break; }
+            return zero || (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80) || b[0] == 0xFF;
+        }
+
+        // provider, region, service of the most specific published range holding ip; null when none does
+        public static string[] Find(string ip)
+        {
+            IPAddress a;
+            if (Count == 0 || string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip.Trim('[', ']'), out a)) return null;
+            if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+            byte[] b = a.GetAddressBytes();
+            int id = -1;
+            if (b.Length == 4)
+            {
+                uint v = ToU4(b);
+                foreach (int len in lens4) { int x; if (t4[len].TryGetValue(Mask4(v, len), out x)) { id = x; break; } }
+            }
+            else if (b.Length == 16)
+            {
+                foreach (int len in lens6) { int x; if (t6[len].TryGetValue(Mask6(b, len), out x)) { id = x; break; } }
+            }
+            if (id < 0) return null;
+            return new string[] { names[attr[3 * id]], names[attr[3 * id + 1]], names[attr[3 * id + 2]] };
+        }
+    }
+
     public static class Util
     {
-        public const string EngineVersion = "2.4.1";
+        public const string EngineVersion = "2.5.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)

@@ -6,6 +6,7 @@ nla      SSL|HYBRID offered; HYBRID chosen; TLS-only or standard RDP requests ge
 tls      SSL chosen when offered, standard RDP security accepted when asked for alone (no NLA)
 legacy   connection confirm without negotiation data (pre-RDP 5.2 servers)
 rdponly  only standard RDP security: TLS/HYBRID requests get SSL_NOT_ALLOWED_BY_SERVER (2)
+--tls10  the TLS layer speaks TLS 1.0 only (an old RDP server; a scanner host with TLS 1.0 disabled cannot handshake)
 """
 import argparse, socket, ssl, struct, threading, time
 
@@ -18,10 +19,15 @@ ap.add_argument("--build", type=int, default=20348)
 ap.add_argument("--name", default="RDPHOST01")
 ap.add_argument("--domain", default="LAB")
 ap.add_argument("--dnsdomain", default="lab.test")
+ap.add_argument("--tls10", action="store_true")
 a = ap.parse_args()
 
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 ctx.load_cert_chain(a.cert, a.key)
+if a.tls10:
+    ctx.set_ciphers("ALL:@SECLEVEL=0")
+    ctx.minimum_version = ssl.TLSVersion.TLSv1
+    ctx.maximum_version = ssl.TLSVersion.TLSv1
 
 
 def recv_exact(s, n):

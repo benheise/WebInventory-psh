@@ -1,4 +1,4 @@
-# WebInventory 2.4.1 — version coverage by product
+# WebInventory 2.5.0 — version coverage by product
 
 Every product (kind + name, as the rules name it) whose rules carry an NVD CPE but whose detection rules capture no
 version, with what WebInventory does about it. Products whose detection rules capture a version are not listed.
@@ -24,7 +24,7 @@ NVD/KEV entries naming the product's CPE.
 ## Summary
 
 ```
-products with a CPE: 1327
+products with a CPE: 1326
   with a version before version-only rules (captured or fixed): 598
   with a version now (captured, fixed or version-only): 691
   with -VersionPaths as well: 697
@@ -32,7 +32,7 @@ products with a CPE: 1327
   no-known-location  389
   version-only       93
   hidden             87
-  not-version        46
+  not-version        45
   same CPE captured  30
   hardware           30
   platform           21
@@ -41,7 +41,7 @@ products with a CPE: 1327
   other-url          10
   version-path       6
   unverified         6
-still without a version: 630 products, 594 with NVD CVEs, 134 with KEV entries
+still without a version: 629 products, 593 with NVD CVEs, 134 with KEV entries
 ```
 
 ## Products
@@ -673,7 +673,6 @@ still without a version: 630 products, 594 with NVD CVEs, 134 with KEV entries
 | Citrix Hypervisor | service | o:citrix:hypervisor | 1 | 0 | version-only | v:citrix-hypervisor (sample) |
 | Citrix NetScaler Gateway | hw | h:citrix:netscaler_gateway | 1 | 0 | hardware |  |
 | Citrix Netscaler Gateway | hw | h:citrix:netscaler_gateway | 1 | 0 | hardware |  |
-| Cloudflare | service | a:cloudflare:cloudflare | 1 | 0 | not-version | the Cloudflare detection is the CDN (headers, cookies); NVD's cloudflare:cloudflare entries are the WordPress plugin, whose readme says nothing about the CDN |
 | CometD | service | a:cometd:cometd | 1 | 0 | no-known-location |  |
 | Composite Products | service | a:woocommerce:composite_products | 1 | 0 | no-known-location |  |
 | Covenant | service | a:cobbr:covenant | 1 | 0 | no-known-location |  |

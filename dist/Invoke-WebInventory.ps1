@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.4.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.5.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -12,6 +12,10 @@
     enumeration. The optional -IdentifyPaths switch requests a fixed list of 16 public product
     landing/version pages; the optional -VersionPaths switch requests a product's documented version URL only
     after that product was detected without a version. Both are off by default.
+
+    Each service's IP is matched offline against the IP ranges cloud and CDN providers publish
+    (WebInventory.cloud.json next to the script): Cloud, CloudRegion and CloudService columns. The optional -Cname
+    switch records the CNAME chain of every hostname target (one DNS query per name to this host's resolvers).
 
     Console output shows positive hits only (nmap --open behaviour). A run log and an error log are
     written to the CURRENT directory; results go to CSV + JSONL (+ HTML report) in -OutputDir.
@@ -48,6 +52,18 @@
     Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
     that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
     their status codes are listed in the VersionPaths column.
+.PARAMETER Cname
+    Opt-in: record the CNAME chain of each hostname target in the Cname column (targets given as names; SAN virtual hosts
+    are not looked up). One A query per name to this host's DNS resolvers, never to the targets. On Windows through the
+    system DNS client (same servers, suffix search and policy table as the OS); elsewhere a standard UDP query.
+.PARAMETER DnsServer
+    With -Cname: ask this DNS server (IP address, optionally :port; several separated by commas) instead of the system
+    resolvers. The name is sent exactly as given (no suffix search).
+.PARAMETER CloudFile
+    Cloud/CDN IP ranges to match each service's IP against (default: WebInventory.cloud.json next to the script, when
+    present). Built from the providers' own published lists by tools/cloud/build.py; refreshed weekly in the repository.
+.PARAMETER NoCloud
+    Do not load the cloud/CDN IP ranges: the Cloud, CloudRegion and CloudService columns stay empty.
 .PARAMETER ProbeSans
     For HTTPS services, re-request / using each certificate SAN that resolves to the SAME IP as Host/SNI and
     record distinct virtual hosts as extra rows.
@@ -61,8 +77,9 @@
     Also check TCP 445 on every target host: SMB dialect, signing, SMBv1, and the server's NetBIOS/DNS names, domain and
     Windows build from the first (unauthenticated) NTLM challenge. No login, no null session, no share listing.
 .PARAMETER Rdp
-    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate, and
-    the server names and Windows build from the NTLM challenge. No login.
+    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate (with a
+    raw ClientHello when Schannel cannot handshake), and the server names and Windows build from the NTLM challenge.
+    No login.
 .PARAMETER Snmp
     Also query UDP 161 for sysDescr, sysObjectID, sysName and sysLocation. Needs -SnmpCommunity (v1/v2c) or
     -SnmpCredential (v3); a community is never guessed. With neither, only SNMPv3 engine discovery is sent (no credentials).
@@ -162,7 +179,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.4.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.5.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -206,6 +223,10 @@ param(
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
+    [switch]$Cname,
+    [string]$DnsServer,
+    [string]$CloudFile,
+    [switch]$NoCloud,
     [switch]$FollowOffHost,
     [string]$UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebInventory/2.0 (authorized asset inventory)',
     [ValidateRange(1, 3650)][int]$CertWarnDays = 30,
@@ -285,7 +306,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.4.1'
+$ScriptVersion = '2.5.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -1543,55 +1564,72 @@ namespace WebInv
             try
             {
                 c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
-                NetworkStream s = c.GetStream();
-                byte[] ch = BuildClientHello(mode, sni);
-                s.Write(ch, 0, ch.Length);
-                MemoryStream hsBuf = new MemoryStream();
-                byte[] hdr = new byte[5];
-                int total = 0; bool haveHello = false;
-                while (total < 262144)
-                {
-                    if (!ReadExact(s, hdr, 5)) break;
-                    int ct = hdr[0];
-                    if (ct < 20 || ct > 23 || hdr[1] > 3)
-                    {
-                        if (!h.IsTls) h.NotTls = true;
-                        break;
-                    }
-                    int rl = (hdr[3] << 8) | hdr[4];
-                    if (rl > 18432) { h.Error = "oversized record"; break; }
-                    byte[] frag = new byte[rl];
-                    if (!ReadExact(s, frag, rl)) break;
-                    total += rl + 5;
-                    h.IsTls = true;
-                    if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
-                    if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
-                    if (ct != 22) break;
-                    hsBuf.Write(frag, 0, frag.Length);
-                    byte[] hb = hsBuf.ToArray();
-                    int p = 0; bool done = false;
-                    while (p + 4 <= hb.Length)
-                    {
-                        int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
-                        if (p + 4 + ml > hb.Length) break;
-                        int b = p + 4;
-                        if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
-                        else if (mt == 11 && ml >= 6)
-                        {
-                            int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
-                            if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
-                            done = true;
-                        }
-                        else if (mt == 14) done = true;
-                        p += 4 + ml;
-                    }
-                    if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
-                    if (done) break;
-                }
+                HelloOn(c.GetStream(), sni, mode, wantCert, h);
             }
             catch (Exception ex) { h.Error = Net.Flatten(ex); }
             finally { Net.SafeClose(c); }
             return h;
+        }
+
+        // the ClientHello and the server's answer on a stream that is already connected (also after RDP's X.224 exchange)
+        public static void HelloOn(Stream s, string sni, string mode, bool wantCert, TlsHello h)
+        {
+            byte[] ch = BuildClientHello(mode, sni);
+            s.Write(ch, 0, ch.Length);
+            MemoryStream hsBuf = new MemoryStream();
+            byte[] hdr = new byte[5];
+            int total = 0; bool haveHello = false;
+            while (total < 262144)
+            {
+                if (!ReadExact(s, hdr, 5)) break;
+                int ct = hdr[0];
+                if (ct < 20 || ct > 23 || hdr[1] > 3)
+                {
+                    if (!h.IsTls) h.NotTls = true;
+                    break;
+                }
+                int rl = (hdr[3] << 8) | hdr[4];
+                if (rl > 18432) { h.Error = "oversized record"; break; }
+                byte[] frag = new byte[rl];
+                if (!ReadExact(s, frag, rl)) break;
+                total += rl + 5;
+                h.IsTls = true;
+                if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
+                if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
+                if (ct != 22) break;
+                hsBuf.Write(frag, 0, frag.Length);
+                byte[] hb = hsBuf.ToArray();
+                int p = 0; bool done = false;
+                while (p + 4 <= hb.Length)
+                {
+                    int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
+                    if (p + 4 + ml > hb.Length) break;
+                    int b = p + 4;
+                    if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
+                    else if (mt == 11 && ml >= 6)
+                    {
+                        int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
+                        if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
+                        done = true;
+                    }
+                    else if (mt == 14) done = true;
+                    p += 4 + ml;
+                }
+                if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
+                if (done) break;
+            }
+        }
+
+        // -Rdp: the server certificate with a raw ClientHello when Schannel cannot complete the handshake (a TLS 1.0-only
+        // RDP server on a scanner host where TLS 1.0 is disabled). Primitive types only: the extras bind it by reflection.
+        public static byte[] CertOverStream(Stream s, string sni, string mode, out int version, out string error)
+        {
+            TlsHello h = new TlsHello();
+            try { HelloOn(s, sni, mode, true, h); }
+            catch (Exception ex) { h.Error = Net.Flatten(ex); }
+            version = h.Version;
+            error = h.Error ?? (h.CertDer == null ? (h.Alert >= 0 ? "alert " + h.Alert : (h.NotTls ? "not TLS" : "no certificate")) : "");
+            return h.CertDer;
         }
 
         static void ParseServerHello(byte[] d, int p, int len, TlsHello h)
@@ -3431,9 +3469,154 @@ namespace WebInv
     }
 
     // ------------------------------------------------------------------ Misc helpers
+    // ------------------------------------------------------------------ Cloud / CDN attribution from published IP ranges
+    // WebInventory.cloud.json (tools/cloud/build.py): "<network>/<len>|<provider>|<region>|<service>", names as indices.
+    // Longest-prefix match per address; offline, nothing is sent anywhere.
+    [DataContract]
+    public class CloudPack
+    {
+        [DataMember(Name = "format")] public int Format;
+        [DataMember(Name = "version")] public string Version;
+        [DataMember(Name = "names")] public string[] Names;
+        [DataMember(Name = "v4")] public string[] V4;
+        [DataMember(Name = "v6")] public string[] V6;
+    }
+
+    public static class Cloud
+    {
+        struct K6 : IEquatable<K6>
+        {
+            public ulong Hi, Lo;
+            public bool Equals(K6 o) { return Hi == o.Hi && Lo == o.Lo; }
+            public override bool Equals(object o) { return o is K6 && Equals((K6)o); }
+            public override int GetHashCode() { return (Hi ^ (Lo * 0x9E3779B97F4A7C15UL)).GetHashCode(); }
+        }
+        static Dictionary<uint, int>[] t4 = new Dictionary<uint, int>[33];
+        static Dictionary<K6, int>[] t6 = new Dictionary<K6, int>[129];
+        static int[] lens4 = new int[0], lens6 = new int[0];
+        static string[] names = new string[] { "" };
+        static int[] attr = new int[0];          // 3 name indices per entry: provider, region, service
+        public static string Version = "";
+        public static int Count;
+        public static bool Loaded { get { return Count > 0; } }
+
+        public static void Clear()
+        {
+            t4 = new Dictionary<uint, int>[33]; t6 = new Dictionary<K6, int>[129]; lens4 = new int[0]; lens6 = new int[0];
+            names = new string[] { "" }; attr = new int[0]; Version = ""; Count = 0;
+        }
+
+        public static CloudPack Read(string json)
+        {
+            DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(CloudPack));
+            using (MemoryStream ms = new MemoryStream(Encoding.UTF8.GetBytes(json))) return (CloudPack)ser.ReadObject(ms);
+        }
+
+        // returns the number of prefixes loaded; malformed entries are reported (first 20) and skipped
+        public static int Load(CloudPack p, List<string> errors)
+        {
+            if (p == null || p.Format != 1 || p.Names == null) throw new InvalidDataException("not a WebInventory cloud-range file (format 1)");
+            Dictionary<uint, int>[] n4 = new Dictionary<uint, int>[33];
+            Dictionary<K6, int>[] n6 = new Dictionary<K6, int>[129];
+            List<int> at = new List<int>();
+            int bad = 0;
+            foreach (string[] fam in new[] { p.V4 ?? new string[0], p.V6 ?? new string[0] })
+            {
+                foreach (string e in fam)
+                {
+                    string[] f = e.Split('|');
+                    int slash = f[0].IndexOf('/');
+                    IPAddress ip; int len, a, b, c;
+                    if (f.Length != 4 || slash < 0 || !IPAddress.TryParse(f[0].Substring(0, slash), out ip)
+                        || !int.TryParse(f[0].Substring(slash + 1), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out len)
+                        || !int.TryParse(f[1], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out a)
+                        || !int.TryParse(f[2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out b)
+                        || !int.TryParse(f[3], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out c)
+                        || a < 0 || b < 0 || c < 0 || a >= p.Names.Length || b >= p.Names.Length || c >= p.Names.Length)
+                    { if (bad++ < 20 && errors != null) errors.Add("cloud ranges: bad entry '" + e + "'"); continue; }
+                    byte[] ab = ip.GetAddressBytes();
+                    int id = at.Count / 3;
+                    if (ab.Length == 4)
+                    {
+                        if (len > 32) { bad++; continue; }
+                        uint k = Mask4(ToU4(ab), len);
+                        if (n4[len] == null) n4[len] = new Dictionary<uint, int>();
+                        if (n4[len].ContainsKey(k)) continue;
+                        n4[len][k] = id;
+                    }
+                    else
+                    {
+                        if (len > 128) { bad++; continue; }
+                        K6 k = Mask6(ab, len);
+                        if (n6[len] == null) n6[len] = new Dictionary<K6, int>();
+                        if (n6[len].ContainsKey(k)) continue;
+                        n6[len][k] = id;
+                    }
+                    at.Add(a); at.Add(b); at.Add(c);
+                }
+            }
+            List<int> l4 = new List<int>(), l6 = new List<int>();
+            for (int i = 32; i >= 0; i--) if (n4[i] != null) l4.Add(i);
+            for (int i = 128; i >= 0; i--) if (n6[i] != null) l6.Add(i);
+            t4 = n4; t6 = n6; lens4 = l4.ToArray(); lens6 = l6.ToArray(); names = p.Names; attr = at.ToArray();
+            Version = p.Version ?? ""; Count = attr.Length / 3;
+            if (bad > 0 && errors != null) errors.Add("cloud ranges: " + bad + " malformed entries skipped");
+            return Count;
+        }
+
+        static uint ToU4(byte[] b) { return ((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]; }
+        static uint Mask4(uint v, int len) { return len == 0 ? 0u : v & (0xFFFFFFFFu << (32 - len)); }
+        static K6 Mask6(byte[] b, int len)
+        {
+            ulong hi = 0, lo = 0;
+            for (int i = 0; i < 8; i++) { hi = (hi << 8) | b[i]; lo = (lo << 8) | b[i + 8]; }
+            K6 k;
+            if (len == 0) { k.Hi = 0; k.Lo = 0; }
+            else if (len <= 64) { k.Hi = len == 64 ? hi : hi & (0xFFFFFFFFFFFFFFFFUL << (64 - len)); k.Lo = 0; }
+            else { k.Hi = hi; k.Lo = len == 128 ? lo : lo & (0xFFFFFFFFFFFFFFFFUL << (128 - len)); }
+            return k;
+        }
+
+        // private, loopback, link-local, shared (CGNAT), multicast and reserved addresses: no published range holds them,
+        // so a scan of internal networks never needs the ranges loaded
+        public static bool IsPrivate(string ip)
+        {
+            IPAddress a;
+            if (string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip.Trim('[', ']'), out a)) return true;
+            if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+            byte[] b = a.GetAddressBytes();
+            if (b.Length == 4)
+                return b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 || (b[0] == 169 && b[1] == 254) || (b[0] == 172 && (b[1] & 0xF0) == 16)
+                    || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && (b[1] & 0xC0) == 64);
+            bool zero = true; for (int i = 0; i < 15; i++) if (b[i] != 0) { zero = false; break; }
+            return zero || (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80) || b[0] == 0xFF;
+        }
+
+        // provider, region, service of the most specific published range holding ip; null when none does
+        public static string[] Find(string ip)
+        {
+            IPAddress a;
+            if (Count == 0 || string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip.Trim('[', ']'), out a)) return null;
+            if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+            byte[] b = a.GetAddressBytes();
+            int id = -1;
+            if (b.Length == 4)
+            {
+                uint v = ToU4(b);
+                foreach (int len in lens4) { int x; if (t4[len].TryGetValue(Mask4(v, len), out x)) { id = x; break; } }
+            }
+            else if (b.Length == 16)
+            {
+                foreach (int len in lens6) { int x; if (t6[len].TryGetValue(Mask6(b, len), out x)) { id = x; break; } }
+            }
+            if (id < 0) return null;
+            return new string[] { names[attr[3 * id]], names[attr[3 * id + 1]], names[attr[3 * id + 2]] };
+        }
+    }
+
     public static class Util
     {
-        public const string EngineVersion = "2.4.1";
+        public const string EngineVersion = "2.5.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3531,7 +3714,7 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 
 #region ---------- Embedded rule pack ----------
 $BuiltinRulesJson = @'
-{"name":"builtin","version":"2.4.1","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.5.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -3697,6 +3880,8 @@ $BuiltinRulesJson = @'
 {"id":"b:t-pbirs","f":"title","r":"^Power BI Report Server","n":"Power BI Report Server","c":"Web application","k":95,"p":"cpe:2.3:a:microsoft:power_bi_report_server:{v}"},
 {"id":"b:t-jenkins","f":"title","r":"\\[Jenkins\\]$|^Jenkins$","n":"Jenkins","c":"CI/CD","p":"cpe:2.3:a:jenkins:jenkins:*","k":90},
 {"id":"b:t-gitlab","f":"title","r":"(?:^|· )GitLab$","n":"GitLab","c":"CI/CD","p":"cpe:2.3:a:gitlab:gitlab:*","k":90},
+{"id":"b:m-forgejo","f":"meta:keywords","r":"(?:^|,)\\s*forgejo\\s*(?:,|$)","o":"i","n":"Forgejo","c":"CI/CD","p":"cpe:2.3:a:forgejo:forgejo:*","k":90,"xs":["Gitea"],"ex":"git,forge,forgejo"},
+{"id":"b:b-forgejo","f":"body","r":"<html\\b[^>]*\\bdata-theme=\"forgejo-","n":"Forgejo","c":"CI/CD","p":"cpe:2.3:a:forgejo:forgejo:*","k":90,"xs":["Gitea"],"ex":"<html lang=\"en-US\" data-theme=\"forgejo-auto\">"},
 {"id":"b:t-gitea","f":"title","r":"Gitea(?:: Git with a cup of tea)?$","n":"Gitea","c":"CI/CD","p":"cpe:2.3:a:gitea:gitea:*","k":85},
 {"id":"b:t-gogs","f":"title","r":"\\bGogs\\b","n":"Gogs","c":"CI/CD","k":85,"p":"cpe:2.3:a:gogs:gogs:{v}"},
 {"id":"b:t-jira","f":"title","r":"\\b(?:JIRA|Jira)\\b","n":"Atlassian Jira","c":"Collaboration","p":"cpe:2.3:a:atlassian:jira:*","k":75},
@@ -4164,7 +4349,7 @@ $BuiltinRulesJson = @'
 # Reviewed NVD CPE names: completes rule CPEs when a Recog/Wappalyzer pack is imported (fill/replace) and tells the
 # offline vulnerability join which NVD names denote the same product (aliases). Data only; see THIRD-PARTY-NOTICES.
 $CpeSupplementJson = @'
-{"name":"cpe-supplement","version":"2026.11.06",
+{"name":"cpe-supplement","version":"2026.11.06.2",
 "source":"Product names from the built-in, Recog and Wappalyzer rules mapped to NVD CPE names, checked against the NVD CPE Dictionary 2.0 feed (lastModified 2026-11-04T23:50:02-05:00, sha256 af94a9dbb31583557931b5e3740fe76394ad3fe102934497265218acfb58c4bd) and reviewed by hand",
 "notice":"This product uses data from the NVD API but is not endorsed or certified by the NVD.",
 "fill":[
@@ -4696,7 +4881,8 @@ $CpeSupplementJson = @'
 {"n":"AWS Certificate Manager","was":"a:awstats:awstats","p":""},
 {"n":"Sitecore","was":"a:sitecore:*","p":"cpe:2.3:a:sitecore:experience_platform:{v}"},
 {"n":"Okta","was":"a:okta:*","p":""},
-{"n":"Salesforce","was":"a:salesforce:*","p":""}
+{"n":"Salesforce","was":"a:salesforce:*","p":""},
+{"n":"Cloudflare","was":"a:cloudflare:cloudflare","p":""}
 ],"aliases":[
 ["a:10web:photo_gallery","a:web-dorado:photo_gallery"],
 ["a:acquia:mautic","a:mautic:mautic"],
@@ -5456,7 +5642,7 @@ $WorkerScript = {
                 try { $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([byte[]]$r.CertDer) } catch { Add-Log ('rdp certificate parse failed: {0}' -f $_.Exception.Message) }
             }
             if ($cert) {
-                Set-TlsFields $row $null $null $cert 'rdp' $J.Host
+                Set-TlsFields $row $null $null $cert $(if ($r.CertVia -eq 'raw') { 'rdp-raw' } else { 'rdp' }) $J.Host
                 $row.CertPolicyErrors = $r.PolicyErrors; $row.CertChainStatus = $r.ChainStatus
                 Add-CertObs $obs $cert $null
             }
@@ -5790,7 +5976,7 @@ $ExtrasSource = @'
 
 // ============================================================================
 // WebInv extras - opt-in identification probes, compiled only when a run enables one of them
-// (-TlsFingerprint, -Smb, -Rdp, -Snmp, -Screenshot). C# 5 / .NET Framework 4.7.2. No credentials are ever guessed:
+// (-TlsFingerprint, -Smb, -Rdp, -Snmp, -Screenshot, -Cname). C# 5 / .NET Framework 4.7.2. No credentials are ever guessed:
 // SMB and RDP stop after the server's NTLM challenge (the first, unauthenticated leg); SNMP uses only the community
 // or v3 user the operator supplies.
 //   JARM  - port of salesforce/jarm 1.0 (BSD 3-Clause, Copyright (c) 2020 salesforce.com, inc.)
@@ -5803,6 +5989,7 @@ namespace WebInv
     using System.Diagnostics;
     using System.Globalization;
     using System.IO;
+    using System.IO.Compression;
     using System.Net;
     using System.Net.Security;
     using System.Net.Sockets;
@@ -5813,12 +6000,15 @@ namespace WebInv
     using System.Threading;
 
     public delegate TcpClient TcpConnector(string ip, int port, int timeoutMs, out string state);
+    public delegate byte[] RawCertReader(Stream s, string sni, string mode, out int version, out string error);
 
     public static class Extras
     {
-        public const string Version = "2.4.1";
+        public const string Version = "2.5.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
+        // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
+        public static RawCertReader RawCert;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
 
         // binds Connect to WebInv.Net.Connect of the scan engine loaded in this AppDomain (no compile-time reference:
@@ -5834,6 +6024,11 @@ namespace WebInv
                     new Type[] { typeof(string), typeof(int), typeof(int), typeof(string).MakeByRefType() }, null);
                 if (mi == null) continue;
                 Connect = (TcpConnector)Delegate.CreateDelegate(typeof(TcpConnector), mi);
+                Type tt = null;
+                try { tt = a.GetType("WebInv.Tls", false); } catch (Exception) { }
+                System.Reflection.MethodInfo rc = tt == null ? null : tt.GetMethod("CertOverStream", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null,
+                    new Type[] { typeof(Stream), typeof(string), typeof(string), typeof(int).MakeByRefType(), typeof(string).MakeByRefType() }, null);
+                if (rc != null) RawCert = (RawCertReader)Delegate.CreateDelegate(typeof(RawCertReader), rc);
                 return true;
             }
             return false;
@@ -6443,6 +6638,7 @@ namespace WebInv
     {
         public string Selected = "", Nla = "", StandardRdp = "", Error = "", TlsProtocol = "", PolicyErrors = "", ChainStatus = "";
         public byte[] CertDer;
+        public string CertVia = "";      // "" = Schannel handshake; "raw" = raw ClientHello after Schannel failed (no chain check)
         public NtlmInfo Ntlm = new NtlmInfo();
         public int Probes;
         public bool IsRdp;
@@ -6452,6 +6648,7 @@ namespace WebInv
             if (Selected.Length > 0) p.Add("security=" + Selected);
             if (Nla.Length > 0) p.Add("nla=" + Nla);
             if (StandardRdp.Length > 0) p.Add("standardRdpSecurity=" + StandardRdp);
+            if (CertVia == "raw") p.Add("certificate=raw ClientHello (Schannel handshake failed)");
             return string.Join("; ", p.ToArray());
         }
     }
@@ -6512,6 +6709,9 @@ namespace WebInv
             }
             catch (Exception ex) { r.Error = ex.Message; return r; }
             finally { Extras.Close(c); }
+            // TLS was selected but Schannel could not complete the handshake (a TLS 1.0-only server on a host where TLS 1.0
+            // is disabled): read the certificate with the scan engine's raw ClientHello on a fresh connection
+            if (r.CertDer == null && sel > 0 && sel != ProtoRdp && Extras.RawCert != null) RawCertificate(ip, port, sni, timeoutMs, sel, r);
             // NLA enforced? ask for TLS only: HYBRID_REQUIRED_BY_SERVER (5) means yes
             if (sel == ProtoHybrid || sel == ProtoHybridEx)
             {
@@ -6529,6 +6729,32 @@ namespace WebInv
                 if (sel < 0 && u == ProtoRdp) r.Selected = "rdp only (" + r.Selected + ")";
             }
             return r;
+        }
+        static void RawCertificate(string ip, int port, string sni, int timeoutMs, int sel, RdpResult r)
+        {
+            foreach (string mode in new[] { "tls12", "tls10" })
+            {
+                string st;
+                r.Probes++;
+                TcpClient c = Extras.Open(ip, port, timeoutMs, out st);
+                if (c == null) return;
+                try
+                {
+                    c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
+                    NetworkStream s = c.GetStream();
+                    if (Negotiate(s, ProtoSsl | ProtoHybrid | ProtoHybridEx) != sel) return;
+                    int ver; string err;
+                    byte[] der = Extras.RawCert(s, sni, mode, out ver, out err);
+                    if (der != null && der.Length > 0)
+                    {
+                        r.CertDer = der; r.CertVia = "raw";
+                        r.TlsProtocol = ver == 0x0303 ? "Tls12" : ver == 0x0302 ? "Tls11" : ver == 0x0301 ? "Tls" : ver == 0x0300 ? "Ssl3" : r.TlsProtocol;
+                        return;
+                    }
+                }
+                catch (Exception) { }
+                finally { Extras.Close(c); }
+            }
         }
         static string FailureName(int code)
         {
@@ -6963,6 +7189,355 @@ namespace WebInv
         }
     }
 
+    // ------------------------------------------------------------------ CNAME chains of hostname targets (-Cname)
+    // One A query per name to the resolvers this host already uses; the answer carries the CNAME records. Nothing is
+    // sent to the targets. Windows: the system DNS client (DnsQuery_W: same servers, suffix search and policy table as
+    // the OS); elsewhere, or with -DnsServer, a standard DNS query over UDP.
+    public static class Cname
+    {
+        [System.Runtime.InteropServices.DllImport("dnsapi.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, EntryPoint = "DnsQuery_W")]
+        static extern int DnsQuery(string name, ushort type, uint options, IntPtr extra, out IntPtr results, IntPtr reserved);
+        [System.Runtime.InteropServices.DllImport("dnsapi.dll", EntryPoint = "DnsRecordListFree")]
+        static extern void DnsRecordListFree(IntPtr list, int freeType);
+
+        public static bool IsWindows { get { return Environment.OSVersion.Platform == PlatformID.Win32NT; } }
+
+        // name -> CNAME targets in order ("" = no CNAME); errors[name] for names whose lookup failed
+        public static Dictionary<string, string> Many(string[] names, string server, int timeoutMs, int parallel, Dictionary<string, string> errors)
+        {
+            Dictionary<string, string> res = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            object gate = new object();
+            System.Threading.Tasks.ParallelOptions po = new System.Threading.Tasks.ParallelOptions();
+            po.MaxDegreeOfParallelism = Math.Max(1, parallel);
+            System.Threading.Tasks.Parallel.ForEach(names, po, delegate(string n)
+            {
+                string err;
+                string[] chain = Chain(n, server, timeoutMs, out err);
+                lock (gate) { if (chain != null) res[n] = string.Join(";", chain); if (err != null) errors[n] = err; }
+            });
+            return res;
+        }
+
+        public static string[] Chain(string name, string server, int timeoutMs, out string error)
+        {
+            error = null;
+            try
+            {
+                if (string.IsNullOrEmpty(server) && IsWindows) return SystemChain(name, out error);
+                return UdpChain(name, server, timeoutMs, out error);
+            }
+            catch (Exception ex) { error = ex.Message; return null; }
+        }
+
+        static string[] SystemChain(string name, out string error)
+        {
+            error = null;
+            IntPtr list;
+            int rc = DnsQuery(name, 1, 0, IntPtr.Zero, out list, IntPtr.Zero);
+            List<string[]> recs = new List<string[]>();
+            try
+            {
+                if (rc == 9003) return new string[0];   // not in DNS (a hosts-file or NetBIOS name): no CNAME
+                if (rc != 0 && rc != 9501) { error = "DnsQuery error " + rc; return null; }
+                int ps = IntPtr.Size;
+                for (IntPtr r = list; r != IntPtr.Zero; r = System.Runtime.InteropServices.Marshal.ReadIntPtr(r))
+                {
+                    ushort type = (ushort)System.Runtime.InteropServices.Marshal.ReadInt16(r, 2 * ps);
+                    uint flags = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(r, 2 * ps + 4);
+                    if (type != 5 || (flags & 3) != 1) continue;            // CNAME records of the answer section
+                    string owner = System.Runtime.InteropServices.Marshal.PtrToStringUni(System.Runtime.InteropServices.Marshal.ReadIntPtr(r, ps));
+                    string target = System.Runtime.InteropServices.Marshal.PtrToStringUni(System.Runtime.InteropServices.Marshal.ReadIntPtr(r, 2 * ps + 16));
+                    recs.Add(new string[] { owner, target });
+                }
+            }
+            finally { if (list != IntPtr.Zero) DnsRecordListFree(list, 1); }
+            return Follow(recs);
+        }
+
+        // the chain from the queried name: the CNAME whose owner is no other record's target, then each target in turn
+        public static string[] Follow(List<string[]> recs)
+        {
+            Dictionary<string, string> next = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string[] r in recs) { string o = r[0].TrimEnd('.'), t = r[1].TrimEnd('.'); if (!next.ContainsKey(o)) next[o] = t; targets.Add(t); }
+            string head = null;
+            foreach (string[] r in recs) { string o = r[0].TrimEnd('.'); if (!targets.Contains(o)) { head = o; break; } }
+            List<string> chain = new List<string>();
+            string cur = head;
+            while (cur != null && next.ContainsKey(cur) && chain.Count < 16) { cur = next[cur]; chain.Add(cur.ToLowerInvariant()); }
+            return chain.ToArray();
+        }
+
+        static List<IPEndPoint> Resolvers(string server)
+        {
+            List<IPEndPoint> l = new List<IPEndPoint>();
+            if (!string.IsNullOrEmpty(server))
+            {
+                foreach (string one in server.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries)) l.Add(ParseServer(one));
+                return l;
+            }
+            HashSet<string> seen = new HashSet<string>();
+            foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up && ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                System.Net.NetworkInformation.IPAddressCollection dns;
+                try { dns = ni.GetIPProperties().DnsAddresses; } catch (Exception) { continue; }
+                foreach (IPAddress a in dns)
+                {
+                    if (a.AddressFamily == AddressFamily.InterNetworkV6 && a.IsIPv6SiteLocal && a.ToString().StartsWith("fec0:", StringComparison.OrdinalIgnoreCase)) continue;  // deprecated well-known placeholders
+                    if (seen.Add(a.ToString())) l.Add(new IPEndPoint(a, 53));
+                }
+            }
+            if (l.Count == 0 && File.Exists("/etc/resolv.conf"))
+                foreach (string line in File.ReadAllLines("/etc/resolv.conf"))
+                {
+                    string[] f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    IPAddress a;
+                    if (f.Length >= 2 && f[0] == "nameserver" && IPAddress.TryParse(f[1], out a) && seen.Add(a.ToString())) l.Add(new IPEndPoint(a, 53));
+                }
+            if (l.Count == 0) throw new InvalidOperationException("no DNS server configured on this host (use -DnsServer)");
+            return l;
+        }
+
+        public static IPEndPoint ParseServer(string s)
+        {
+            s = s.Trim();
+            IPAddress a; int port = 53;
+            if (s.StartsWith("[", StringComparison.Ordinal))
+            {
+                int e = s.IndexOf(']');
+                if (e < 0) throw new FormatException("bad DNS server '" + s + "'");
+                if (e + 1 < s.Length && s[e + 1] == ':') port = int.Parse(s.Substring(e + 2), CultureInfo.InvariantCulture);
+                s = s.Substring(1, e - 1);
+            }
+            else if (s.IndexOf(':') >= 0 && s.IndexOf(':') == s.LastIndexOf(':'))   // host:port (a bare IPv6 address has several colons)
+            {
+                int c2 = s.IndexOf(':');
+                port = int.Parse(s.Substring(c2 + 1), CultureInfo.InvariantCulture); s = s.Substring(0, c2);
+            }
+            if (!IPAddress.TryParse(s, out a) || port < 1 || port > 65535) throw new FormatException("bad DNS server '" + s + "' (an IP address, optionally :port)");
+            return new IPEndPoint(a, port);
+        }
+
+        static List<string> SearchList()
+        {
+            List<string> l = new List<string>();
+            try
+            {
+                if (File.Exists("/etc/resolv.conf"))
+                    foreach (string line in File.ReadAllLines("/etc/resolv.conf"))
+                    {
+                        string[] f = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (f.Length >= 2 && (f[0] == "search" || f[0] == "domain")) { l.Clear(); for (int i = 1; i < f.Length; i++) l.Add(f[i].TrimEnd('.')); }
+                    }
+            }
+            catch (Exception) { }
+            return l;
+        }
+
+        static string[] UdpChain(string name, string server, int timeoutMs, out string error)
+        {
+            error = null;
+            List<IPEndPoint> rs = Resolvers(server);
+            List<string> cands = new List<string>();
+            string n0 = name.TrimEnd('.');
+            if (n0.IndexOf('.') < 0 && string.IsNullOrEmpty(server)) foreach (string sfx in SearchList()) cands.Add(n0 + "." + sfx);
+            cands.Add(n0);
+            string lastErr = null; bool nx = false;
+            foreach (string q in cands)
+            {
+                int rcode; bool tc; string perr;
+                List<string[]> recs = Query(q, rs, timeoutMs, out rcode, out tc, out perr);
+                if (recs == null) { lastErr = perr; continue; }
+                if (rcode == 3) { nx = true; continue; }
+                if (rcode != 0) { lastErr = "DNS error rcode " + rcode; continue; }
+                if (tc && recs.Count == 0) { error = "answer truncated (UDP)"; return null; }
+                return Follow(recs);
+            }
+            // NXDOMAIN for every candidate: the name is not in DNS (it resolved from a hosts file or NetBIOS): no CNAME
+            if (nx && lastErr == null) return new string[0];
+            error = lastErr ?? "no answer";
+            return null;
+        }
+
+        static readonly Random Rnd = new Random();
+        static List<string[]> Query(string name, List<IPEndPoint> servers, int timeoutMs, out int rcode, out bool tc, out string error)
+        {
+            rcode = -1; tc = false; error = null;
+            ushort id; lock (Rnd) id = (ushort)Rnd.Next(1, 65535);
+            byte[] q = BuildQuery(id, name, 1);
+            foreach (IPEndPoint ep in servers)
+            {
+                using (Socket s = new Socket(ep.AddressFamily, SocketType.Dgram, ProtocolType.Udp))
+                {
+                    try
+                    {
+                        s.ReceiveTimeout = Math.Max(500, timeoutMs);
+                        s.SendTo(q, ep);
+                        byte[] buf = new byte[4096];
+                        Stopwatch sw = Stopwatch.StartNew();
+                        while (sw.ElapsedMilliseconds < Math.Max(500, timeoutMs))
+                        {
+                            EndPoint from = new IPEndPoint(ep.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any, 0);
+                            int n = s.ReceiveFrom(buf, ref from);
+                            if (n < 12 || buf[0] != (byte)(id >> 8) || buf[1] != (byte)(id & 0xff) || (buf[2] & 0x80) == 0) continue;   // not our answer
+                            byte[] msg = new byte[n]; Buffer.BlockCopy(buf, 0, msg, 0, n);
+                            string perr;
+                            List<string[]> recs = Parse(msg, out rcode, out tc, out perr);
+                            if (recs == null) { error = perr; break; }
+                            if (rcode == 2 || rcode == 5) { error = "server " + ep + " answered rcode " + rcode; break; }  // SERVFAIL / REFUSED: next server
+                            return recs;
+                        }
+                    }
+                    catch (SocketException ex) { error = "server " + ep + ": " + (ex.SocketErrorCode == SocketError.TimedOut ? "no answer within " + timeoutMs + " ms" : ex.Message); }
+                }
+            }
+            return null;
+        }
+
+        public static byte[] BuildQuery(ushort id, string name, ushort type)
+        {
+            MemoryStream m = new MemoryStream();
+            m.Write(new byte[] { (byte)(id >> 8), (byte)(id & 0xff), 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0 }, 0, 12);   // RD, one question
+            foreach (string label in name.TrimEnd('.').Split('.'))
+            {
+                byte[] b = Encoding.ASCII.GetBytes(IdnLabel(label));
+                if (b.Length == 0 || b.Length > 63) throw new FormatException("bad DNS name '" + name + "'");
+                m.WriteByte((byte)b.Length); m.Write(b, 0, b.Length);
+            }
+            m.WriteByte(0);
+            m.Write(new byte[] { (byte)(type >> 8), (byte)(type & 0xff), 0, 1 }, 0, 4);   // QTYPE, QCLASS IN
+            return m.ToArray();
+        }
+        static string IdnLabel(string label)
+        {
+            foreach (char c in label) if (c > 127) return new IdnMapping().GetAscii(label);
+            return label;
+        }
+
+        // CNAME records of a DNS answer (owner, target); null when the message is malformed
+        public static List<string[]> Parse(byte[] m, out int rcode, out bool tc, out string error)
+        {
+            rcode = -1; tc = false; error = null;
+            try
+            {
+                if (m.Length < 12) { error = "short DNS message"; return null; }
+                rcode = m[3] & 0x0f; tc = (m[2] & 0x02) != 0;
+                int qd = (m[4] << 8) + m[5], an = (m[6] << 8) + m[7];
+                int p = 12;
+                for (int i = 0; i < qd; i++) { ReadName(m, ref p); p += 4; }
+                List<string[]> recs = new List<string[]>();
+                for (int i = 0; i < an; i++)
+                {
+                    string owner = ReadName(m, ref p);
+                    if (p + 10 > m.Length) throw new IndexOutOfRangeException();
+                    int type = (m[p] << 8) + m[p + 1], rdlen = (m[p + 8] << 8) + m[p + 9];
+                    p += 10;
+                    if (p + rdlen > m.Length) throw new IndexOutOfRangeException();
+                    if (type == 5) { int q = p; recs.Add(new string[] { owner, ReadName(m, ref q) }); }
+                    p += rdlen;
+                }
+                return recs;
+            }
+            catch (Exception) { error = "malformed DNS answer"; return null; }
+        }
+
+        static string ReadName(byte[] m, ref int p)
+        {
+            StringBuilder sb = new StringBuilder();
+            int q = p, jumps = 0; bool jumped = false;
+            while (true)
+            {
+                int len = m[q];
+                if (len == 0) { q++; break; }
+                if ((len & 0xC0) == 0xC0)
+                {
+                    int ptr = ((len & 0x3F) << 8) + m[q + 1];
+                    if (!jumped) p = q + 2;
+                    jumped = true;
+                    if (++jumps > 32 || ptr >= m.Length) throw new InvalidDataException("DNS name pointer loop");
+                    q = ptr; continue;
+                }
+                if (q + 1 + len > m.Length) throw new IndexOutOfRangeException();
+                if (sb.Length > 0) sb.Append('.');
+                sb.Append(Encoding.ASCII.GetString(m, q + 1, len));
+                q += 1 + len;
+                if (sb.Length > 255) throw new InvalidDataException("DNS name too long");
+            }
+            if (!jumped) p = q;
+            return sb.ToString();
+        }
+    }
+
+    // Loopback DNS responder for the self-test: answers A queries from a table (name -> CNAME chain, or NXDOMAIN),
+    // with name compression, so the UDP path is tested end to end without the network
+    public sealed class DnsTestResponder : IDisposable
+    {
+        readonly Socket sock; readonly Dictionary<string, string[]> table; volatile bool stop;
+        public int Port { get { return ((IPEndPoint)sock.LocalEndPoint).Port; } }
+        public int Queries;
+        public DnsTestResponder(Dictionary<string, string[]> chains)
+        {
+            table = new Dictionary<string, string[]>(chains, StringComparer.OrdinalIgnoreCase);
+            sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            sock.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            sock.ReceiveTimeout = 200;
+            Thread t = new Thread(Loop); t.IsBackground = true; t.Start();
+        }
+        void Loop()
+        {
+            byte[] buf = new byte[1500];
+            while (!stop)
+            {
+                EndPoint from = new IPEndPoint(IPAddress.Any, 0);
+                int n;
+                try { n = sock.ReceiveFrom(buf, ref from); } catch (Exception) { continue; }
+                Interlocked.Increment(ref Queries);
+                try { byte[] r = Answer(buf, n); if (r != null) sock.SendTo(r, from); } catch (Exception) { }
+            }
+        }
+        byte[] Answer(byte[] q, int n)
+        {
+            int p = 12; StringBuilder sb = new StringBuilder();
+            while (q[p] != 0) { if (sb.Length > 0) sb.Append('.'); sb.Append(Encoding.ASCII.GetString(q, p + 1, q[p])); p += 1 + q[p]; }
+            int qend = p + 5;
+            string name = sb.ToString();
+            string[] chain;
+            bool known = table.TryGetValue(name, out chain);
+            if (known && chain.Length == 1 && chain[0] == "SILENT") return null;
+            MemoryStream m = new MemoryStream();
+            m.Write(q, 0, 2);
+            m.WriteByte(0x81); m.WriteByte((byte)(known ? 0x80 : 0x83));            // QR RD, RA (+NXDOMAIN)
+            int an = known ? chain.Length + 1 : 0;
+            m.Write(new byte[] { 0, 1, (byte)(an >> 8), (byte)an, 0, 0, 0, 0 }, 0, 8);
+            m.Write(q, 12, qend - 12);
+            if (known)
+            {
+                int ownerPtr = 12;                     // the question's name
+                foreach (string target in chain)
+                {
+                    m.WriteByte((byte)(0xC0 | (ownerPtr >> 8))); m.WriteByte((byte)ownerPtr);
+                    m.Write(new byte[] { 0, 5, 0, 1, 0, 0, 0, 60 }, 0, 8);
+                    byte[] tn = EncodeName(target);
+                    m.WriteByte((byte)(tn.Length >> 8)); m.WriteByte((byte)tn.Length);
+                    ownerPtr = (int)m.Position;
+                    m.Write(tn, 0, tn.Length);
+                }
+                m.WriteByte((byte)(0xC0 | (ownerPtr >> 8))); m.WriteByte((byte)ownerPtr);
+                m.Write(new byte[] { 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 7 }, 0, 14);   // A 192.0.2.7
+            }
+            return m.ToArray();
+        }
+        static byte[] EncodeName(string name)
+        {
+            MemoryStream m = new MemoryStream();
+            foreach (string l in name.TrimEnd('.').Split('.')) { byte[] b = Encoding.ASCII.GetBytes(l); m.WriteByte((byte)b.Length); m.Write(b, 0, b.Length); }
+            m.WriteByte(0);
+            return m.ToArray();
+        }
+        public void Dispose() { stop = true; try { sock.Close(); } catch { } }
+    }
+
     // ------------------------------------------------------------------ Screenshot capture over the DevTools protocol
     // The browser is started by the caller with --remote-debugging-port=0 and a fresh --user-data-dir; it writes its
     // port to <profile>\DevToolsActivePort. One page: set the viewport, navigate, wait for the load event (or the
@@ -6971,7 +7546,12 @@ namespace WebInv
     {
         public volatile bool Done;
         public string Status = "", NavError = "", Title = "";
+        public string FinalUrl = "";      // location.href when the image was taken (chrome-error://... for the browser's own error page)
+        public int MainStatus;            // HTTP status of the page's main document as the browser received it (0 = unknown)
+        public string MainUrl = "";
+        public int TextLength = -1;       // characters of visible text (document.body.innerText), -1 = unknown
         public long Ms;
+        string mainFrame;
         readonly string profile, url, file;
         readonly int width, height, budgetMs;
         System.Net.WebSockets.ClientWebSocket ws;
@@ -7021,6 +7601,8 @@ namespace WebInv
             Call("Network.enable", "{}", 10000);
             Call("Emulation.setDeviceMetricsOverride", "{\"width\":" + width + ",\"height\":" + height + ",\"deviceScaleFactor\":1,\"mobile\":false}", 10000);
             string nav = Call("Page.navigate", "{\"url\":" + JsonStr(url) + "}", 15000);
+            System.Text.RegularExpressions.Match fm = System.Text.RegularExpressions.Regex.Match(nav, "\"frameId\"\\s*:\\s*\"([^\"]+)\"");
+            if (fm.Success) lock (Requests) mainFrame = fm.Groups[1].Value;
             System.Text.RegularExpressions.Match ne = System.Text.RegularExpressions.Regex.Match(nav, "\"errorText\"\\s*:\\s*\"([^\"]*)\"");
             if (ne.Success && ne.Groups[1].Value.Length > 0) { NavError = ne.Groups[1].Value; return "failed: " + NavError; }
             bool loaded = WaitEvent("Page.loadEventFired", (int)Math.Max(1000, budgetMs - sw.ElapsedMilliseconds - 3000));
@@ -7034,8 +7616,15 @@ namespace WebInv
                 string t = Call("Runtime.evaluate", "{\"expression\":\"document.title\",\"returnByValue\":true}", 3000);
                 System.Text.RegularExpressions.Match tm = System.Text.RegularExpressions.Regex.Match(t, "\"value\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
                 if (tm.Success) Title = System.Text.RegularExpressions.Regex.Unescape(tm.Groups[1].Value);
+                string h = Call("Runtime.evaluate", "{\"expression\":\"location.href\",\"returnByValue\":true}", 3000);
+                System.Text.RegularExpressions.Match hm = System.Text.RegularExpressions.Regex.Match(h, "\"value\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+                if (hm.Success) FinalUrl = System.Text.RegularExpressions.Regex.Unescape(hm.Groups[1].Value);
+                string n = Call("Runtime.evaluate", "{\"expression\":\"(document.body && document.body.innerText || '').trim().length\",\"returnByValue\":true}", 3000);
+                System.Text.RegularExpressions.Match nm = System.Text.RegularExpressions.Regex.Match(n, "\"value\"\\s*:\\s*(\\d+)");
+                if (nm.Success) TextLength = int.Parse(nm.Groups[1].Value, CultureInfo.InvariantCulture);
             }
             catch (Exception) { }
+            ResolveMain();
             return loaded ? "ok" : "ok-timeout";
         }
 
@@ -7081,11 +7670,36 @@ namespace WebInv
         // every URL the page itself requested (Network.requestWillBeSent): tells page resources from browser chatter
         public readonly List<string> Requests = new List<string>();
         static readonly System.Text.RegularExpressions.Regex ReqUrl = new System.Text.RegularExpressions.Regex("\"request\"\\s*:\\s*\\{\\s*\"url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+        static readonly System.Text.RegularExpressions.Regex RespStatus = new System.Text.RegularExpressions.Regex("\"response\"\\s*:\\s*\\{\\s*\"url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"[^{}]*?\"status\"\\s*:\\s*(\\d{3})");
+        static readonly System.Text.RegularExpressions.Regex RespFrame = new System.Text.RegularExpressions.Regex("\"frameId\"\\s*:\\s*\"([^\"]+)\"");
+        readonly Dictionary<string, KeyValuePair<int, string>> docResp = new Dictionary<string, KeyValuePair<int, string>>();
         void Note(string msg)
         {
+            if (msg.IndexOf("\"Network.responseReceived\"", StringComparison.Ordinal) >= 0 && msg.IndexOf("\"type\":\"Document\"", StringComparison.Ordinal) >= 0)
+            {
+                // the last document response per frame; the main frame's is the page the image shows
+                System.Text.RegularExpressions.Match rm = RespStatus.Match(msg), fr = RespFrame.Match(msg);
+                if (rm.Success && fr.Success)
+                    lock (Requests)
+                    {
+                        docResp[fr.Groups[1].Value] = new KeyValuePair<int, string>(int.Parse(rm.Groups[2].Value, CultureInfo.InvariantCulture), System.Text.RegularExpressions.Regex.Unescape(rm.Groups[1].Value));
+                        KeyValuePair<int, string> kv;
+                        if (mainFrame != null && docResp.TryGetValue(mainFrame, out kv)) { MainStatus = kv.Key; MainUrl = kv.Value; }
+                    }
+                return;
+            }
             if (msg.IndexOf("\"Network.requestWillBeSent\"", StringComparison.Ordinal) < 0) return;
             System.Text.RegularExpressions.Match m = ReqUrl.Match(msg);
             if (m.Success) lock (Requests) { if (Requests.Count < 2000) Requests.Add(System.Text.RegularExpressions.Regex.Unescape(m.Groups[1].Value)); }
+        }
+        // the main frame's document response, also when its event arrived before Page.navigate answered with the frame id
+        public void ResolveMain()
+        {
+            lock (Requests)
+            {
+                KeyValuePair<int, string> kv;
+                if (mainFrame != null && docResp.TryGetValue(mainFrame, out kv)) { MainStatus = kv.Key; MainUrl = kv.Value; }
+            }
         }
         string Receive(int timeoutMs)
         {
@@ -7129,6 +7743,197 @@ namespace WebInv
             }
             return false;
         }
+    }
+
+    // ------------------------------------------------------------------ Screenshot checks: does the image show the service?
+    // PNG pixels (8-bit grey/RGB/RGBA, non-interlaced: what Chromium writes) and the page state the browser reported
+    public static class Png
+    {
+        // {width, height, dominant colour share in permille, dominant colour 0xRRGGBB, distinct colours (4 bits per channel)}
+        // or null when the file is not a PNG this decoder reads
+        public static int[] Analyze(byte[] png)
+        {
+            byte[] px; int w, h, bpp;
+            if (!Decode(png, out px, out w, out h, out bpp)) return null;
+            int[] hist = new int[4096];
+            long total = (long)w * h;
+            for (long i = 0; i < total; i++)
+            {
+                long o = i * bpp;
+                int r, g, b;
+                if (bpp >= 3) { r = px[o]; g = px[o + 1]; b = px[o + 2]; } else { r = g = b = px[o]; }
+                hist[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)]++;
+            }
+            int best = 0, distinct = 0;
+            for (int i = 0; i < 4096; i++) { if (hist[i] > 0) distinct++; if (hist[i] > hist[best]) best = i; }
+            int share = total == 0 ? 0 : (int)(1000L * hist[best] / total);
+            int rgb = (((best >> 8) & 15) * 17 << 16) | (((best >> 4) & 15) * 17 << 8) | ((best & 15) * 17);
+            return new int[] { w, h, share, rgb, distinct };
+        }
+
+        public static bool Decode(byte[] d, out byte[] px, out int w, out int h, out int bpp)
+        {
+            px = null; w = h = bpp = 0;
+            byte[] sig = { 137, 80, 78, 71, 13, 10, 26, 10 };
+            if (d == null || d.Length < 33) return false;
+            for (int i = 0; i < 8; i++) if (d[i] != sig[i]) return false;
+            int p = 8, depth = 0, ctype = -1, inter = 0;
+            MemoryStream idat = new MemoryStream();
+            while (p + 8 <= d.Length)
+            {
+                int len = (d[p] << 24) | (d[p + 1] << 16) | (d[p + 2] << 8) | d[p + 3];
+                string type = Encoding.ASCII.GetString(d, p + 4, 4);
+                if (len < 0 || p + 12 + len > d.Length) return false;
+                if (type == "IHDR")
+                {
+                    w = (d[p + 8] << 24) | (d[p + 9] << 16) | (d[p + 10] << 8) | d[p + 11];
+                    h = (d[p + 12] << 24) | (d[p + 13] << 16) | (d[p + 14] << 8) | d[p + 15];
+                    depth = d[p + 16]; ctype = d[p + 17]; inter = d[p + 20];
+                }
+                else if (type == "IDAT") idat.Write(d, p + 8, len);
+                else if (type == "IEND") break;
+                p += 12 + len;
+            }
+            bpp = ctype == 0 ? 1 : ctype == 4 ? 2 : ctype == 2 ? 3 : ctype == 6 ? 4 : 0;
+            if (depth != 8 || bpp == 0 || inter != 0 || w <= 0 || h <= 0 || (long)w * h > 40000000L || idat.Length < 3) return false;
+            byte[] z = idat.ToArray();
+            int stride = w * bpp;
+            byte[] raw = new byte[(long)(stride + 1) * h];
+            using (DeflateStream ds = new DeflateStream(new MemoryStream(z, 2, z.Length - 2), CompressionMode.Decompress))
+            {
+                int got = 0, n;
+                while (got < raw.Length && (n = ds.Read(raw, got, raw.Length - got)) > 0) got += n;
+                if (got < raw.Length) return false;
+            }
+            px = new byte[(long)stride * h];
+            for (int y = 0; y < h; y++)
+            {
+                int f = raw[(long)y * (stride + 1)];
+                long src = (long)y * (stride + 1) + 1, dst = (long)y * stride, up = dst - stride;
+                for (int x = 0; x < stride; x++)
+                {
+                    int a = x >= bpp ? px[dst + x - bpp] : 0;
+                    int b = y > 0 ? px[up + x] : 0;
+                    int c = (x >= bpp && y > 0) ? px[up + x - bpp] : 0;
+                    int v = raw[src + x];
+                    switch (f)
+                    {
+                        case 0: break;
+                        case 1: v += a; break;
+                        case 2: v += b; break;
+                        case 3: v += (a + b) >> 1; break;
+                        case 4: { int pp = a + b - c, pa = Math.Abs(pp - a), pb = Math.Abs(pp - b), pc = Math.Abs(pp - c); v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
+                        default: return false;
+                    }
+                    px[dst + x] = (byte)v;
+                }
+            }
+            return true;
+        }
+
+        // test images for the self-test: rows cycle through the five filter types
+        public static byte[] Encode(int w, int h, byte[] rgb)
+        {
+            int stride = w * 3;
+            MemoryStream raw = new MemoryStream();
+            for (int y = 0; y < h; y++)
+            {
+                int f = y % 5;
+                raw.WriteByte((byte)f);
+                for (int x = 0; x < stride; x++)
+                {
+                    int cur = rgb[y * stride + x];
+                    int a = x >= 3 ? rgb[y * stride + x - 3] : 0, b = y > 0 ? rgb[(y - 1) * stride + x] : 0, c = (x >= 3 && y > 0) ? rgb[(y - 1) * stride + x - 3] : 0;
+                    int pr = f == 0 ? 0 : f == 1 ? a : f == 2 ? b : f == 3 ? (a + b) >> 1 : Paeth(a, b, c);
+                    raw.WriteByte((byte)(cur - pr));
+                }
+            }
+            byte[] rb = raw.ToArray();
+            MemoryStream z = new MemoryStream();
+            z.WriteByte(0x78); z.WriteByte(0x9C);
+            using (DeflateStream ds = new DeflateStream(z, CompressionMode.Compress, true)) ds.Write(rb, 0, rb.Length);
+            uint s1 = 1, s2 = 0; foreach (byte x in rb) { s1 = (s1 + x) % 65521; s2 = (s2 + s1) % 65521; }
+            uint ad = (s2 << 16) | s1;
+            z.WriteByte((byte)(ad >> 24)); z.WriteByte((byte)(ad >> 16)); z.WriteByte((byte)(ad >> 8)); z.WriteByte((byte)ad);
+            MemoryStream o = new MemoryStream();
+            o.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }, 0, 8);
+            byte[] ihdr = { (byte)(w >> 24), (byte)(w >> 16), (byte)(w >> 8), (byte)w, (byte)(h >> 24), (byte)(h >> 16), (byte)(h >> 8), (byte)h, 8, 2, 0, 0, 0 };
+            Chunk(o, "IHDR", ihdr); Chunk(o, "IDAT", z.ToArray()); Chunk(o, "IEND", new byte[0]);
+            return o.ToArray();
+        }
+        static int Paeth(int a, int b, int c) { int p = a + b - c, pa = Math.Abs(p - a), pb = Math.Abs(p - b), pc = Math.Abs(p - c); return (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); }
+        static uint[] crcTable;
+        static void Chunk(Stream o, string type, byte[] data)
+        {
+            if (crcTable == null)
+            {
+                uint[] t = new uint[256];
+                for (uint n = 0; n < 256; n++) { uint c = n; for (int k = 0; k < 8; k++) c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1; t[n] = c; }
+                crcTable = t;
+            }
+            byte[] tb = Encoding.ASCII.GetBytes(type);
+            o.WriteByte((byte)(data.Length >> 24)); o.WriteByte((byte)(data.Length >> 16)); o.WriteByte((byte)(data.Length >> 8)); o.WriteByte((byte)data.Length);
+            o.Write(tb, 0, 4); o.Write(data, 0, data.Length);
+            uint crc = 0xFFFFFFFFu;
+            foreach (byte x in tb) crc = crcTable[(crc ^ x) & 0xff] ^ (crc >> 8);
+            foreach (byte x in data) crc = crcTable[(crc ^ x) & 0xff] ^ (crc >> 8);
+            crc ^= 0xFFFFFFFFu;
+            o.WriteByte((byte)(crc >> 24)); o.WriteByte((byte)(crc >> 16)); o.WriteByte((byte)(crc >> 8)); o.WriteByte((byte)crc);
+        }
+    }
+
+    public static class ShotCheck
+    {
+        public const int BlankPermille = 995;   // 99.5 % of the pixels one colour (4 bits per channel)
+
+        static string Norm(string s)
+        {
+            StringBuilder b = new StringBuilder();
+            foreach (char c in (s ?? "").ToLowerInvariant()) if (char.IsLetterOrDigit(c)) b.Append(c);
+            return b.ToString();
+        }
+
+        // {status, reason}: ok | blank | suspect | failed. image = Png.Analyze result (null: none or unreadable);
+        // blocked = origins outside the scan the page asked for (refused by the scope proxy), ';'-separated
+        public static string[] Classify(string capture, bool hasImage, int[] image, string scanTitle, string browserTitle, string scanStatus,
+            int browserStatus, string finalUrl, bool finalInScope, string scanBodyLength, string blocked, int textLength)
+        {
+            capture = capture ?? "";
+            string[] bl = (blocked ?? "").Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries);
+            string blockedNote = bl.Length == 0 ? "" : "; the page went to or asked for " + (bl.Length == 1 ? "an origin" : bl.Length + " origins")
+                + " outside the scan, refused by the scope proxy (" + string.Join(", ", bl, 0, Math.Min(3, bl.Length)) + (bl.Length > 3 ? ", ..." : "") + ")";
+            if (!hasImage || !capture.StartsWith("ok", StringComparison.Ordinal))
+            {
+                string why = capture.StartsWith("failed: ", StringComparison.Ordinal) ? capture.Substring(8) : (capture.Length > 0 && !capture.StartsWith("ok", StringComparison.Ordinal) ? capture : "no image");
+                return new[] { "failed", why + blockedNote };
+            }
+            string fu = finalUrl ?? "";
+            if (fu.StartsWith("http", StringComparison.OrdinalIgnoreCase) && !finalInScope)
+            {
+                Uri u; string origin = Uri.TryCreate(fu, UriKind.Absolute, out u) ? u.Scheme + "://" + u.Authority : fu;
+                return new[] { "failed", "the page went to " + origin + ", outside the scanned origins (refused by the scope proxy): the image does not show this service" };
+            }
+            if (fu.StartsWith("chrome-error:", StringComparison.OrdinalIgnoreCase) || fu.StartsWith("edge-error:", StringComparison.OrdinalIgnoreCase) || fu.StartsWith("about:neterror", StringComparison.OrdinalIgnoreCase))
+                return new[] { "failed", "the browser showed its own error page" + (browserStatus > 0 ? " (HTTP " + browserStatus + ")" : "") + ", not the service's" + blockedNote };
+            // one colour: blank unless the page shows text (a short line of text covers well under 0.5 % of the image)
+            bool oneColour = image != null && (textLength == 0 ? image[2] >= BlankPermille : textLength < 0 && image[2] >= 999);
+            string colourNote = image == null ? "" : string.Format(CultureInfo.InvariantCulture, "the image is {0} one colour (#{1}, {2:0.0} %)",
+                image[2] >= 1000 ? "entirely" : "almost entirely", image[3].ToString("x6", CultureInfo.InvariantCulture), image[2] / 10.0);
+            int ss;
+            bool scanOk = int.TryParse(scanStatus, NumberStyles.None, CultureInfo.InvariantCulture, out ss) && ss > 0 && ss < 400;
+            if (browserStatus >= 400 && scanOk)
+                return new[] { "suspect", "the browser received HTTP " + browserStatus + ", the scan HTTP " + ss + (oneColour ? "; " + colourNote : "") };
+            if (scanBodyLength == "0" && (oneColour || textLength <= 0))
+                return new[] { "blank", "the page is empty (0-byte body)" };
+            if (oneColour)
+                return new[] { "blank", colourNote + (textLength == 0 ? "; the page shows no text" : "") + blockedNote };
+            string a = Norm(scanTitle), b = Norm(browserTitle);
+            if (a.Length > 0 && b.Length > 0 && a.IndexOf(b, StringComparison.Ordinal) < 0 && b.IndexOf(a, StringComparison.Ordinal) < 0)
+                return new[] { "suspect", "the browser rendered '" + Trunc(browserTitle) + "', the scan saw '" + Trunc(scanTitle) + "'" };
+            if (capture == "ok-timeout") return new[] { "ok", "captured before the page finished loading (no load event within the time limit)" };
+            return new[] { "ok", "" };
+        }
+        static string Trunc(string s) { s = (s ?? "").Trim(); return s.Length > 80 ? s.Substring(0, 80) + "..." : s; }
     }
 
     // ------------------------------------------------------------------ Screenshot scope proxy (loopback only)
@@ -7341,6 +8146,7 @@ function Remove-ProfileDir([string]$Dir) {
 function Invoke-Screenshots {
     param([string]$CsvFile)
     $index = @{}
+    $script:ShotMeta = @{}
     $rows = @(Import-Csv -LiteralPath $CsvFile | Where-Object { $_.IsWeb -eq 'True' -and $_.Url -match '^https?://' })
     $folderName = 'WebInventory_{0}_screenshots' -f $script:RunId
     $folder = Join-Path $OutputDir $folderName
@@ -7386,7 +8192,13 @@ function Invoke-Screenshots {
         $n = 0
         foreach ($r in $rows) {
             $n++
-            if ($prev.ContainsKey($r.Url)) { $out.Add($prev[$r.Url]); $index[$r.Url] = ($prev[$r.Url].File -replace '\\', '/'); continue }
+            if ($prev.ContainsKey($r.Url)) {
+                # an image a previous session of this run took (resumed run); index files before v2.5 lack the newer columns
+                $pv = $prev[$r.Url]
+                $o = [ordered]@{}; foreach ($c in 'Url', 'Host', 'IP', 'Port', 'File', 'Sha256', 'Bytes', 'Status', 'Reason', 'PageTitle', 'PageRequests', 'BlockedOrigins', 'ProxyRefused', 'Ms', 'BrowserUrl', 'BrowserStatus', 'Capture') { $o[$c] = [string]$pv.$c }
+                $out.Add([pscustomobject]$o); $index[$r.Url] = ($pv.File -replace '\\', '/'); $script:ShotMeta[[string]$r.Url] = @('ok', [string]$pv.Reason)
+                continue
+            }
             $uh = ([Uri]$r.Url).Host.Trim('[', ']')
             $name = ('{0:D4}_{1}_{2}.png' -f $n, ($uh -replace '[^\w.\-]', '_'), $r.Port)
             $queue.Enqueue([pscustomobject]@{ Row = $r; Name = $name })
@@ -7413,8 +8225,8 @@ function Invoke-Screenshots {
                 Stop-ProcessTree $j.Proc; [void]$j.Proc.WaitForExit(5000)
                 $j.Proxy.Dispose()
                 $status = if ($j.Cap.Done) { $j.Cap.Status } elseif ($j.Proc.HasExited -and -not $timedOut) { 'failed: the browser exited' } else { 'timeout' }
-                $sha = ''; $bytes = 0
-                if ($status -like 'ok*' -and (Test-Path -LiteralPath $j.File)) { $b = [IO.File]::ReadAllBytes($j.File); $bytes = $b.Length; $sha = [WebInv.Hash]::Sha256Hex($b) }
+                $sha = ''; $bytes = 0; $img = $null
+                if ($status -like 'ok*' -and (Test-Path -LiteralPath $j.File)) { $b = [IO.File]::ReadAllBytes($j.File); $bytes = $b.Length; $sha = [WebInv.Hash]::Sha256Hex($b); $img = [WebInv.Png]::Analyze($b) }
                 elseif (Test-Path -LiteralPath $j.File) { Remove-Item -LiteralPath $j.File -Force -ErrorAction SilentlyContinue }
                 # resources the page asked for outside the scanned origins (refused by the proxy); browser chatter is not counted
                 $allow = $byIp[$j.Q.Row.IP]
@@ -7427,12 +8239,22 @@ function Invoke-Screenshots {
                     $o2 = ('{0}:{1}' -f $u2.Host.Trim('[', ']'), $u2.Port).ToLowerInvariant()
                     if (-not $allow.ContainsKey($o2) -and -not $denied.Contains($o2)) { $denied.Add($o2) }
                 }
+                # does the image show this service? (the page the browser ended on, its HTTP status, pixels, title)
+                # the page the main document came from (MainUrl; location.href is chrome-error://... on the browser's error page)
+                $fin = [string]$j.Cap.FinalUrl
+                $land = if ($j.Cap.MainUrl -match '^https?://') { [string]$j.Cap.MainUrl } else { $fin }
+                $landIn = $true
+                if ($land -match '^https?://') { try { $lu = [Uri]$land; $landIn = $allow.ContainsKey(('{0}:{1}' -f $lu.Host.Trim('[', ']'), $lu.Port).ToLowerInvariant()) } catch { $landIn = $true } }
+                $cls = [WebInv.ShotCheck]::Classify([string]$status, [bool]$bytes, $img, [string]$j.Q.Row.Title, [string]$j.Cap.Title, [string]$j.Q.Row.StatusCode, [int]$j.Cap.MainStatus, $(if ($landIn) { $fin } else { $land }), $landIn, [string]$j.Q.Row.BodyLength, ($denied.ToArray() -join ';'), [int]$j.Cap.TextLength)
                 $out.Add([pscustomobject][ordered]@{ Url = $j.Q.Row.Url; Host = $j.Q.Row.Host; IP = $j.Q.Row.IP; Port = $j.Q.Row.Port
-                        File = $(if ($bytes) { '{0}/{1}' -f $folderName, $j.Q.Name } else { '' }); Sha256 = $sha; Bytes = $bytes; Status = $status
+                        File = $(if ($bytes) { '{0}/{1}' -f $folderName, $j.Q.Name } else { '' }); Sha256 = $sha; Bytes = $bytes; Status = $cls[0]; Reason = [WebInv.Util]::Printable($cls[1], 400)
                         PageTitle = [WebInv.Util]::Printable($j.Cap.Title, 200); PageRequests = $pageReq; BlockedOrigins = ($denied.ToArray() -join ';'); ProxyRefused = $j.Proxy.Denied; Ms = $j.Sw.ElapsedMilliseconds
+                        BrowserUrl = [WebInv.Util]::Printable($fin, 400); BrowserStatus = $(if ($j.Cap.MainStatus -gt 0) { $j.Cap.MainStatus } else { '' }); Capture = $status
                     })
                 if ($bytes) { $index[$j.Q.Row.Url] = '{0}/{1}' -f $folderName, $j.Q.Name }
+                $script:ShotMeta[[string]$j.Q.Row.Url] = @($cls[0], [string]$cls[1])
                 if ($status -notlike 'ok*') { Write-ErrLog 'SCREENSHOT' $j.Q.Row.Url $status }
+                elseif ($cls[0] -ne 'ok') { Write-RunLog ("screenshot {0}: {1} - {2}" -f $j.Q.Row.Url, $cls[0], $cls[1]) 'WARN' }
                 Remove-ProfileDir $j.Dir
                 [void]$running.Remove($j); $done++
             }
@@ -7444,13 +8266,27 @@ function Invoke-Screenshots {
         # (no @() around the List: PowerShell 7.4 throws 'Argument types do not match' for some empty generic lists)
         if ($running) { foreach ($j in $running.ToArray()) { Stop-ProcessTree $j.Proc; try { $j.Proxy.Dispose() } catch { } } }
         Remove-ProfileDir $tmpRoot
+        # the same image for pages the scan saw with different titles: a shared error or proxy page, not each service
+        $titleOf = @{}; foreach ($r in $rows) { $titleOf[[string]$r.Url] = ([string]$r.Title).ToLowerInvariant() -replace '[^\p{L}\p{N}]', '' }
+        foreach ($g in @($out | Where-Object { $_.Sha256 } | Group-Object Sha256 | Where-Object { $_.Count -gt 1 })) {
+            $titles = @($g.Group | ForEach-Object { $titleOf[[string]$_.Url] } | Where-Object { $_ } | Sort-Object -Unique)
+            if ($titles.Count -lt 2) { continue }
+            foreach ($o in $g.Group) {
+                if ($o.Status -ne 'ok') { continue }
+                $others = @($g.Group | Where-Object { $_.Url -ne $o.Url } | ForEach-Object { $_.Url })
+                $o.Status = 'suspect'; $o.Reason = [WebInv.Util]::Printable(('the same image as {0}, whose page the scan saw with a different title' -f ($others -join ', ')), 400)
+                $script:ShotMeta[[string]$o.Url] = @($o.Status, $o.Reason)
+                Write-RunLog ("screenshot {0}: suspect - {1}" -f $o.Url, $o.Reason) 'WARN'
+            }
+        }
         if ($out.Count) {
             $lines = @($out | Sort-Object { [string]$_.File } | ConvertTo-Csv -NoTypeInformation)
             [IO.File]::WriteAllLines($script:ShotIndexPath, [string[]]$lines, $script:Utf8Bom)
         }
     }
-    $ok = @($out | Where-Object { $_.Status -like 'ok*' }).Count
-    $msg = 'Screenshots: {0} of {1} web services captured -> {2}' -f $ok, $rows.Count, $folder
+    $ok = @($out | Where-Object { $_.Status -eq 'ok' }).Count
+    $cnt = @{}; foreach ($o in $out) { $cnt[$o.Status] = 1 + [int]$cnt[$o.Status] }
+    $msg = 'Screenshots: {0} of {1} web services captured and checked (ok {2}, blank {3}, suspect {4}, failed {5}) -> {6}' -f @($out | Where-Object { $_.Bytes }).Count, $rows.Count, $ok, [int]$cnt['blank'], [int]$cnt['suspect'], [int]$cnt['failed'], $folder
     Write-RunLog $msg
     if (-not $Quiet) { Write-Host $msg -ForegroundColor Cyan }
     $index
@@ -7509,6 +8345,68 @@ function Invoke-ExtrasSelfTest {
         }
         finally { $px.Dispose() }
     }
+    # -Cname: the UDP path end to end against a loopback responder (name compression, NXDOMAIN, silence)
+    Assert 'extras: CNAME chain over UDP (loopback DNS responder: chain, no CNAME, not in DNS, no answer)' {
+        $tab = New-Object 'System.Collections.Generic.Dictionary[string,string[]]'
+        $tab['www.example.test'] = [string[]]@('edge.example.net', 'lb7.cdn.example'); $tab['plain.example.test'] = [string[]]@(); $tab['quiet.example.test'] = [string[]]@('SILENT')
+        $rsp = [WebInv.DnsTestResponder]::new($tab)
+        try {
+            $srv = "127.0.0.1:$($rsp.Port)"; $e1 = $null; $e2 = $null; $e3 = $null; $e4 = $null
+            $c1 = [WebInv.Cname]::Chain('www.example.test', $srv, 1500, [ref]$e1)
+            $c2 = [WebInv.Cname]::Chain('plain.example.test', $srv, 1500, [ref]$e2)
+            $c3 = [WebInv.Cname]::Chain('missing.example.test', $srv, 1500, [ref]$e3)
+            $c4 = [WebInv.Cname]::Chain('quiet.example.test', $srv, 600, [ref]$e4)
+            $me = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+            $m = [WebInv.Cname]::Many([string[]]@('www.example.test', 'plain.example.test', 'missing.example.test'), $srv, 1500, 4, $me)
+            ((@($c1) -join '>') -eq 'edge.example.net>lb7.cdn.example') -and $null -eq $e1 -and @($c2).Count -eq 0 -and $null -ne $c2 -and $null -eq $e2 -and
+            $null -ne $c3 -and @($c3).Count -eq 0 -and $null -eq $e3 -and $null -eq $c4 -and $e4 -like '*no answer*' -and
+            $m['www.example.test'] -eq 'edge.example.net;lb7.cdn.example' -and $m['plain.example.test'] -eq '' -and $m['missing.example.test'] -eq '' -and $me.Count -eq 0
+        }
+        finally { $rsp.Dispose() }
+    }
+    Assert 'extras: DNS message parsing (query layout, pointer loop refused, chain order from unordered records)' {
+        $q = [WebInv.Cname]::BuildQuery(0x1234, 'a.bc', 1)
+        $loop = [byte[]]@(0x12, 0x34, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0, 0xC0, 12, 0, 5, 0, 1, 0, 0, 0, 1, 0, 2, 0xC0, 12)
+        $rc = 0; $tc = $false; $er = $null
+        $pl = [WebInv.Cname]::Parse($loop, [ref]$rc, [ref]$tc, [ref]$er)
+        $recs = New-Object 'System.Collections.Generic.List[string[]]'
+        $recs.Add([string[]]@('b.example.', 'c.example.')); $recs.Add([string[]]@('A.example', 'b.example')); $recs.Add([string[]]@('c.example', 'd.example'))
+        ((($q | ForEach-Object { '{0:x2}' -f $_ }) -join '') -eq '123401000001000000000000016102626300000100 01'.Replace(' ', '')) -and
+        $null -eq $pl -and $er -like '*malformed*' -and ((@([WebInv.Cname]::Follow($recs)) -join '>') -eq 'b.example>c.example>d.example') -and
+        ([WebInv.Cname]::ParseServer('[::1]:5353').Port -eq 5353) -and ([WebInv.Cname]::ParseServer('2001:db8::53').Port -eq 53)
+    }
+    # -Screenshot checks: PNG decoding (every filter type), one-colour detection, and the classification rules
+    Assert 'extras: PNG decoder (all five filter types round-trip) and one-colour share' {
+        $w = 37; $h = 23; $rgb = New-Object byte[] ($w * $h * 3)
+        for ($i = 0; $i -lt $rgb.Length; $i++) { $rgb[$i] = [byte](($i * 7 + [Math]::Floor($i / 111) * 13) % 256) }
+        $png = [WebInv.Png]::Encode($w, $h, $rgb)
+        $px = $null; $pw = 0; $ph = 0; $bpp = 0
+        $ok = [WebInv.Png]::Decode($png, [ref]$px, [ref]$pw, [ref]$ph, [ref]$bpp)
+        $same = $ok -and $pw -eq $w -and $ph -eq $h -and $bpp -eq 3 -and ([BitConverter]::ToString($px) -eq [BitConverter]::ToString($rgb))
+        $white = New-Object byte[] (64 * 48 * 3); for ($i = 0; $i -lt $white.Length; $i++) { $white[$i] = 255 }
+        $aw = [WebInv.Png]::Analyze([WebInv.Png]::Encode(64, 48, $white))
+        for ($i = 0; $i -lt 300; $i++) { $white[$i] = 0 }
+        $ad = [WebInv.Png]::Analyze([WebInv.Png]::Encode(64, 48, $white))
+        $same -and $aw[2] -eq 1000 -and $aw[3] -eq 0xffffff -and $ad[2] -lt 995 -and $null -eq [WebInv.Png]::Analyze([byte[]]@(1, 2, 3))
+    }
+    Assert 'extras: screenshot classification (failed, off-scope, browser error page, blank, suspect, ok)' {
+        $one = [int[]]@(1366, 768, 1000, 0xffffff, 1); $mostly = [int[]]@(1366, 768, 997, 0xffffff, 40); $busy = [int[]]@(1366, 768, 610, 0xffffff, 300)
+        $k = { param($cap, $has, $img, $st, $bt, $ss, $bs, $fu, $fin, $bl, $blk, $tl) [WebInv.ShotCheck]::Classify($cap, $has, $img, $st, $bt, $ss, $bs, $fu, $fin, $bl, $blk, $tl) }
+        $r1 = & $k 'failed: net::ERR_BLOCKED_BY_CLIENT' $false $null 'A' '' '302' 0 '' $true '0' 'login.example.com:80' -1
+        $r2 = & $k 'ok' $true $busy 'App' '' '200' 403 'https://login.example.com/' $false '10' '' -1
+        $r3 = & $k 'ok' $true $busy 'App' '' '200' 403 'chrome-error://chromewebdata/' $true '10' '' -1
+        $r4 = & $k 'ok' $true $one '' '' '200' 200 'http://h/' $true '0' '' 0
+        $r5 = & $k 'ok' $true $one 'App' 'App' '200' 200 'http://h/' $true '512' 'cdn.example.org:80;x.example:443;y.example:443' 0
+        $r6 = & $k 'ok' $true $mostly 'App' 'App' '200' 503 'http://h/' $true '512' '' 0
+        $r7 = & $k 'ok' $true $busy 'Grafana' 'Proxy Error' '200' 200 'http://h/' $true '512' '' 9
+        $r8 = & $k 'ok' $true $busy 'Grafana' 'Home - Grafana' '200' 200 'http://h/' $true '512' '' 9
+        $r9 = & $k 'ok-timeout' $true $busy 'App' 'App' '200' 200 'http://h/' $true '512' '' 9
+        $r10 = & $k 'ok' $true $mostly 'It works' 'It works' '200' 200 'http://h/' $true '45' '' 8
+        $r1[0] -eq 'failed' -and $r1[1] -like '*ERR_BLOCKED_BY_CLIENT*login.example.com:80*' -and $r2[0] -eq 'failed' -and $r2[1] -like '*https://login.example.com*outside*' -and
+        $r3[0] -eq 'failed' -and $r3[1] -like '*own error page (HTTP 403)*' -and $r4[0] -eq 'blank' -and $r4[1] -like '*0-byte body*' -and
+        $r5[0] -eq 'blank' -and $r5[1] -like '*#ffffff*' -and $r5[1] -like '*3 origins*' -and $r6[0] -eq 'suspect' -and $r6[1] -like '*HTTP 503*HTTP 200*one colour*' -and
+        $r7[0] -eq 'suspect' -and $r7[1] -like "*'Proxy Error'*" -and $r8[0] -eq 'ok' -and $r9[0] -eq 'ok' -and $r9[1] -like '*load event*' -and $r10[0] -eq 'ok'
+    }
 }
 #endregion
 
@@ -7527,7 +8425,16 @@ $Columns = @(
     # v2.3 (appended so existing CSV consumers keep their column positions)
     'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s',
     # v2.4 (appended)
-    'VersionPaths')
+    'VersionPaths',
+    # v2.5 (appended)
+    'Cname', 'Cloud', 'CloudRegion', 'CloudService')
+
+# a results CSV with at least one data row (exit code 4 of a resumed run counts earlier sessions' rows)
+function Test-CsvHasRows([string]$Path) {
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    $sr = New-Object IO.StreamReader($Path)
+    try { [void]$sr.ReadLine(); while ($null -ne ($l = $sr.ReadLine())) { if ($l.Trim()) { return $true } }; return $false } finally { $sr.Dispose() }
+}
 
 function Open-Outputs {
     param([string]$Dir, [string]$RunId)
@@ -7643,7 +8550,10 @@ function New-HtmlReport {
                 cd = $_.CertDaysLeft; cs = $_.CertSubject; ci = $_.CertIssuer; san = $_.CertSANs; f = $_.Flags; fav = $_.FaviconMmh3; cpe = $_.CPEs
                 vh = $_.VhostOf; rd = $_.ReverseDns; au = $_.Auth; fu = $_.FinalUrl; rc = $_.RedirectChain; b = $_.Banner; n = $_.Notes; adv = $_.Advisories
                 dn = $_.DeviceName; dom = $_.Domain; pi = $_.ProtocolInfo; jarm = $_.Jarm; ja4s = $_.Ja4s
-                shot = $(if ($Screenshots -and $Screenshots.ContainsKey([string]$_.Url)) { $Screenshots[[string]$_.Url] } else { '' }) } })
+                cn = $_.Cname; cl = (@($_.Cloud, $_.CloudRegion, $_.CloudService) | Where-Object { $_ }) -join ' / '
+                shot = $(if ($Screenshots -and $Screenshots.ContainsKey([string]$_.Url)) { $Screenshots[[string]$_.Url] } else { '' })
+                shs = $(if ($script:ShotMeta -and $script:ShotMeta.ContainsKey([string]$_.Url)) { $script:ShotMeta[[string]$_.Url][0] } else { '' })
+                shr = $(if ($script:ShotMeta -and $script:ShotMeta.ContainsKey([string]$_.Url)) { $script:ShotMeta[[string]$_.Url][1] } else { '' }) } })
     # strip control characters (ANSI escapes etc. from hostile headers) - they are inert in textContent but unreadable
     foreach ($o in $data) { foreach ($k in @($o.Keys)) { $o[$k] = [WebInv.Util]::Printable([string]$o[$k], 8000) } }
     $json = if ($data.Count) { ConvertTo-Json -InputObject $data -Compress -Depth 3 } else { '[]' }
@@ -7693,7 +8603,7 @@ var crit=/CertExpired|WeakCipher|CleartextAuth|ADCSWebEnrollment|DirectoryListin
 var meta=document.getElementById('meta');meta.textContent='Run '+(M.RunId||'')+(M.Tag?' \u00b7 '+M.Tag:'')+' \u00b7 '+(M.Started||'')+' \u00b7 '+(M.Duration||'')+' \u00b7 '+(M.Operator||'')+' on '+(M.Computer||'')+' \u00b7 v'+(M.Version||'');
 var web=D.filter(function(r){return r.w==='True'}),hosts={},tlsN=0,flagged=0,exp=0,mg=0,adv=0;
 D.forEach(function(r){hosts[r.ip]=1;if(r.tls||r.tsup)tlsN++;if(r.f)flagged++;var d=parseInt(r.cd,10);if(!isNaN(d)&&d<=30)exp++;if(/MgmtInterface/.test(r.f))mg++;if(/PHP2Shell:(vulnerable|eol)/.test(r.f))adv++});
-[['Web services',web.length],['Hosts',Object.keys(hosts).length],['Open services',D.length],['TLS endpoints',tlsN],['Flagged',flagged],['Certs \u2264 30 days',exp],['Mgmt interfaces',mg],['Advisory exposures',adv]].forEach(function(c){var d=el('div','card');d.appendChild(el('b',null,c[1]));d.appendChild(el('span',null,c[0]));document.getElementById('cards').appendChild(d)});
+[['Web services',web.length],['Hosts',Object.keys(hosts).length],['Open services',D.length],['TLS endpoints',tlsN],['Flagged',flagged],['Certs \u2264 30 days',exp],['Mgmt interfaces',mg],['Advisory exposures',adv],['In cloud / CDN ranges',D.filter(function(r){return r.cl}).length]].forEach(function(c){var d=el('div','card');d.appendChild(el('b',null,c[1]));d.appendChild(el('span',null,c[0]));document.getElementById('cards').appendChild(d)});
 function tally(key,split){var m={};D.forEach(function(r){(r[key]||'').split(split).forEach(function(x){x=x.trim();if(!x)return;if(key==='f')x=x.split(':')[0];m[x]=(m[x]||0)+1})});return Object.keys(m).map(function(k){return[k,m[k]]}).sort(function(a,b){return b[1]-a[1]}).slice(0,12)}
 function bars(id,list){var box=document.getElementById(id),max=list.length?list[0][1]:1;list.forEach(function(p){var b=el('div','bar');var i=el('i');i.style.width=Math.max(4,Math.round(120*p[1]/max))+'px';b.appendChild(i);b.appendChild(el('span',null,p[0]));b.appendChild(el('em',null,p[1]));b.onclick=function(){q.value=p[0];render()};box.appendChild(b)});if(!list.length)box.appendChild(el('span','count','none'))}
 bars('lp',tally('pr',';'));bars('lf',tally('f',';'));bars('lc',tally('c',';'));
@@ -7706,7 +8616,7 @@ var p=el('td');(r.pr||'').split(';').forEach(function(x){if(x.trim())p.appendChi
 tr.appendChild(el('td',null,(r.tls||'')+(r.h2==='True'?' h2':'')+(r.tsup&&!r.tls?' raw:'+r.tsup:'')));
 var d=parseInt(r.cd,10),cd=el('td',isNaN(d)?null:(d<0?'bad':(d<=30?'warn':'ok')),r.cd);tr.appendChild(cd);
 var fl=el('td');(r.f||'').split(';').forEach(function(x){if(x)fl.appendChild(el('span','chip '+(crit.test(x)?'bad':'warn'),x))});tr.appendChild(fl);
-tr.onclick=function(){var n=tr.nextSibling;if(n&&n.className==='d'){n.remove();return}var dr=el('tr','d'),td=el('td');td.colSpan=7;var lines=[['Host',r.h],['IP',r.ip],['Port',r.p],['Reverse DNS',r.rd],['Service',r.sv],['Device name',r.dn],['Domain',r.dom],['Protocol',r.pi],['Final URL',r.fu],['Redirects',r.rc],['Server',r.srv],['Auth',r.au],['Categories',r.c],['OS hint',r.os],['Hardware',r.hw],['CPEs',r.cpe],['TLS supported',r.tsup],['Cert subject',r.cs],['Cert issuer',r.ci],['SANs',r.san],['Favicon mmh3',r.fav],['JARM',r.jarm],['JA4S',r.ja4s],['Advisories',r.adv],['Banner',r.b],['Notes',r.n]].filter(function(x){return x[1]}).map(function(x){return x[0]+': '+x[1]}).join('\n');td.appendChild(el('pre',null,lines));if(r.shot&&/^[\w.\-]+\/[\w.\-]+\.png$/.test(r.shot)){var a=el('a');a.href=r.shot;a.target='_blank';a.rel='noopener';var im=el('img');im.src=r.shot;im.alt='screenshot of '+r.u;im.loading='lazy';im.style.maxWidth='min(100%,960px)';im.style.border='1px solid var(--bd,#888)';a.appendChild(im);td.appendChild(a)}dr.appendChild(td);tr.parentNode.insertBefore(dr,tr.nextSibling)};
+tr.onclick=function(){var n=tr.nextSibling;if(n&&n.className==='d'){n.remove();return}var dr=el('tr','d'),td=el('td');td.colSpan=7;var lines=[['Host',r.h],['IP',r.ip],['Port',r.p],['Reverse DNS',r.rd],['CNAME',(r.cn||'').split(';').join(' > ')],['Cloud',r.cl],['Service',r.sv],['Device name',r.dn],['Domain',r.dom],['Protocol',r.pi],['Final URL',r.fu],['Redirects',r.rc],['Server',r.srv],['Auth',r.au],['Categories',r.c],['OS hint',r.os],['Hardware',r.hw],['CPEs',r.cpe],['TLS supported',r.tsup],['Cert subject',r.cs],['Cert issuer',r.ci],['SANs',r.san],['Favicon mmh3',r.fav],['JARM',r.jarm],['JA4S',r.ja4s],['Advisories',r.adv],['Banner',r.b],['Notes',r.n]].filter(function(x){return x[1]}).map(function(x){return x[0]+': '+x[1]}).join('\n');td.appendChild(el('pre',null,lines));if(r.shs&&r.shs!=='ok'){td.appendChild(el('div','chip '+(r.shs==='failed'?'bad':'warn'),'Screenshot '+r.shs+(r.shr?': '+r.shr:'')))}if(r.shot&&/^[\w.\-]+\/[\w.\-]+\.png$/.test(r.shot)){var a=el('a');a.href=r.shot;a.target='_blank';a.rel='noopener';var im=el('img');im.src=r.shot;im.alt='screenshot of '+r.u;im.loading='lazy';im.style.maxWidth='min(100%,960px)';im.style.border='1px solid var(--bd,#888)';a.appendChild(im);td.appendChild(a)}dr.appendChild(td);tr.parentNode.insertBefore(dr,tr.nextSibling)};
 tb.appendChild(tr)})}
 Array.prototype.forEach.call(document.querySelectorAll('th'),function(th){th.onclick=function(){var k=th.getAttribute('data-k');if(sortK===k)sortD=-sortD;else{sortK=k;sortD=1}render()}});
 q.oninput=render;sv.onchange=render;
@@ -8422,7 +9332,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.4.1";
+        public const string Version = "2.5.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -8725,7 +9635,9 @@ namespace WebInv
             // v2.3: appended (empty values do not enter the hash, so every earlier version keeps its hash)
             "DeviceName", "Domain", "ProtocolInfo", "Jarm", "Ja4s",
             // v2.4: appended
-            "VersionPaths" };
+            "VersionPaths",
+            // v2.5: appended
+            "Cname", "Cloud", "CloudRegion", "CloudService" };
         // recorded with each sighting, never a reason for a new version (response time, dynamic page hashes, scan clock)
         public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag" };
         // profile flag -> fields that only that probe collects; a run without the probe keeps the previous values
@@ -8738,7 +9650,9 @@ namespace WebInv
             new[] { "versionPaths", "VersionPaths" },
             new[] { "reverseDns", "ReverseDns" },
             new[] { "tlsFingerprint", "Jarm" },
-            new[] { "ja4s", "Ja4s" } };
+            new[] { "ja4s", "Ja4s" },
+            new[] { "cname", "Cname" },
+            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" } };
         static readonly HashSet<string> MaterialSet = new HashSet<string>(Material, StringComparer.Ordinal);
         public static bool IsMaterial(string f) { return MaterialSet.Contains(f); }
 
@@ -8813,6 +9727,7 @@ namespace WebInv
         public bool TlsScan = true, Favicon = true, Extras = true, Options, IdentifyPaths, ProbeSans, ReverseDns;
         public bool TlsFingerprint, Ja4s, Smb, Rdp, Snmp;   // v2.3 opt-in probes (appended to Profile only when on)
         public bool VersionPaths;                            // v2.4 opt-in (appended to Profile only when on)
+        public bool Cname, Cloud;                            // v2.5: -Cname; cloud ranges loaded (appended only when on)
         public long Checks;
         public bool Collected(string flag)
         {
@@ -8828,10 +9743,12 @@ namespace WebInv
                 case "tlsFingerprint": return TlsFingerprint;
                 case "ja4s": return Ja4s;
                 case "versionPaths": return VersionPaths;
+                case "cname": return Cname;
+                case "cloud": return Cloud;
             }
             return true;
         }
-        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths); } }
+        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud); } }
         // flag as written in a Profile string ("tls=1 favicon=1 ..."); missing = off (flags added later are appended only when on)
         public static bool ProfileHas(string profile, string flag)
         {
@@ -8846,7 +9763,8 @@ namespace WebInv
             {
                 return string.Format(CultureInfo.InvariantCulture, "tls={0} favicon={1} extras={2} options={3} identifyPaths={4} probeSans={5} reverseDns={6}",
                     TlsScan ? 1 : 0, Favicon ? 1 : 0, Extras ? 1 : 0, Options ? 1 : 0, IdentifyPaths ? 1 : 0, ProbeSans ? 1 : 0, ReverseDns ? 1 : 0)
-                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "");
+                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "")
+                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "");
             }
         }
         public DateTimeOffset Started { get { return StoreUtil.ParseIso(StartedAt); } }
@@ -8873,6 +9791,7 @@ namespace WebInv
                 r.ReverseDns = Flag(p, "reverseDns", false);
                 r.TlsFingerprint = Flag(p, "tlsFingerprint", false); r.Ja4s = Flag(p, "ja4s", false); r.Smb = Flag(p, "smb", false); r.Rdp = Flag(p, "rdp", false); r.Snmp = Flag(p, "snmp", false);
                 r.VersionPaths = Flag(p, "versionPaths", false);
+                r.Cname = Flag(p, "cname", false); r.Cloud = Flag(p, "cloud", false);
             }
             if (r.RunId.Length == 0) throw new InvalidDataException("run.json has no runId");
             DateTimeOffset t;
@@ -8889,6 +9808,8 @@ namespace WebInv
             if (Rdp) p.Bool("rdp", true);
             if (Snmp) p.Bool("snmp", true);
             if (VersionPaths) p.Bool("versionPaths", true);
+            if (Cname) p.Bool("cname", true);
+            if (Cloud) p.Bool("cloud", true);
             return new JsonObj().Num("format", 1).Str("runId", RunId).Str("startedAt", StartedAt).Str("finishedAt", FinishedAt).Bool("complete", Complete)
                 .Bool("synthesized", Synthesized).Str("scanner", Scanner).Str("tag", Tag).Str("operator", Operator).Str("computer", Computer)
                 .Num("checks", Checks).Raw("profile", p.ToString()).ToString();
@@ -8918,6 +9839,8 @@ namespace WebInv
                 if (StoreUtil.Str(o, "AllowedMethods").Length > 0) r.Options = true;
                 if (StoreUtil.Str(o, "IdentifiedPaths").Length > 0) r.IdentifyPaths = true;
                 if (StoreUtil.Str(o, "VersionPaths").Length > 0) r.VersionPaths = true;
+                if (StoreUtil.Str(o, "Cname").Length > 0) r.Cname = true;
+                if (StoreUtil.Str(o, "Cloud").Length > 0) r.Cloud = true;
                 if (StoreUtil.Str(o, "Vhost") == "True") r.ProbeSans = true;
                 if (StoreUtil.Str(o, "ReverseDns").Length > 0) r.ReverseDns = true;
                 if (StoreUtil.Str(o, "Jarm").Length > 0) r.TlsFingerprint = true;
@@ -12175,9 +13098,11 @@ function Write-RunInfo {
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
+            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
             proxy = $(if ($Proxy) { $proxyLabel } else { '' }); snmp = $(if ($Snmp) { $snmpMode } else { '' })
+            cloudRanges = $(if ($script:CloudOn) { [string][WebInv.Cloud]::Version } elseif ($script:CloudEnabled) { 'not needed (no public address)' } else { '' }); dnsServer = [string]$DnsServer
         }
         sessions = $sessions.ToArray()
     }
@@ -12770,6 +13695,50 @@ function Initialize-Rules {
     }
 }
 
+# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP.
+# The companion file is loaded when the first service on a public address is found (internal scans never need it);
+# a -CloudFile is loaded before the scan, so a bad file stops the run before anything is sent.
+$script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
+function Initialize-Cloud {
+    [WebInv.Cloud]::Clear(); $script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
+    if ($NoCloud) { Write-RunLog 'Cloud ranges: off (-NoCloud)'; return }
+    $f = if ($CloudFile) { $CloudFile } elseif ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { $null }
+    if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) {
+        if ($CloudFile) { Stop-Fatal "Cloud ranges file not found: $CloudFile" }
+        Write-RunLog 'Cloud ranges: WebInventory.cloud.json is not next to the script; the Cloud columns stay empty'
+        return
+    }
+    $script:CloudPending = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudEnabled = $true
+    if ($CloudFile) { Import-CloudRanges }
+    else { Write-RunLog ("Cloud ranges: {0} (loaded when the first service on a public address answers)" -f $script:CloudPending) }
+}
+
+function Import-CloudRanges {
+    $full = $script:CloudPending; $script:CloudPending = $null
+    if (-not $full) { return }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $errs = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        $bytes = [IO.File]::ReadAllBytes($full)
+        $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs)
+    }
+    catch {
+        $m = "cloud ranges could not be read: $($_.Exception.Message)"
+        $script:CloudEnabled = $false
+        if ($CloudFile) { Stop-Fatal "-CloudFile ${full}: $m" }
+        Write-ErrLog 'CLOUD' $full $m; return
+    }
+    foreach ($e in $errs) { Write-ErrLog 'CLOUD' $full $e }
+    $script:CloudOn = $n -gt 0
+    if (-not $script:CloudOn) { $script:CloudEnabled = $false }
+    Write-RunLog ("cloud ranges v{0}: {1} prefixes ({2} IPv4, {3} IPv6) sha256={4} file={5} ({6} ms)" -f $pack.Version, $n, @($pack.V4).Count, @($pack.V6).Count, [WebInv.Hash]::Sha256Hex($bytes), $full, $sw.ElapsedMilliseconds)
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParseExact([string]$pack.Version, 'yyyy.MM.dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d) -and ((Get-Date) - $d).TotalDays -gt 45) {
+        Write-RunLog ("cloud ranges are {0:0} days old (v{1}); providers move ranges often: refresh WebInventory.cloud.json" -f ((Get-Date) - $d).TotalDays, $pack.Version) 'WARN'
+    }
+}
+
 # Upstream commit of a git checkout (walks up from the import path); recorded in the pack for provenance / GPL source traceability
 function Get-GitCommit {
     param([string]$Path)
@@ -13187,6 +14156,40 @@ function Invoke-SelfTest {
     Assert 'version path response adds the version; a path on a detection rule or with dot segments is refused' {
         @([WebInv.Matcher]::Evaluate($vp1) | Where-Object { $_.Name -eq 'ST Zeta' -and $_.Version -eq '3.4' }).Count -eq 1 -and
         @($vpErr | Where-Object { $_ -like 'st:vpbad1:*' }).Count -eq 1 -and @($vpErr | Where-Object { $_ -like 'st:vpbad2:*' }).Count -eq 1 }
+    # cloud / CDN ranges: longest prefix wins, IPv4, IPv6 and IPv4-mapped addresses, malformed entries skipped
+    Assert 'cloud ranges: longest-prefix match over IPv4/IPv6, mapped addresses, no match outside, bad entries reported' {
+        $cj = '{"format":1,"version":"2026.01.02","names":["","AWS","us-east-1","EC2","Azure","eastus","AppService","Cloudflare","CDN"],' +
+              '"v4":["3.0.0.0/8|1|2|0","3.5.0.0/16|1|2|3","20.0.0.0/8|4|5|0","20.1.2.0/24|4|5|6","20.1.2.3/32|4|0|6","104.16.0.0/13|7|0|8","bad|1|1|1","1.2.3.0/24|99|0|0"],' +
+              '"v6":["2600:1f00::/24|1|0|0","2606:4700::/32|7|0|8","2600:1f18:1234::/48|1|2|3"]}'
+        $ce = New-Object 'System.Collections.Generic.List[string]'
+        $n = [WebInv.Cloud]::Load([WebInv.Cloud]::Read($cj), $ce)
+        $f = { param($ip) $r = [WebInv.Cloud]::Find($ip); if ($r) { $r -join '/' } else { '-' } }
+        $ok = $n -eq 9 -and $ce.Count -ge 2 -and (& $f '3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f '3.9.1.1') -eq 'AWS/us-east-1/' -and
+            (& $f '20.1.2.4') -eq 'Azure/eastus/AppService' -and (& $f '20.1.2.3') -eq 'Azure//AppService' -and (& $f '20.200.0.1') -eq 'Azure/eastus/' -and
+            (& $f '104.23.255.255') -eq 'Cloudflare//CDN' -and (& $f '104.24.0.0') -eq '-' -and (& $f '8.8.8.8') -eq '-' -and (& $f '10.0.0.1') -eq '-' -and
+            (& $f '2606:4700::1111') -eq 'Cloudflare//CDN' -and (& $f '2600:1f18:1234:5::1') -eq 'AWS/us-east-1/EC2' -and (& $f '2600:1f18:9999::1') -eq 'AWS//' -and
+            (& $f '::ffff:3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f 'not-an-ip') -eq '-' -and (& $f '') -eq '-'
+        [WebInv.Cloud]::Clear()
+        $priv = @('10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.0.1', '0.0.0.0', '224.0.0.1', 'fd00::1', 'fe80::1', '::1', '::', 'ff02::1', '::ffff:10.0.0.1', 'bad') | Where-Object { -not [WebInv.Cloud]::IsPrivate($_) }
+        $pub = @('172.32.0.1', '172.15.255.255', '100.128.0.1', '8.8.8.8', '2606:4700::1', '::ffff:3.5.1.1') | Where-Object { [WebInv.Cloud]::IsPrivate($_) }
+        $ok -and -not [WebInv.Cloud]::Loaded -and @($priv).Count -eq 0 -and @($pub).Count -eq 0
+    }
+    # the shipped ranges (next to the script): they load, and the first and last entry of each family are found again
+    $shippedCloud = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { '' }
+    if ($shippedCloud -and (Test-Path -LiteralPath $shippedCloud)) {
+        Assert 'cloud ranges: the shipped WebInventory.cloud.json loads and finds its own entries' {
+            $cp = [WebInv.Cloud]::Read([IO.File]::ReadAllText($shippedCloud))
+            $n = [WebInv.Cloud]::Load($cp, (New-Object 'System.Collections.Generic.List[string]'))
+            $good = $n -gt 1000
+            foreach ($e in @($cp.V4[0], $cp.V4[-1], $cp.V6[0], $cp.V6[-1])) {
+                $fld = $e.Split('|'); $net = $fld[0].Split('/')[0]
+                $r = [WebInv.Cloud]::Find($net)   # a more specific range may start at the same address: any provider counts
+                if (-not $r -or -not $r[0]) { $good = $false }
+            }
+            [WebInv.Cloud]::Clear()
+            $good
+        }
+    }
     # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
     $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
     [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))
@@ -13356,6 +14359,8 @@ if ($TestRules) { Invoke-TestRules; Close-Logs; exit $script:ExitCode }
 
 # ---------- opt-in probe options (refused before anything is sent) ----------
 if ($NoJa4s -and -not $TlsFingerprint) { Stop-Fatal '-NoJa4s goes with -TlsFingerprint.' }
+if ($DnsServer -and -not $Cname) { Stop-Fatal '-DnsServer goes with -Cname.' }
+if ($CloudFile -and $NoCloud) { Stop-Fatal 'Give -CloudFile or -NoCloud, not both.' }
 $snmpCred = $null
 if (-not $Snmp -and ($SnmpCommunity -or $SnmpCredential -or $SnmpPrivPassword -or $SnmpVersion -or $SnmpPrivProtocol)) { Stop-Fatal 'SNMP options were given without -Snmp.' }
 if ($Snmp) {
@@ -13435,8 +14440,9 @@ if ($Proxy) {
 }
 
 # ---------- opt-in probes: compiled only when used ----------
-$useExtras = $TlsFingerprint -or $Smb -or $Rdp -or $Snmp -or $Screenshot
+$useExtras = $TlsFingerprint -or $Smb -or $Rdp -or $Snmp -or $Screenshot -or $Cname
 if ($useExtras) { try { Initialize-Extras } catch { Stop-Fatal "Extras compile failed: $($_.Exception.Message)" } }
+if ($Cname -and $DnsServer) { try { foreach ($ds in $DnsServer.Split(@(',', ';', ' '), [StringSplitOptions]::RemoveEmptyEntries)) { [void][WebInv.Cname]::ParseServer($ds) } } catch { Stop-Fatal "-DnsServer: $($_.Exception.Message)" } }
 if ($Snmp) {
     $sc = New-Object WebInv.SnmpCredential
     foreach ($k in @($snmpCred.Keys)) { $sc.$k = $snmpCred[$k] }
@@ -13521,6 +14527,16 @@ if ($names.Count) {
     foreach ($k in $dnsErr.Keys) { Write-ErrLog 'DNS' $k $dnsErr[$k] }
     Write-RunLog ("DNS: {0} names, {1} resolved, {2} failed in {3} ms" -f $names.Count, $resolved.Count, $dnsErr.Count, $swDns.ElapsedMilliseconds)
 }
+# -Cname: the CNAME chain of each name that resolved (one A query per name to the resolvers; nothing to the targets)
+$script:CnameMap = $null
+if ($Cname -and $resolved.Count -and -not $ListTargets) {
+    $swCn = [Diagnostics.Stopwatch]::StartNew()
+    $cnErr = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+    $script:CnameMap = [WebInv.Cname]::Many([string[]]@($resolved.Keys), [string]$DnsServer, [Math]::Max(2000, $TimeoutMs), 16, $cnErr)
+    foreach ($k in $cnErr.Keys) { Write-ErrLog 'CNAME' $k $cnErr[$k] }
+    $withChain = @($script:CnameMap.Values | Where-Object { $_ }).Count
+    Write-RunLog ("CNAME: {0} names via {1}: {2} with a CNAME chain, {3} without, {4} failed in {5} ms" -f $resolved.Count, $(if ($DnsServer) { "-DnsServer $DnsServer" } elseif ([WebInv.Cname]::IsWindows) { 'the Windows DNS client' } else { 'the system resolvers (UDP)' }), $withChain, ($script:CnameMap.Count - $withChain), $cnErr.Count, $swCn.ElapsedMilliseconds)
+}
 
 # Build jobs (port-major within each entry => natural round-robin across hosts)
 $jb = [WebInv.JobBuilder]::new($ExSet, $ScopeSet, $resolved, [bool]$AllAddresses)
@@ -13560,7 +14576,13 @@ if ($ListTargets) {
     Write-RunLog $msg; Write-Host $msg -ForegroundColor Cyan
     Close-Logs; exit 0
 }
-if ($Jobs.Count -eq 0) { Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow; Close-Logs; exit $(if ($script:ErrTotal) { 2 } else { 0 }) }
+if ($Jobs.Count -eq 0) {
+    Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow
+    # every target that was not excluded was a name that did not resolve: nothing could answer (exit 4, see below)
+    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and -not ($parsed | Where-Object { $_.Spec.Ranges.Count -gt 0 } | Select-Object -First 1)   # (no @() around the generic List: PowerShell 7.4)
+    if ($allUnresolved) { Write-RunLog 'NOTHING ANSWERED: no target name resolved (exit 4)' 'WARN' }
+    Close-Logs; exit $(if ($allUnresolved) { 4 } elseif ($script:ErrTotal) { 2 } else { 0 })
+}
 
 if ($Proxy) {
     # one CONNECT to the first check: a proxy that wants authentication (407) would otherwise fail every check
@@ -13613,6 +14635,9 @@ if (-not $Quiet) { Write-Host $banner -ForegroundColor Cyan }
 # for seconds (measured) and made servers time out, losing HTTPS services under load
 Write-RunLog ("TLS/chain engine warm-up: {0} ms" -f [WebInv.Net]::WarmUp([Convert]::FromBase64String($script:SelfTestCertB64))) 'DEBUG'
 
+# ---------- cloud / CDN IP ranges (offline lookup of each service's IP) ----------
+Initialize-Cloud
+
 # ---------- dispatcher ----------
 # Threads long-lived workers pull checks from a C# scheduler (per-host cap, round-robin across hosts) and push results to
 # a queue this thread waits on. No per-check PowerShell instance, no polling.
@@ -13655,6 +14680,9 @@ function Complete-Result {
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
         $counts.rows++
+        if ($script:CloudPending -and -not [WebInv.Cloud]::IsPrivate([string]$row.IP)) { Import-CloudRanges }
+        if ($script:CloudOn) { $cf = [WebInv.Cloud]::Find([string]$row.IP); if ($cf) { $row.Cloud = $cf[0]; $row.CloudRegion = $cf[1]; $row.CloudService = $cf[2] } }
+        if ($script:CnameMap -and -not $row.Vhost -and $script:CnameMap.ContainsKey([string]$row.Host)) { $row.Cname = $script:CnameMap[[string]$row.Host] }
         if ($row.IsWeb) { $counts.web++ }
         try { Write-ResultRow $row } catch { Write-ErrLog 'IO' $row.Url ("write failed: {0}" -f $_.Exception.Message) }
         Write-RunLog ("HIT {0} web={1} status={2} products=[{3}] flags=[{4}]" -f $row.Url, $row.IsWeb, $row.StatusCode, $row.Products, $row.Flags)
@@ -13791,7 +14819,14 @@ finally {
     Write-Host ("Results: {0}{1}" -f $script:CsvPath, $(if ($script:HtmlPath) { " | $($script:HtmlPath)" } else { '' })) -ForegroundColor Cyan
     Write-Host ("Logs:    {0} | {1}" -f $RunLogPath, $ErrLogPath) -ForegroundColor DarkGray
     if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Resume:  re-run the same command with -Resume '{0}'" -f $script:ProgressPath) -ForegroundColor Yellow }
-    $script:ExitCode = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
+    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
+    # Rows from earlier sessions of a resumed run count as answers.
+    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
+    if (-not $interrupted -and -not $script:TimeLimitHit -and -not $answered) {
+        $na = "NOTHING ANSWERED: {0} checks, no open service (exit 4)" -f $doneCount
+        Write-RunLog $na 'WARN'; Write-Host $na -ForegroundColor Yellow
+    }
+    $script:ExitCode = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif (-not $answered) { 4 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
     Close-Logs
     try {
         $script:ManifestPath = Join-Path $OutputDir ("WebInventory_{0}_manifest.txt" -f $script:RunId)

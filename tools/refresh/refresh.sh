@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Refresh the external lists WebInventory is built from (rule packs, NVD names, version-candidate index, coverage
-# table), rebuild, run the offline tests and write a summary for review. Used by .github/workflows/refresh-lists.yml
+# table, cloud/CDN IP ranges), rebuild, run the offline tests and write a summary for review. Used by .github/workflows/refresh-lists.yml
 # and runnable by hand. See tools/refresh/README.md.
 #
 # usage: tools/refresh/refresh.sh [--work DIR] [--feeds DIR] [--cpedict DIR] [--sources DIR] [--force]
@@ -40,7 +40,7 @@ fetch() {   # url file: download with retries (NVD and CISA throttle bursts)
 }
 cd "$REPO"
 SCRIPT_VERSION=$(sed -n "s/^\$ScriptVersion = '\(.*\)'.*/\1/p" src/10-header.ps1)
-cp dist/WebInventory.rules.recog.json dist/WebInventory.rules.wappalyzer.json src/cpe-supplement.json \
+cp dist/WebInventory.rules.recog.json dist/WebInventory.rules.wappalyzer.json dist/WebInventory.cloud.json src/cpe-supplement.json \
    src/builtin-rules.json src/version-rules.json tools/version/external.json "$WORK/before/"
 
 # ---- 1. upstream sources --------------------------------------------------------------------------------------------
@@ -116,6 +116,27 @@ python3 tools/version/external.py --repo . --whatweb "${SRC[WhatWeb]}" --nuclei 
 python3 tools/version/coverage.py --repo . --cve "$WORK/cve_vp.json" --doc docs/web-inventory-coverage.md --version "$SCRIPT_VERSION" > "$WORK/coverage.after.txt"
 # NVD adds CVEs every day: a coverage table whose only change is a CVE count is not worth a pull request on its own
 if [ -z "$(git status --porcelain -- . ':!docs/web-inventory-coverage.md')" ]; then git checkout -q -- docs/web-inventory-coverage.md; fi
+
+# ---- 6b. cloud / CDN IP ranges: the providers' own published lists ------------------------------------------------
+# a provider whose list shrinks by more than a fifth fails the check (a truncated download must not drop ranges)
+if python3 tools/cloud/build.py --cache "$WORK/cloud" --out "$WORK/cloud.json" > "$WORK/logs/cloud.txt" 2>&1; then
+  set +e
+  python3 - "$WORK/before/WebInventory.cloud.json" "$WORK/cloud.json" >> "$WORK/logs/cloud.txt" 2>&1 <<'PY'
+import json, sys
+a, b = (json.load(open(p, encoding='utf-8')) for p in sys.argv[1:3])
+if all(a.get(k) == b.get(k) for k in ('names', 'v4', 'v6')):
+    sys.exit(0)
+drop = [p for p, n in a.get('counts', {}).items() if b.get('counts', {}).get(p, 0) < 0.8 * n]
+for p in drop:
+    print('cloud ranges: %s went from %d to %d prefixes' % (p, a['counts'][p], b.get('counts', {}).get(p, 0)))
+sys.exit(2 if drop else 1)
+PY
+  rc=$?; set -e
+  if [ $rc = 1 ]; then cp "$WORK/cloud.json" dist/WebInventory.cloud.json
+  elif [ $rc = 2 ]; then failed "cloud ranges: a provider's list shrank by more than 20 % (logs/cloud.txt); the previous ranges were kept"; fi
+else
+  failed "cloud ranges: a provider list could not be read (logs/cloud.txt); the previous ranges were kept"
+fi
 
 # ---- 7. offline tests (Linux PowerShell 7; the workflow repeats -SelfTest on Windows PowerShell 5.1) -----------------
 (cd "$WORK/logs" && pwsh -NoProfile -File "$REPO/dist/Invoke-WebInventory.ps1" -SelfTest) > "$WORK/logs/selftest.txt" 2>&1 || failed "-SelfTest (logs/selftest.txt)"

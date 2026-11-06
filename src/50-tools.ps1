@@ -34,6 +34,50 @@ function Initialize-Rules {
     }
 }
 
+# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP.
+# The companion file is loaded when the first service on a public address is found (internal scans never need it);
+# a -CloudFile is loaded before the scan, so a bad file stops the run before anything is sent.
+$script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
+function Initialize-Cloud {
+    [WebInv.Cloud]::Clear(); $script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
+    if ($NoCloud) { Write-RunLog 'Cloud ranges: off (-NoCloud)'; return }
+    $f = if ($CloudFile) { $CloudFile } elseif ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { $null }
+    if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) {
+        if ($CloudFile) { Stop-Fatal "Cloud ranges file not found: $CloudFile" }
+        Write-RunLog 'Cloud ranges: WebInventory.cloud.json is not next to the script; the Cloud columns stay empty'
+        return
+    }
+    $script:CloudPending = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudEnabled = $true
+    if ($CloudFile) { Import-CloudRanges }
+    else { Write-RunLog ("Cloud ranges: {0} (loaded when the first service on a public address answers)" -f $script:CloudPending) }
+}
+
+function Import-CloudRanges {
+    $full = $script:CloudPending; $script:CloudPending = $null
+    if (-not $full) { return }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $errs = New-Object 'System.Collections.Generic.List[string]'
+    try {
+        $bytes = [IO.File]::ReadAllBytes($full)
+        $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs)
+    }
+    catch {
+        $m = "cloud ranges could not be read: $($_.Exception.Message)"
+        $script:CloudEnabled = $false
+        if ($CloudFile) { Stop-Fatal "-CloudFile ${full}: $m" }
+        Write-ErrLog 'CLOUD' $full $m; return
+    }
+    foreach ($e in $errs) { Write-ErrLog 'CLOUD' $full $e }
+    $script:CloudOn = $n -gt 0
+    if (-not $script:CloudOn) { $script:CloudEnabled = $false }
+    Write-RunLog ("cloud ranges v{0}: {1} prefixes ({2} IPv4, {3} IPv6) sha256={4} file={5} ({6} ms)" -f $pack.Version, $n, @($pack.V4).Count, @($pack.V6).Count, [WebInv.Hash]::Sha256Hex($bytes), $full, $sw.ElapsedMilliseconds)
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParseExact([string]$pack.Version, 'yyyy.MM.dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d) -and ((Get-Date) - $d).TotalDays -gt 45) {
+        Write-RunLog ("cloud ranges are {0:0} days old (v{1}); providers move ranges often: refresh WebInventory.cloud.json" -f ((Get-Date) - $d).TotalDays, $pack.Version) 'WARN'
+    }
+}
+
 # Upstream commit of a git checkout (walks up from the import path); recorded in the pack for provenance / GPL source traceability
 function Get-GitCommit {
     param([string]$Path)
@@ -451,6 +495,40 @@ function Invoke-SelfTest {
     Assert 'version path response adds the version; a path on a detection rule or with dot segments is refused' {
         @([WebInv.Matcher]::Evaluate($vp1) | Where-Object { $_.Name -eq 'ST Zeta' -and $_.Version -eq '3.4' }).Count -eq 1 -and
         @($vpErr | Where-Object { $_ -like 'st:vpbad1:*' }).Count -eq 1 -and @($vpErr | Where-Object { $_ -like 'st:vpbad2:*' }).Count -eq 1 }
+    # cloud / CDN ranges: longest prefix wins, IPv4, IPv6 and IPv4-mapped addresses, malformed entries skipped
+    Assert 'cloud ranges: longest-prefix match over IPv4/IPv6, mapped addresses, no match outside, bad entries reported' {
+        $cj = '{"format":1,"version":"2026.01.02","names":["","AWS","us-east-1","EC2","Azure","eastus","AppService","Cloudflare","CDN"],' +
+              '"v4":["3.0.0.0/8|1|2|0","3.5.0.0/16|1|2|3","20.0.0.0/8|4|5|0","20.1.2.0/24|4|5|6","20.1.2.3/32|4|0|6","104.16.0.0/13|7|0|8","bad|1|1|1","1.2.3.0/24|99|0|0"],' +
+              '"v6":["2600:1f00::/24|1|0|0","2606:4700::/32|7|0|8","2600:1f18:1234::/48|1|2|3"]}'
+        $ce = New-Object 'System.Collections.Generic.List[string]'
+        $n = [WebInv.Cloud]::Load([WebInv.Cloud]::Read($cj), $ce)
+        $f = { param($ip) $r = [WebInv.Cloud]::Find($ip); if ($r) { $r -join '/' } else { '-' } }
+        $ok = $n -eq 9 -and $ce.Count -ge 2 -and (& $f '3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f '3.9.1.1') -eq 'AWS/us-east-1/' -and
+            (& $f '20.1.2.4') -eq 'Azure/eastus/AppService' -and (& $f '20.1.2.3') -eq 'Azure//AppService' -and (& $f '20.200.0.1') -eq 'Azure/eastus/' -and
+            (& $f '104.23.255.255') -eq 'Cloudflare//CDN' -and (& $f '104.24.0.0') -eq '-' -and (& $f '8.8.8.8') -eq '-' -and (& $f '10.0.0.1') -eq '-' -and
+            (& $f '2606:4700::1111') -eq 'Cloudflare//CDN' -and (& $f '2600:1f18:1234:5::1') -eq 'AWS/us-east-1/EC2' -and (& $f '2600:1f18:9999::1') -eq 'AWS//' -and
+            (& $f '::ffff:3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f 'not-an-ip') -eq '-' -and (& $f '') -eq '-'
+        [WebInv.Cloud]::Clear()
+        $priv = @('10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.0.1', '0.0.0.0', '224.0.0.1', 'fd00::1', 'fe80::1', '::1', '::', 'ff02::1', '::ffff:10.0.0.1', 'bad') | Where-Object { -not [WebInv.Cloud]::IsPrivate($_) }
+        $pub = @('172.32.0.1', '172.15.255.255', '100.128.0.1', '8.8.8.8', '2606:4700::1', '::ffff:3.5.1.1') | Where-Object { [WebInv.Cloud]::IsPrivate($_) }
+        $ok -and -not [WebInv.Cloud]::Loaded -and @($priv).Count -eq 0 -and @($pub).Count -eq 0
+    }
+    # the shipped ranges (next to the script): they load, and the first and last entry of each family are found again
+    $shippedCloud = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { '' }
+    if ($shippedCloud -and (Test-Path -LiteralPath $shippedCloud)) {
+        Assert 'cloud ranges: the shipped WebInventory.cloud.json loads and finds its own entries' {
+            $cp = [WebInv.Cloud]::Read([IO.File]::ReadAllText($shippedCloud))
+            $n = [WebInv.Cloud]::Load($cp, (New-Object 'System.Collections.Generic.List[string]'))
+            $good = $n -gt 1000
+            foreach ($e in @($cp.V4[0], $cp.V4[-1], $cp.V6[0], $cp.V6[-1])) {
+                $fld = $e.Split('|'); $net = $fld[0].Split('/')[0]
+                $r = [WebInv.Cloud]::Find($net)   # a more specific range may start at the same address: any provider counts
+                if (-not $r -or -not $r[0]) { $good = $false }
+            }
+            [WebInv.Cloud]::Clear()
+            $good
+        }
+    }
     # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
     $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
     [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))
