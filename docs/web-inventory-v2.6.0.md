@@ -126,7 +126,8 @@ copied to a host on its own.
     (CERT_E_CHAINING, found on the Windows CI runner). The Tideline root is pinned for shipping and is deliberately
     not trusted machine-wide.
   - certreq's pending request is removed afterwards, and with its key if the CA did not issue.
-  - `-GrantKeyAccess` adds read access to the key file for the scan's account.
+  - `-GrantKeyAccess` adds the scan's account to the key's own security descriptor (`NCRYPT_SECURITY_DESCR_PROPERTY`),
+    the documented way for CNG keys. A renewal carries the extra readers over to the new key.
 - **Elsewhere.** A key in memory and a PFX at `~/.config/webinventory/tideline-sensor.pfx`, created with mode 0600.
 - **Renewal.** `-Renew` posts a new key's request to step-ca's `rekey` endpoint, over mutual TLS with the current
   certificate. step-ca copies the old certificate's names: a request asking for another sensor name was checked and
@@ -152,7 +153,20 @@ The mock (`lab/tideline_mock.py`) checks what the plan gives ingest: the client 
 signature, sensor and engagement, part numbering, sizes and hashes, every record against its schema, record counts,
 and the limits. It also injects faults.
 
-## 5. Behaviour changes
+## 5. Found by CI (Windows PowerShell 5.1 on GitHub's runner, PowerShell 7.5 on .NET 9)
+
+None of these showed under PowerShell 7.4 on Linux; each was fixed and the CI run that checks it is green.
+
+| Finding | Cause | Fix |
+|---|---|---|
+| Every delivery with an empty part failed (`truncated gzip stream`) on PowerShell 7.5 | .NET 9's `GZipStream` writes no gzip member at all for zero bytes (.NET 8 writes an empty one) | An empty part is declared `identity` and sent as it is |
+| Compiler warnings printed on every run under PowerShell 7.5 (SYSLIB0057) | .NET 9 marks `X509Certificate2(byte[])` obsolete; `-IgnoreWarnings` only stops them being errors | `WarningAction SilentlyContinue` on every `Add-Type`; CI still compiles each block warning-free with 5.1's compiler |
+| The Windows test stopped at its first `step` call | Under 5.1 with `ErrorActionPreference Stop`, a native tool's stderr line is a terminating error | The same could happen to `certreq.exe` and `certutil.exe` in the enrollment script: those calls run under `Continue` and check the exit code |
+| `certreq -accept` refused the issued certificate (CERT_E_CHAINING) | It requires a chain to a root in the machine's Trusted Root store | The certificate is added to `LocalMachine\My` and `certutil -repairstore` binds it to certreq's key; the root stays pinned, not trusted machine-wide |
+| `GetECDsaPrivateKey()` refused the bound machine key in some processes ("detected to be ephemeral") | .NET Framework's handle check; Schannel used the same key without trouble | `SensorCert.PrivateKey` falls back to opening the key by the provider and container the certificate records (`CERT_KEY_PROV_INFO`) |
+| `-GrantKeyAccess` did not show on the key | Editing the key file's NTFS ACL is not how CNG keys are shared | The key's security descriptor property, read back after the change |
+
+## 6. Behaviour changes
 
 - **New files in every run folder:** `_errors.jsonl`. Also `_delta.jsonl` with `-BaselineCsv`,
   `_screenshots.jsonl` with `-Screenshot`, `_vulns.*` with `-NvdFeed`, and a `.jsonl` for each store query. The

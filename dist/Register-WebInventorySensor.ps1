@@ -1701,7 +1701,7 @@ try {
     $chain = @(); $cc = $j.Arr('certChain'); if ($cc) { $chain = @($cc | ForEach-Object { [string]$_ }) } elseif ($j.Str('ca')) { $chain = @($j.Str('ca')) }
     if ($onWindows) {
         $cert = Install-WindowsCert $j.Str('crt') $chain $work $req.Marker
-        $grant = @($GrantKeyAccess)
+        $grant = @($GrantKeyAccess | Where-Object { $_ })   # (@($null) would count 1)
         if (-not $grant.Count) {
             # the accounts that could use the previous key keep that right on the new one
             $was = @(); try { $was = @([WebInv.SensorCert]::KeyReaders($old)) } catch { Write-Line ("  the previous key's readers could not be read: {0}" -f (Get-Inner $_)) 'Yellow' }
