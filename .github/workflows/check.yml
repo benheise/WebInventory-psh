@@ -23,6 +23,8 @@ jobs:
         # IgnoreWarnings so that a warning never stops it on a scanner host, and this step keeps the code warning-free
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
+          trap { Write-Host ("::error title=C# compile step::{0}" -f (($_ | Out-String) -replace '\r?\n', ' ')); exit 1 }
           $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'))
           $refs = @{ EngineSource = @('System.dll', 'System.Core.dll', 'System.Security.dll', 'System.Runtime.Serialization.dll', 'System.Xml.dll')
                      ExtrasSource = @('System.dll', 'System.Core.dll'); StoreSource = @('System.dll', 'System.Core.dll') }
@@ -35,11 +37,12 @@ jobs:
               $cp.GenerateInMemory = $false; $cp.OutputAssembly = Join-Path $env:RUNNER_TEMP "$b.dll"
               $r = (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($cp, $src)
               $diags = @($r.Errors)
-              Write-Host ("{0}: {1} errors, {2} warnings ({3} lines)" -f $b, @($diags | Where-Object { -not $_.IsWarning }).Count, @($diags | Where-Object IsWarning).Count, $lines.Count)
+              $sum = "{0}: {1} errors, {2} warnings ({3} lines)" -f $b, @($diags | Where-Object { -not $_.IsWarning }).Count, @($diags | Where-Object IsWarning).Count, $lines.Count
+              Write-Host ("::{0} title=csc {1}::{2}" -f $(if ($diags.Count) { 'error' } else { 'notice' }), $b, $sum)
               $i = 0
               foreach ($d in $diags) {
                   $text = if ($d.Line -gt 0 -and $d.Line -le $lines.Count) { $lines[$d.Line - 1].Trim() } else { '' }
-                  $msg = '{0} line {1}: {2} {3} | {4}' -f $b, $d.Line, $d.ErrorNumber, $d.ErrorText, $text
+                  $msg = ('{0} line {1}: {2} {3} | {4}' -f $b, $d.Line, $d.ErrorNumber, $d.ErrorText, $text) -replace '::', ': :' -replace '[\r\n%]', ' '
                   Write-Host $msg
                   if ($i++ -lt 9) { Write-Host ('::{0} title={1} {2}::{3}' -f $(if ($d.IsWarning) { 'warning' } else { 'error' }), $b, $d.ErrorNumber, $msg) }
               }
@@ -51,6 +54,7 @@ jobs:
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
+          $ErrorActionPreference = 'Continue'   # Actions sets Stop; a line on a child's stderr must not end the step
           # failing checks and the result lines become annotations, so they show on the commit and the pull request
           function Invoke-Check([string]$Title, [string[]]$Arguments) {
               $out = @(powershell.exe -NoProfile -ExecutionPolicy Bypass @Arguments 2>&1 | ForEach-Object { "$_" })
@@ -75,11 +79,14 @@ jobs:
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
+          $ErrorActionPreference = 'Continue'   # Actions sets Stop; a line on a child's stderr must not end the step
+          trap { Write-Host ("::error title=Test-WebInventoryStore step::{0}" -f (($_ | Out-String) -replace '\r?\n', ' ')); exit 1 }
+          Write-Host '::notice title=Test-WebInventoryStore::started'
           $out = @(powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:GITHUB_WORKSPACE 'dist\Test-WebInventoryStore.ps1') -Services 2000 2>&1 | ForEach-Object { "$_" })
           $rc = $LASTEXITCODE
-          $out | Write-Output
-          $out | Where-Object { $_ -match '^\s*FAIL\b' } | Select-Object -First 9 | ForEach-Object { Write-Output "::error title=Test-WebInventoryStore::$_" }
-          Write-Output ("::{0} title=Test-WebInventoryStore::{1} (exit {2})" -f $(if ($rc) { 'error' } else { 'notice' }), (@($out | Where-Object { $_.Trim() }) | Select-Object -Last 1), $rc)
+          $out | ForEach-Object { Write-Host $_ }
+          $out | Where-Object { $_ -match '^\s*FAIL\b' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error title=Test-WebInventoryStore::$_" }
+          Write-Host ("::{0} title=Test-WebInventoryStore::{1} (exit {2})" -f $(if ($rc) { 'error' } else { 'notice' }), (@($out | Where-Object { $_.Trim() }) | Select-Object -Last 1), $rc)
           exit $rc
       - name: Keep the logs
         if: always()
