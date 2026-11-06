@@ -1424,6 +1424,9 @@ namespace WebInv
                 else if (u < 128) f[i] = (u >= 'A' && u <= 'Z') ? (char)(u + 32) : u;
                 else f[i] = c;
             }
+            // the four characters Unicode case-maps onto ASCII letters, whatever this runtime's invariant tables say
+            // (.NET Framework's leave the Kelvin sign and long s unmapped; a culture-sensitive IgnoreCase may still map them)
+            f[0x212A] = 'k'; f[0x017F] = 's'; f[0x0130] = 'i'; f[0x0131] = 'i';
             return f;
         }
         public static string Fold(string s)

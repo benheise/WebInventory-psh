@@ -100,7 +100,7 @@ jobs:
       - name: The release files are what src/ builds
         run: |
           python3 build.py
-          git diff --exit-code --stat -- dist/
+          git diff --exit-code --stat -- dist/ || { echo "::error title=Build::dist/ differs from what build.py makes from src/ (run python3 build.py and commit)"; exit 1; }
       - name: Self-test and rule examples
         working-directory: ${{ runner.temp }}
         run: |
@@ -121,4 +121,5 @@ jobs:
           exit $rc
       - name: Checksums match
         working-directory: dist
-        run: sha256sum -c SHA256SUMS.txt
+        run: |
+          sha256sum -c --quiet SHA256SUMS.txt > sums.txt 2>&1 || { sed 's/^/::error title=SHA256SUMS::/' sums.txt; echo "::error title=SHA256SUMS::dist/SHA256SUMS.txt is stale (python3 tools/refresh/sha256sums.py dist)"; exit 1; }
