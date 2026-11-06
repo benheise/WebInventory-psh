@@ -261,7 +261,7 @@ if ($ListTargets) {
 if ($Jobs.Count -eq 0) {
     Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow
     # every target that was not excluded was a name that did not resolve: nothing could answer (exit 4, see below)
-    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and @($parsed | Where-Object { @($_.Spec.Ranges).Count }).Count -eq 0
+    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and -not ($parsed | Where-Object { $_.Spec.Ranges.Count -gt 0 } | Select-Object -First 1)   # (no @() around the generic List: PowerShell 7.4)
     if ($allUnresolved) { Write-RunLog 'NOTHING ANSWERED: no target name resolved (exit 4)' 'WARN' }
     Close-Logs; exit $(if ($allUnresolved) { 4 } elseif ($script:ErrTotal) { 2 } else { 0 })
 }
@@ -362,6 +362,7 @@ function Complete-Result {
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
         $counts.rows++
+        if ($script:CloudPending -and -not [WebInv.Cloud]::IsPrivate([string]$row.IP)) { Import-CloudRanges }
         if ($script:CloudOn) { $cf = [WebInv.Cloud]::Find([string]$row.IP); if ($cf) { $row.Cloud = $cf[0]; $row.CloudRegion = $cf[1]; $row.CloudService = $cf[2] } }
         if ($script:CnameMap -and -not $row.Vhost -and $script:CnameMap.ContainsKey([string]$row.Host)) { $row.Cname = $script:CnameMap[[string]$row.Host] }
         if ($row.IsWeb) { $counts.web++ }

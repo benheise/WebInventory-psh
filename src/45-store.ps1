@@ -52,11 +52,11 @@ function Write-RunInfo {
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
-            cname = [bool]$Cname; cloud = [bool]$script:CloudOn
+            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
             proxy = $(if ($Proxy) { $proxyLabel } else { '' }); snmp = $(if ($Snmp) { $snmpMode } else { '' })
-            cloudRanges = $(if ($script:CloudOn) { [string][WebInv.Cloud]::Version } else { '' }); dnsServer = [string]$DnsServer
+            cloudRanges = $(if ($script:CloudOn) { [string][WebInv.Cloud]::Version } elseif ($script:CloudEnabled) { 'not needed (no public address)' } else { '' }); dnsServer = [string]$DnsServer
         }
         sessions = $sessions.ToArray()
     }

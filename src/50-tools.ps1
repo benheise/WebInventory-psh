@@ -34,10 +34,12 @@ function Initialize-Rules {
     }
 }
 
-# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP
-$script:CloudOn = $false
+# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP.
+# The companion file is loaded when the first service on a public address is found (internal scans never need it);
+# a -CloudFile is loaded before the scan, so a bad file stops the run before anything is sent.
+$script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
 function Initialize-Cloud {
-    [WebInv.Cloud]::Clear(); $script:CloudOn = $false
+    [WebInv.Cloud]::Clear(); $script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
     if ($NoCloud) { Write-RunLog 'Cloud ranges: off (-NoCloud)'; return }
     $f = if ($CloudFile) { $CloudFile } elseif ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { $null }
     if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) {
@@ -45,18 +47,30 @@ function Initialize-Cloud {
         Write-RunLog 'Cloud ranges: WebInventory.cloud.json is not next to the script; the Cloud columns stay empty'
         return
     }
-    $full = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudPending = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudEnabled = $true
+    if ($CloudFile) { Import-CloudRanges }
+    else { Write-RunLog ("Cloud ranges: {0} (loaded when the first service on a public address answers)" -f $script:CloudPending) }
+}
+
+function Import-CloudRanges {
+    $full = $script:CloudPending; $script:CloudPending = $null
+    if (-not $full) { return }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $bytes = [IO.File]::ReadAllBytes($full)
     $errs = New-Object 'System.Collections.Generic.List[string]'
-    try { $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs) }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($full)
+        $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs)
+    }
     catch {
         $m = "cloud ranges could not be read: $($_.Exception.Message)"
+        $script:CloudEnabled = $false
         if ($CloudFile) { Stop-Fatal "-CloudFile ${full}: $m" }
         Write-ErrLog 'CLOUD' $full $m; return
     }
     foreach ($e in $errs) { Write-ErrLog 'CLOUD' $full $e }
     $script:CloudOn = $n -gt 0
+    if (-not $script:CloudOn) { $script:CloudEnabled = $false }
     Write-RunLog ("cloud ranges v{0}: {1} prefixes ({2} IPv4, {3} IPv6) sha256={4} file={5} ({6} ms)" -f $pack.Version, $n, @($pack.V4).Count, @($pack.V6).Count, [WebInv.Hash]::Sha256Hex($bytes), $full, $sw.ElapsedMilliseconds)
     $d = [datetime]::MinValue
     if ([datetime]::TryParseExact([string]$pack.Version, 'yyyy.MM.dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d) -and ((Get-Date) - $d).TotalDays -gt 45) {
@@ -495,7 +509,9 @@ function Invoke-SelfTest {
             (& $f '2606:4700::1111') -eq 'Cloudflare//CDN' -and (& $f '2600:1f18:1234:5::1') -eq 'AWS/us-east-1/EC2' -and (& $f '2600:1f18:9999::1') -eq 'AWS//' -and
             (& $f '::ffff:3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f 'not-an-ip') -eq '-' -and (& $f '') -eq '-'
         [WebInv.Cloud]::Clear()
-        $ok -and -not [WebInv.Cloud]::Loaded
+        $priv = @('10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.0.1', '0.0.0.0', '224.0.0.1', 'fd00::1', 'fe80::1', '::1', '::', 'ff02::1', '::ffff:10.0.0.1', 'bad') | Where-Object { -not [WebInv.Cloud]::IsPrivate($_) }
+        $pub = @('172.32.0.1', '172.15.255.255', '100.128.0.1', '8.8.8.8', '2606:4700::1', '::ffff:3.5.1.1') | Where-Object { [WebInv.Cloud]::IsPrivate($_) }
+        $ok -and -not [WebInv.Cloud]::Loaded -and @($priv).Count -eq 0 -and @($pub).Count -eq 0
     }
     # the shipped ranges (next to the script): they load, and the first and last entry of each family are found again
     $shippedCloud = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { '' }

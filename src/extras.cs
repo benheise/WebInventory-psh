@@ -25,12 +25,15 @@ namespace WebInv
     using System.Threading;
 
     public delegate TcpClient TcpConnector(string ip, int port, int timeoutMs, out string state);
+    public delegate byte[] RawCertReader(Stream s, string sni, string mode, out int version, out string error);
 
     public static class Extras
     {
         public const string Version = "2.5.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
+        // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
+        public static RawCertReader RawCert;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
 
         // binds Connect to WebInv.Net.Connect of the scan engine loaded in this AppDomain (no compile-time reference:
@@ -46,6 +49,11 @@ namespace WebInv
                     new Type[] { typeof(string), typeof(int), typeof(int), typeof(string).MakeByRefType() }, null);
                 if (mi == null) continue;
                 Connect = (TcpConnector)Delegate.CreateDelegate(typeof(TcpConnector), mi);
+                Type tt = null;
+                try { tt = a.GetType("WebInv.Tls", false); } catch (Exception) { }
+                System.Reflection.MethodInfo rc = tt == null ? null : tt.GetMethod("CertOverStream", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null,
+                    new Type[] { typeof(Stream), typeof(string), typeof(string), typeof(int).MakeByRefType(), typeof(string).MakeByRefType() }, null);
+                if (rc != null) RawCert = (RawCertReader)Delegate.CreateDelegate(typeof(RawCertReader), rc);
                 return true;
             }
             return false;
@@ -655,6 +663,7 @@ namespace WebInv
     {
         public string Selected = "", Nla = "", StandardRdp = "", Error = "", TlsProtocol = "", PolicyErrors = "", ChainStatus = "";
         public byte[] CertDer;
+        public string CertVia = "";      // "" = Schannel handshake; "raw" = raw ClientHello after Schannel failed (no chain check)
         public NtlmInfo Ntlm = new NtlmInfo();
         public int Probes;
         public bool IsRdp;
@@ -664,6 +673,7 @@ namespace WebInv
             if (Selected.Length > 0) p.Add("security=" + Selected);
             if (Nla.Length > 0) p.Add("nla=" + Nla);
             if (StandardRdp.Length > 0) p.Add("standardRdpSecurity=" + StandardRdp);
+            if (CertVia == "raw") p.Add("certificate=raw ClientHello (Schannel handshake failed)");
             return string.Join("; ", p.ToArray());
         }
     }
@@ -724,6 +734,9 @@ namespace WebInv
             }
             catch (Exception ex) { r.Error = ex.Message; return r; }
             finally { Extras.Close(c); }
+            // TLS was selected but Schannel could not complete the handshake (a TLS 1.0-only server on a host where TLS 1.0
+            // is disabled): read the certificate with the scan engine's raw ClientHello on a fresh connection
+            if (r.CertDer == null && sel > 0 && sel != ProtoRdp && Extras.RawCert != null) RawCertificate(ip, port, sni, timeoutMs, sel, r);
             // NLA enforced? ask for TLS only: HYBRID_REQUIRED_BY_SERVER (5) means yes
             if (sel == ProtoHybrid || sel == ProtoHybridEx)
             {
@@ -741,6 +754,32 @@ namespace WebInv
                 if (sel < 0 && u == ProtoRdp) r.Selected = "rdp only (" + r.Selected + ")";
             }
             return r;
+        }
+        static void RawCertificate(string ip, int port, string sni, int timeoutMs, int sel, RdpResult r)
+        {
+            foreach (string mode in new[] { "tls12", "tls10" })
+            {
+                string st;
+                r.Probes++;
+                TcpClient c = Extras.Open(ip, port, timeoutMs, out st);
+                if (c == null) return;
+                try
+                {
+                    c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
+                    NetworkStream s = c.GetStream();
+                    if (Negotiate(s, ProtoSsl | ProtoHybrid | ProtoHybridEx) != sel) return;
+                    int ver; string err;
+                    byte[] der = Extras.RawCert(s, sni, mode, out ver, out err);
+                    if (der != null && der.Length > 0)
+                    {
+                        r.CertDer = der; r.CertVia = "raw";
+                        r.TlsProtocol = ver == 0x0303 ? "Tls12" : ver == 0x0302 ? "Tls11" : ver == 0x0301 ? "Tls" : ver == 0x0300 ? "Ssl3" : r.TlsProtocol;
+                        return;
+                    }
+                }
+                catch (Exception) { }
+                finally { Extras.Close(c); }
+            }
         }
         static string FailureName(int code)
         {

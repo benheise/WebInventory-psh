@@ -384,7 +384,7 @@ $WorkerScript = {
                 try { $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([byte[]]$r.CertDer) } catch { Add-Log ('rdp certificate parse failed: {0}' -f $_.Exception.Message) }
             }
             if ($cert) {
-                Set-TlsFields $row $null $null $cert 'rdp' $J.Host
+                Set-TlsFields $row $null $null $cert $(if ($r.CertVia -eq 'raw') { 'rdp-raw' } else { 'rdp' }) $J.Host
                 $row.CertPolicyErrors = $r.PolicyErrors; $row.CertChainStatus = $r.ChainStatus
                 Add-CertObs $obs $cert $null
             }

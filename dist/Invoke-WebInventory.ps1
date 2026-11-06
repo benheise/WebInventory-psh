@@ -77,8 +77,9 @@
     Also check TCP 445 on every target host: SMB dialect, signing, SMBv1, and the server's NetBIOS/DNS names, domain and
     Windows build from the first (unauthenticated) NTLM challenge. No login, no null session, no share listing.
 .PARAMETER Rdp
-    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate, and
-    the server names and Windows build from the NTLM challenge. No login.
+    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate (with a
+    raw ClientHello when Schannel cannot handshake), and the server names and Windows build from the NTLM challenge.
+    No login.
 .PARAMETER Snmp
     Also query UDP 161 for sysDescr, sysObjectID, sysName and sysLocation. Needs -SnmpCommunity (v1/v2c) or
     -SnmpCredential (v3); a community is never guessed. With neither, only SNMPv3 engine discovery is sent (no credentials).
@@ -1563,55 +1564,72 @@ namespace WebInv
             try
             {
                 c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
-                NetworkStream s = c.GetStream();
-                byte[] ch = BuildClientHello(mode, sni);
-                s.Write(ch, 0, ch.Length);
-                MemoryStream hsBuf = new MemoryStream();
-                byte[] hdr = new byte[5];
-                int total = 0; bool haveHello = false;
-                while (total < 262144)
-                {
-                    if (!ReadExact(s, hdr, 5)) break;
-                    int ct = hdr[0];
-                    if (ct < 20 || ct > 23 || hdr[1] > 3)
-                    {
-                        if (!h.IsTls) h.NotTls = true;
-                        break;
-                    }
-                    int rl = (hdr[3] << 8) | hdr[4];
-                    if (rl > 18432) { h.Error = "oversized record"; break; }
-                    byte[] frag = new byte[rl];
-                    if (!ReadExact(s, frag, rl)) break;
-                    total += rl + 5;
-                    h.IsTls = true;
-                    if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
-                    if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
-                    if (ct != 22) break;
-                    hsBuf.Write(frag, 0, frag.Length);
-                    byte[] hb = hsBuf.ToArray();
-                    int p = 0; bool done = false;
-                    while (p + 4 <= hb.Length)
-                    {
-                        int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
-                        if (p + 4 + ml > hb.Length) break;
-                        int b = p + 4;
-                        if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
-                        else if (mt == 11 && ml >= 6)
-                        {
-                            int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
-                            if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
-                            done = true;
-                        }
-                        else if (mt == 14) done = true;
-                        p += 4 + ml;
-                    }
-                    if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
-                    if (done) break;
-                }
+                HelloOn(c.GetStream(), sni, mode, wantCert, h);
             }
             catch (Exception ex) { h.Error = Net.Flatten(ex); }
             finally { Net.SafeClose(c); }
             return h;
+        }
+
+        // the ClientHello and the server's answer on a stream that is already connected (also after RDP's X.224 exchange)
+        public static void HelloOn(Stream s, string sni, string mode, bool wantCert, TlsHello h)
+        {
+            byte[] ch = BuildClientHello(mode, sni);
+            s.Write(ch, 0, ch.Length);
+            MemoryStream hsBuf = new MemoryStream();
+            byte[] hdr = new byte[5];
+            int total = 0; bool haveHello = false;
+            while (total < 262144)
+            {
+                if (!ReadExact(s, hdr, 5)) break;
+                int ct = hdr[0];
+                if (ct < 20 || ct > 23 || hdr[1] > 3)
+                {
+                    if (!h.IsTls) h.NotTls = true;
+                    break;
+                }
+                int rl = (hdr[3] << 8) | hdr[4];
+                if (rl > 18432) { h.Error = "oversized record"; break; }
+                byte[] frag = new byte[rl];
+                if (!ReadExact(s, frag, rl)) break;
+                total += rl + 5;
+                h.IsTls = true;
+                if (ct == 21) { if (rl >= 2) h.Alert = frag[1]; break; }
+                if (ct == 20 || ct == 23) { if (haveHello) break; continue; }
+                if (ct != 22) break;
+                hsBuf.Write(frag, 0, frag.Length);
+                byte[] hb = hsBuf.ToArray();
+                int p = 0; bool done = false;
+                while (p + 4 <= hb.Length)
+                {
+                    int mt = hb[p]; int ml = (hb[p + 1] << 16) | (hb[p + 2] << 8) | hb[p + 3];
+                    if (p + 4 + ml > hb.Length) break;
+                    int b = p + 4;
+                    if (mt == 2) { ParseServerHello(hb, b, ml, h); haveHello = true; if (h.Version == 0x0304 || !wantCert) done = true; }
+                    else if (mt == 11 && ml >= 6)
+                    {
+                        int cl = (hb[b + 3] << 16) | (hb[b + 4] << 8) | hb[b + 5];
+                        if (cl > 0 && b + 6 + cl <= b + ml) { h.CertDer = new byte[cl]; Buffer.BlockCopy(hb, b + 6, h.CertDer, 0, cl); }
+                        done = true;
+                    }
+                    else if (mt == 14) done = true;
+                    p += 4 + ml;
+                }
+                if (p > 0) { MemoryStream rest = new MemoryStream(); rest.Write(hb, p, hb.Length - p); hsBuf = rest; }
+                if (done) break;
+            }
+        }
+
+        // -Rdp: the server certificate with a raw ClientHello when Schannel cannot complete the handshake (a TLS 1.0-only
+        // RDP server on a scanner host where TLS 1.0 is disabled). Primitive types only: the extras bind it by reflection.
+        public static byte[] CertOverStream(Stream s, string sni, string mode, out int version, out string error)
+        {
+            TlsHello h = new TlsHello();
+            try { HelloOn(s, sni, mode, true, h); }
+            catch (Exception ex) { h.Error = Net.Flatten(ex); }
+            version = h.Version;
+            error = h.Error ?? (h.CertDer == null ? (h.Alert >= 0 ? "alert " + h.Alert : (h.NotTls ? "not TLS" : "no certificate")) : "");
+            return h.CertDer;
         }
 
         static void ParseServerHello(byte[] d, int p, int len, TlsHello h)
@@ -3557,6 +3575,21 @@ namespace WebInv
             else if (len <= 64) { k.Hi = len == 64 ? hi : hi & (0xFFFFFFFFFFFFFFFFUL << (64 - len)); k.Lo = 0; }
             else { k.Hi = hi; k.Lo = len == 128 ? lo : lo & (0xFFFFFFFFFFFFFFFFUL << (128 - len)); }
             return k;
+        }
+
+        // private, loopback, link-local, shared (CGNAT), multicast and reserved addresses: no published range holds them,
+        // so a scan of internal networks never needs the ranges loaded
+        public static bool IsPrivate(string ip)
+        {
+            IPAddress a;
+            if (string.IsNullOrEmpty(ip) || !IPAddress.TryParse(ip.Trim('[', ']'), out a)) return true;
+            if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+            byte[] b = a.GetAddressBytes();
+            if (b.Length == 4)
+                return b[0] == 0 || b[0] == 10 || b[0] == 127 || b[0] >= 224 || (b[0] == 169 && b[1] == 254) || (b[0] == 172 && (b[1] & 0xF0) == 16)
+                    || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && (b[1] & 0xC0) == 64);
+            bool zero = true; for (int i = 0; i < 15; i++) if (b[i] != 0) { zero = false; break; }
+            return zero || (b[0] & 0xFE) == 0xFC || (b[0] == 0xFE && (b[1] & 0xC0) == 0x80) || b[0] == 0xFF;
         }
 
         // provider, region, service of the most specific published range holding ip; null when none does
@@ -5609,7 +5642,7 @@ $WorkerScript = {
                 try { $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([byte[]]$r.CertDer) } catch { Add-Log ('rdp certificate parse failed: {0}' -f $_.Exception.Message) }
             }
             if ($cert) {
-                Set-TlsFields $row $null $null $cert 'rdp' $J.Host
+                Set-TlsFields $row $null $null $cert $(if ($r.CertVia -eq 'raw') { 'rdp-raw' } else { 'rdp' }) $J.Host
                 $row.CertPolicyErrors = $r.PolicyErrors; $row.CertChainStatus = $r.ChainStatus
                 Add-CertObs $obs $cert $null
             }
@@ -5967,12 +6000,15 @@ namespace WebInv
     using System.Threading;
 
     public delegate TcpClient TcpConnector(string ip, int port, int timeoutMs, out string state);
+    public delegate byte[] RawCertReader(Stream s, string sni, string mode, out int version, out string error);
 
     public static class Extras
     {
         public const string Version = "2.5.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
+        // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
+        public static RawCertReader RawCert;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
 
         // binds Connect to WebInv.Net.Connect of the scan engine loaded in this AppDomain (no compile-time reference:
@@ -5988,6 +6024,11 @@ namespace WebInv
                     new Type[] { typeof(string), typeof(int), typeof(int), typeof(string).MakeByRefType() }, null);
                 if (mi == null) continue;
                 Connect = (TcpConnector)Delegate.CreateDelegate(typeof(TcpConnector), mi);
+                Type tt = null;
+                try { tt = a.GetType("WebInv.Tls", false); } catch (Exception) { }
+                System.Reflection.MethodInfo rc = tt == null ? null : tt.GetMethod("CertOverStream", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static, null,
+                    new Type[] { typeof(Stream), typeof(string), typeof(string), typeof(int).MakeByRefType(), typeof(string).MakeByRefType() }, null);
+                if (rc != null) RawCert = (RawCertReader)Delegate.CreateDelegate(typeof(RawCertReader), rc);
                 return true;
             }
             return false;
@@ -6597,6 +6638,7 @@ namespace WebInv
     {
         public string Selected = "", Nla = "", StandardRdp = "", Error = "", TlsProtocol = "", PolicyErrors = "", ChainStatus = "";
         public byte[] CertDer;
+        public string CertVia = "";      // "" = Schannel handshake; "raw" = raw ClientHello after Schannel failed (no chain check)
         public NtlmInfo Ntlm = new NtlmInfo();
         public int Probes;
         public bool IsRdp;
@@ -6606,6 +6648,7 @@ namespace WebInv
             if (Selected.Length > 0) p.Add("security=" + Selected);
             if (Nla.Length > 0) p.Add("nla=" + Nla);
             if (StandardRdp.Length > 0) p.Add("standardRdpSecurity=" + StandardRdp);
+            if (CertVia == "raw") p.Add("certificate=raw ClientHello (Schannel handshake failed)");
             return string.Join("; ", p.ToArray());
         }
     }
@@ -6666,6 +6709,9 @@ namespace WebInv
             }
             catch (Exception ex) { r.Error = ex.Message; return r; }
             finally { Extras.Close(c); }
+            // TLS was selected but Schannel could not complete the handshake (a TLS 1.0-only server on a host where TLS 1.0
+            // is disabled): read the certificate with the scan engine's raw ClientHello on a fresh connection
+            if (r.CertDer == null && sel > 0 && sel != ProtoRdp && Extras.RawCert != null) RawCertificate(ip, port, sni, timeoutMs, sel, r);
             // NLA enforced? ask for TLS only: HYBRID_REQUIRED_BY_SERVER (5) means yes
             if (sel == ProtoHybrid || sel == ProtoHybridEx)
             {
@@ -6683,6 +6729,32 @@ namespace WebInv
                 if (sel < 0 && u == ProtoRdp) r.Selected = "rdp only (" + r.Selected + ")";
             }
             return r;
+        }
+        static void RawCertificate(string ip, int port, string sni, int timeoutMs, int sel, RdpResult r)
+        {
+            foreach (string mode in new[] { "tls12", "tls10" })
+            {
+                string st;
+                r.Probes++;
+                TcpClient c = Extras.Open(ip, port, timeoutMs, out st);
+                if (c == null) return;
+                try
+                {
+                    c.ReceiveTimeout = timeoutMs; c.SendTimeout = timeoutMs;
+                    NetworkStream s = c.GetStream();
+                    if (Negotiate(s, ProtoSsl | ProtoHybrid | ProtoHybridEx) != sel) return;
+                    int ver; string err;
+                    byte[] der = Extras.RawCert(s, sni, mode, out ver, out err);
+                    if (der != null && der.Length > 0)
+                    {
+                        r.CertDer = der; r.CertVia = "raw";
+                        r.TlsProtocol = ver == 0x0303 ? "Tls12" : ver == 0x0302 ? "Tls11" : ver == 0x0301 ? "Tls" : ver == 0x0300 ? "Ssl3" : r.TlsProtocol;
+                        return;
+                    }
+                }
+                catch (Exception) { }
+                finally { Extras.Close(c); }
+            }
         }
         static string FailureName(int code)
         {
@@ -13026,11 +13098,11 @@ function Write-RunInfo {
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
-            cname = [bool]$Cname; cloud = [bool]$script:CloudOn
+            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
             proxy = $(if ($Proxy) { $proxyLabel } else { '' }); snmp = $(if ($Snmp) { $snmpMode } else { '' })
-            cloudRanges = $(if ($script:CloudOn) { [string][WebInv.Cloud]::Version } else { '' }); dnsServer = [string]$DnsServer
+            cloudRanges = $(if ($script:CloudOn) { [string][WebInv.Cloud]::Version } elseif ($script:CloudEnabled) { 'not needed (no public address)' } else { '' }); dnsServer = [string]$DnsServer
         }
         sessions = $sessions.ToArray()
     }
@@ -13623,10 +13695,12 @@ function Initialize-Rules {
     }
 }
 
-# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP
-$script:CloudOn = $false
+# Cloud / CDN IP ranges (WebInventory.cloud.json next to the script, or -CloudFile): offline lookup of every service's IP.
+# The companion file is loaded when the first service on a public address is found (internal scans never need it);
+# a -CloudFile is loaded before the scan, so a bad file stops the run before anything is sent.
+$script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
 function Initialize-Cloud {
-    [WebInv.Cloud]::Clear(); $script:CloudOn = $false
+    [WebInv.Cloud]::Clear(); $script:CloudOn = $false; $script:CloudPending = $null; $script:CloudEnabled = $false
     if ($NoCloud) { Write-RunLog 'Cloud ranges: off (-NoCloud)'; return }
     $f = if ($CloudFile) { $CloudFile } elseif ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { $null }
     if (-not $f -or -not (Test-Path -LiteralPath $f -PathType Leaf)) {
@@ -13634,18 +13708,30 @@ function Initialize-Cloud {
         Write-RunLog 'Cloud ranges: WebInventory.cloud.json is not next to the script; the Cloud columns stay empty'
         return
     }
-    $full = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudPending = (Resolve-Path -LiteralPath $f).ProviderPath
+    $script:CloudEnabled = $true
+    if ($CloudFile) { Import-CloudRanges }
+    else { Write-RunLog ("Cloud ranges: {0} (loaded when the first service on a public address answers)" -f $script:CloudPending) }
+}
+
+function Import-CloudRanges {
+    $full = $script:CloudPending; $script:CloudPending = $null
+    if (-not $full) { return }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $bytes = [IO.File]::ReadAllBytes($full)
     $errs = New-Object 'System.Collections.Generic.List[string]'
-    try { $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs) }
+    try {
+        $bytes = [IO.File]::ReadAllBytes($full)
+        $pack = [WebInv.Cloud]::Read([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)); $n = [WebInv.Cloud]::Load($pack, $errs)
+    }
     catch {
         $m = "cloud ranges could not be read: $($_.Exception.Message)"
+        $script:CloudEnabled = $false
         if ($CloudFile) { Stop-Fatal "-CloudFile ${full}: $m" }
         Write-ErrLog 'CLOUD' $full $m; return
     }
     foreach ($e in $errs) { Write-ErrLog 'CLOUD' $full $e }
     $script:CloudOn = $n -gt 0
+    if (-not $script:CloudOn) { $script:CloudEnabled = $false }
     Write-RunLog ("cloud ranges v{0}: {1} prefixes ({2} IPv4, {3} IPv6) sha256={4} file={5} ({6} ms)" -f $pack.Version, $n, @($pack.V4).Count, @($pack.V6).Count, [WebInv.Hash]::Sha256Hex($bytes), $full, $sw.ElapsedMilliseconds)
     $d = [datetime]::MinValue
     if ([datetime]::TryParseExact([string]$pack.Version, 'yyyy.MM.dd', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$d) -and ((Get-Date) - $d).TotalDays -gt 45) {
@@ -14084,7 +14170,9 @@ function Invoke-SelfTest {
             (& $f '2606:4700::1111') -eq 'Cloudflare//CDN' -and (& $f '2600:1f18:1234:5::1') -eq 'AWS/us-east-1/EC2' -and (& $f '2600:1f18:9999::1') -eq 'AWS//' -and
             (& $f '::ffff:3.5.1.1') -eq 'AWS/us-east-1/EC2' -and (& $f 'not-an-ip') -eq '-' -and (& $f '') -eq '-'
         [WebInv.Cloud]::Clear()
-        $ok -and -not [WebInv.Cloud]::Loaded
+        $priv = @('10.1.2.3', '172.16.0.1', '172.31.255.255', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.0.1', '0.0.0.0', '224.0.0.1', 'fd00::1', 'fe80::1', '::1', '::', 'ff02::1', '::ffff:10.0.0.1', 'bad') | Where-Object { -not [WebInv.Cloud]::IsPrivate($_) }
+        $pub = @('172.32.0.1', '172.15.255.255', '100.128.0.1', '8.8.8.8', '2606:4700::1', '::ffff:3.5.1.1') | Where-Object { [WebInv.Cloud]::IsPrivate($_) }
+        $ok -and -not [WebInv.Cloud]::Loaded -and @($priv).Count -eq 0 -and @($pub).Count -eq 0
     }
     # the shipped ranges (next to the script): they load, and the first and last entry of each family are found again
     $shippedCloud = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'WebInventory.cloud.json' } else { '' }
@@ -14491,7 +14579,7 @@ if ($ListTargets) {
 if ($Jobs.Count -eq 0) {
     Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow
     # every target that was not excluded was a name that did not resolve: nothing could answer (exit 4, see below)
-    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and @($parsed | Where-Object { @($_.Spec.Ranges).Count }).Count -eq 0
+    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and -not ($parsed | Where-Object { $_.Spec.Ranges.Count -gt 0 } | Select-Object -First 1)   # (no @() around the generic List: PowerShell 7.4)
     if ($allUnresolved) { Write-RunLog 'NOTHING ANSWERED: no target name resolved (exit 4)' 'WARN' }
     Close-Logs; exit $(if ($allUnresolved) { 4 } elseif ($script:ErrTotal) { 2 } else { 0 })
 }
@@ -14592,6 +14680,7 @@ function Complete-Result {
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
         $counts.rows++
+        if ($script:CloudPending -and -not [WebInv.Cloud]::IsPrivate([string]$row.IP)) { Import-CloudRanges }
         if ($script:CloudOn) { $cf = [WebInv.Cloud]::Find([string]$row.IP); if ($cf) { $row.Cloud = $cf[0]; $row.CloudRegion = $cf[1]; $row.CloudService = $cf[2] } }
         if ($script:CnameMap -and -not $row.Vhost -and $script:CnameMap.ContainsKey([string]$row.Host)) { $row.Cname = $script:CnameMap[[string]$row.Host] }
         if ($row.IsWeb) { $counts.web++ }

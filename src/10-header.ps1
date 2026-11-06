@@ -77,8 +77,9 @@
     Also check TCP 445 on every target host: SMB dialect, signing, SMBv1, and the server's NetBIOS/DNS names, domain and
     Windows build from the first (unauthenticated) NTLM challenge. No login, no null session, no share listing.
 .PARAMETER Rdp
-    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate, and
-    the server names and Windows build from the NTLM challenge. No login.
+    Also check TCP 3389: security protocols offered (TLS / CredSSP), whether NLA is enforced, the RDP certificate (with a
+    raw ClientHello when Schannel cannot handshake), and the server names and Windows build from the NTLM challenge.
+    No login.
 .PARAMETER Snmp
     Also query UDP 161 for sysDescr, sysObjectID, sysName and sysLocation. Needs -SnmpCommunity (v1/v2c) or
     -SnmpCredential (v3); a community is never guessed. With neither, only SNMPv3 engine discovery is sent (no credentials).

@@ -91,9 +91,13 @@ jobs:
           Add-Type -TypeDefinition $Matches[1] -ReferencedAssemblies System.Core -IgnoreWarnings
           $same = 0; $names = 'www.github.com', 'www.microsoft.com', 'www.office.com', 'docs.python.org', 'learn.microsoft.com'
           foreach ($n in $names) {
-              $e = $null; $mine = @([WebInv.Cname]::Chain($n, $null, 5000, [ref]$e))
-              $ref = @(Resolve-DnsName -Name $n -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'CNAME' } | ForEach-Object { $_.NameHost.ToLowerInvariant().TrimEnd('.') })
-              $ok = $null -eq $e -and ($mine -join ' > ') -eq ($ref -join ' > ')
+              # CDN names can answer differently from one query to the next: a difference is asked once more
+              for ($try = 0; $try -lt 2; $try++) {
+                  $e = $null; $mine = @([WebInv.Cname]::Chain($n, $null, 5000, [ref]$e))
+                  $ref = @(Resolve-DnsName -Name $n -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'CNAME' } | ForEach-Object { $_.NameHost.ToLowerInvariant().TrimEnd('.') })
+                  $ok = $null -eq $e -and ($mine -join ' > ') -eq ($ref -join ' > ')
+                  if ($ok) { break }
+              }
               if ($ok) { $same++ }
               $line = "{0}: DnsQuery_W [{1}] Resolve-DnsName [{2}] {3}" -f $n, ($mine -join ' > '), ($ref -join ' > '), $(if ($ok) { 'same' } else { "DIFFERENT $e" })
               Write-Host $line
@@ -170,12 +174,14 @@ jobs:
           foreach ($n in $args) { $e = $null; $c = [WebInv.Cname]::Chain($n, $null, 5000, [ref]$e); "{0} {1} {2}" -f $n, (@($c) -join '>'), $e }
           PS
           names="www.github.com www.microsoft.com www.office.com docs.python.org learn.microsoft.com"
-          pwsh -NoProfile -File cn.ps1 $names > mine.txt
           same=0; total=0
           for n in $names; do
             total=$((total+1))
-            ref=$(dig +short "$n" A | grep -E '\.$' | sed 's/\.$//' | tr 'A-Z' 'a-z' | paste -sd '>' -)
-            got=$(awk -v n="$n" '$1==n {print $2}' mine.txt)
+            for try in 1 2; do   # CDN names can answer differently from one query to the next: ask a difference once more
+              got=$(pwsh -NoProfile -File cn.ps1 "$n" | awk -v n="$n" '$1==n {print $2}')
+              ref=$(dig +short "$n" A | grep -E '\.$' | sed 's/\.$//' | tr 'A-Z' 'a-z' | paste -sd '>' -)
+              [ "$got" = "$ref" ] && break
+            done
             echo "$n: UDP [$got] dig [$ref]"
             [ "$got" = "$ref" ] || echo "::warning title=CNAME differs::$n: UDP [$got] dig [$ref]"
             [ "$got" = "$ref" ] && same=$((same+1))

@@ -20,7 +20,7 @@ check "-DropOutOfScope scanned only in-scope host" "$(grep -c '10.9.9.9' "$WORK"
 newdir
 rc=$(run -Target 10.0.0.300 -NoProgress)
 check "invalid target fails closed (exit 1)" "$rc" "1"
-rc=$(run 10.0.0.300 127.0.0.1:18999 -SkipInvalidInput -NoProgress -NoHtml)
+rc=$(run 10.0.0.300 127.0.0.1:18080 -SkipInvalidInput -NoProgress -NoHtml)
 check "-SkipInvalidInput proceeds (exit 2: errors logged)" "$rc" "2"
 
 newdir
@@ -79,7 +79,7 @@ check "closed port only: exit 4 (nothing answered), nothing printed as a hit" "$
 check "nothing answered is logged" "$(grep -c 'NOTHING ANSWERED' "$WORK"/*_run.log)" "1"
 rc=$(run -Target no-such-host.invalid -NoProgress -NoHtml)
 check "every target name unresolved: exit 4" "$rc" "4"
-rc=$(run -Target 127.0.0.1:18080 127.0.0.1:18999 -NoProgress -NoHtml)
+rc=$(run -Target '127.0.0.1:18080,18999' -NoProgress -NoHtml)
 check "one service answers: exit 0 again" "$rc" "0"
 rc=$(run -Target 127.0.0.1:18080 -DnsServer 127.0.0.1 -NoProgress)
 check "-DnsServer without -Cname is refused (exit 1)" "$rc" "1"

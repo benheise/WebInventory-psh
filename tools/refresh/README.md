@@ -12,6 +12,7 @@ and opens (or updates) one pull request, `refresh/external-lists`, with that sum
 | NVD CVE 2.0 feeds, CISA KEV | `nvd.nist.gov/feeds/json/cve/2.0/`, `cisa.gov` | CVE/KEV counts per CPE for the CPE candidates and the coverage table | the table only changes together with another list |
 | nuclei-templates, WhatWeb | `projectdiscovery/nuclei-templates`, `urbanadventurer/WhatWeb` | `tools/version/external.json`: which public database extracts a version for which product | yes; new candidates are listed for review |
 | version coverage table | (all of the above) | `docs/web-inventory-coverage.md` | yes |
+| Cloud / CDN IP ranges | AWS, Azure (public, Government, China), Google Cloud, Google, Oracle Cloud, DigitalOcean, Akamai (Linode), Cloudflare, Fastly (`tools/cloud/README.md`) | `dist/WebInventory.cloud.json` | yes, when the ranges changed; a provider whose list shrinks by more than 20 % fails the check and keeps the previous ranges |
 
 The version-only rules (`tools/version/rules.py`) are not changed by a refresh: each needs a container, source or
 sample check. The refresh only verifies that every one still joins a detection rule after the packs changed, and fails
@@ -27,6 +28,7 @@ operators download them as the operator guide describes.
 - a reviewed CPE name is no longer in the NVD dictionary,
 - a pack import fails,
 - a version-only rule no longer finds its detection rule,
+- a cloud provider's list could not be read, or shrank by more than 20 %,
 - `-SelfTest` or `-TestRules` fails on PowerShell 7.
 
 The workflow then runs `-SelfTest`, `-TestRules` and `Test-WebInventoryStore.ps1` on Windows PowerShell 5.1 against
