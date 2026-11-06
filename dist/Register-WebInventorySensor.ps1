@@ -81,6 +81,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net.Security;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -677,11 +678,61 @@ namespace WebInv
             return sb.ToString();
         }
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct KeyProvInfo
+        {
+            public string ContainerName, ProvName;
+            public int ProvType, Flags, ProvParamCount;
+            public IntPtr ProvParams;
+            public int KeySpec;
+        }
+        [DllImport("crypt32.dll", SetLastError = true)]
+        static extern bool CertGetCertificateContextProperty(IntPtr context, int propId, IntPtr data, ref int size);
+
+        // where a Windows certificate's key lives: provider, container, machine or user (CERT_KEY_PROV_INFO_PROP_ID)
+        public static string[] KeyLocation(X509Certificate2 cert)
+        {
+            if (Environment.OSVersion.Platform != PlatformID.Win32NT) return null;
+            int size = 0;
+            if (!CertGetCertificateContextProperty(cert.Handle, 2, IntPtr.Zero, ref size) || size <= 0) return null;
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                if (!CertGetCertificateContextProperty(cert.Handle, 2, buf, ref size)) return null;
+                KeyProvInfo k = (KeyProvInfo)Marshal.PtrToStructure(buf, typeof(KeyProvInfo));
+                return new string[] { k.ProvName ?? "", k.ContainerName ?? "", (k.Flags & 0x20) != 0 ? "machine" : "user", k.ProvType.ToString(CultureInfo.InvariantCulture) };
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        // the certificate's private key. .NET Framework's GetECDsaPrivateKey can refuse a persisted machine key bound to
+        // its certificate by certutil -repairstore ("detected to be ephemeral"); the key is then opened by the provider
+        // and container the certificate records, which is the same key Schannel uses
+        public static ECDsa PrivateKey(X509Certificate2 cert)
+        {
+            Exception first = null;
+            try { ECDsa k = cert.GetECDsaPrivateKey(); if (k != null) return k; }
+            catch (Exception ex) { first = ex; }
+            string[] loc = KeyLocation(cert);
+            if (loc != null && loc[3] == "0" && loc[1].Length > 0)
+            {
+                try
+                {
+                    CngKey key = CngKey.Open(loc[1], new CngProvider(loc[0].Length > 0 ? loc[0] : CngProvider.MicrosoftSoftwareKeyStorageProvider.Provider),
+                        loc[2] == "machine" ? CngKeyOpenOptions.MachineKey : CngKeyOpenOptions.None);
+                    return new ECDsaCng(key);
+                }
+                catch (Exception ex) { if (first == null) first = ex; }
+            }
+            if (first != null) throw new CryptographicException(first.Message, first);
+            return null;
+        }
+
         // ES256 (ECDSA P-256, SHA-256) over the exact bytes; IEEE P1363 (r || s), as .NET produces it
         public static string SignatureHeader(byte[] data, X509Certificate2 cert)
         {
             ECDsa k;
-            try { k = cert.GetECDsaPrivateKey(); }
+            try { k = PrivateKey(cert); }
             catch (CryptographicException ex) { throw new CryptographicException("the private key of " + cert.Thumbprint + " cannot be used by this account (" + ex.Message + "); run as the account the key was issued to, or grant it read access to the key"); }
             if (k == null) throw new CryptographicException("certificate " + cert.Thumbprint + " has no ECDSA private key (the sensor key must be ECDSA P-256)");
             using (k)
@@ -1427,7 +1478,7 @@ function Remove-PendingRequest([string]$Marker, [switch]$DeleteKey) {
     try {
         foreach ($c in @($rq.Certificates | Where-Object { $_.FriendlyName -eq $Marker })) {
             $k = $null
-            if ($DeleteKey) { try { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c) } catch { } }
+            if ($DeleteKey) { try { $k = [WebInv.SensorCert]::PrivateKey($c) } catch { } }
             $rq.Remove($c)
             if ($k) { try { $k.Key.Delete() } catch { } finally { $k.Dispose() } }
         }
@@ -1466,9 +1517,12 @@ function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Wor
     $c
 }
 function Get-KeyFile($Cert) {
-    $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($Cert)
+    $k = [WebInv.SensorCert]::PrivateKey($Cert)
     try { $name = $k.Key.UniqueName } finally { $k.Dispose() }
-    Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
+    if (-not $name) { throw "the key of $($Cert.Thumbprint) has no unique name" }
+    $f = Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "the key file of $($Cert.Thumbprint) is not where machine keys live ($f)" }
+    $f
 }
 function Grant-Key($Cert, [string[]]$Accounts) {
     if (-not $Accounts) { return }
@@ -1477,7 +1531,7 @@ function Grant-Key($Cert, [string[]]$Accounts) {
     foreach ($a in $Accounts) {
         $sid = (New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier])
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Read', 'Allow')))
-        Write-Line ("  key readable by {0}" -f $a)
+        Write-Line ("  key readable by {0} ({1})" -f $a, (Split-Path -Leaf $f))
     }
     Set-Acl -LiteralPath $f -AclObject $acl
 }
@@ -1487,7 +1541,7 @@ function Test-NotExportable($Cert) {
 function Remove-WindowsCert($Cert) {
     $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadWrite')
     try {
-        $k = $null; try { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($Cert) } catch { }
+        $k = $null; try { $k = [WebInv.SensorCert]::PrivateKey($Cert) } catch { Write-Line ("  the previous key could not be opened to delete it: {0}" -f (Get-Inner $_)) 'Yellow' }
         $st.Remove($Cert)
         if ($k) { try { $k.Key.Delete() } finally { $k.Dispose() } }
     }

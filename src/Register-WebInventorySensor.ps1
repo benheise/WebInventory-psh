@@ -177,7 +177,7 @@ function Remove-PendingRequest([string]$Marker, [switch]$DeleteKey) {
     try {
         foreach ($c in @($rq.Certificates | Where-Object { $_.FriendlyName -eq $Marker })) {
             $k = $null
-            if ($DeleteKey) { try { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c) } catch { } }
+            if ($DeleteKey) { try { $k = [WebInv.SensorCert]::PrivateKey($c) } catch { } }
             $rq.Remove($c)
             if ($k) { try { $k.Key.Delete() } catch { } finally { $k.Dispose() } }
         }
@@ -216,9 +216,12 @@ function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Wor
     $c
 }
 function Get-KeyFile($Cert) {
-    $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($Cert)
+    $k = [WebInv.SensorCert]::PrivateKey($Cert)
     try { $name = $k.Key.UniqueName } finally { $k.Dispose() }
-    Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
+    if (-not $name) { throw "the key of $($Cert.Thumbprint) has no unique name" }
+    $f = Join-Path $env:ProgramData ('Microsoft\Crypto\Keys\{0}' -f $name)
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { throw "the key file of $($Cert.Thumbprint) is not where machine keys live ($f)" }
+    $f
 }
 function Grant-Key($Cert, [string[]]$Accounts) {
     if (-not $Accounts) { return }
@@ -227,7 +230,7 @@ function Grant-Key($Cert, [string[]]$Accounts) {
     foreach ($a in $Accounts) {
         $sid = (New-Object Security.Principal.NTAccount($a)).Translate([Security.Principal.SecurityIdentifier])
         $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid, 'Read', 'Allow')))
-        Write-Line ("  key readable by {0}" -f $a)
+        Write-Line ("  key readable by {0} ({1})" -f $a, (Split-Path -Leaf $f))
     }
     Set-Acl -LiteralPath $f -AclObject $acl
 }
@@ -237,7 +240,7 @@ function Test-NotExportable($Cert) {
 function Remove-WindowsCert($Cert) {
     $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadWrite')
     try {
-        $k = $null; try { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($Cert) } catch { }
+        $k = $null; try { $k = [WebInv.SensorCert]::PrivateKey($Cert) } catch { Write-Line ("  the previous key could not be opened to delete it: {0}" -f (Get-Inner $_)) 'Yellow' }
         $st.Remove($Cert)
         if ($k) { try { $k.Key.Delete() } finally { $k.Dispose() } }
     }

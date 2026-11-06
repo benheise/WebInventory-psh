@@ -247,6 +247,41 @@ Kelvin sign, long s, dotted and dotless I now fold onto k, s and i on every runt
 200-service farm and the closed-port sweep: identical to 2.4.0 field by field (farm 10.98 s, lab 38.96 s, closed
 11.41 s).
 
+## v2.6.0: same scan path; JSONL files and shipping are output stages
+
+v2.6.0 adds:
+- JSONL next to every CSV-only output (`_errors.jsonl` on every run);
+- `-NvdFeed` on scan runs (after the scan);
+- `-ShipTo`, which runs after the run's manifest and the store ingest.
+
+None of these touches the scan.
+
+Interleaved A/B against v2.5.0 on the same lab, two runs each (PowerShell 7.4, 2 vCPU):
+
+| Scenario | v2.5.0 wall (s) | v2.6.0 wall (s) |
+|---|---|---|
+| farm (200 services) | 10.92, 10.84 | 10.88, 11.38 |
+| lab (26 services, all probes of the lab profile) | 38.55, 39.03 | 38.75, 38.80 |
+| closed ports (exit 4) | 11.07, 10.69 | 10.19, 10.59 |
+| startup only | 3.04, 3.11 | 2.89, 2.87 |
+
+Accuracy, field by field (`tests/perf/golden.py`, CSV and JSONL): lab, farm and closed-port runs of v2.6.0 are
+identical to v2.5.0 (0 differences). `golden.py` now reads only a run's results files, not the new `_*.jsonl` files
+next to them.
+
+The same scan with and without `-ShipTo` (lab targets, with `-BaselineCsv` and `-NvdFeed`) is identical too. The
+only extra file is `_ship-state.json` (`tests/v26/ship.sh`, scenario 2).
+
+Shipping cost (PowerShell 7.4, mock ingest on the same host, which checks every record against its schema):
+
+| Run | Parts | Bytes before compression → on the wire | `Send-WebInventoryRun.ps1` wall |
+|---|---|---|---|
+| farm, 200 services | 6 | 0.71 MB → 0.03 MB | 1.31 s (1.07 s when already delivered: start-up and compile; PowerShell itself 0.24 s) |
+| synthetic, 20,000 services (the farm's rows repeated) | 5 (the 65 MB results file as 2 chunks) | 65.4 MB → 2.6 MB | 14.9 s |
+
+The gzip ratio of the results JSONL was about 25:1 for the synthetic run and 21:1 for the real farm run (707,188 →
+33,098 bytes for all six parts). Both are under the 50:1 limit the platform plan sets for ingest.
+
 ## v2.5.0: same scan path; cloud lookup only on public addresses; `-Cname` costs one DNS query per name
 
 v2.5.0 adds:

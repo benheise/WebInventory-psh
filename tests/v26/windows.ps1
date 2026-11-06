@@ -71,7 +71,7 @@ try {
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -TypeDefinition $Matches[1] -ReferencedAssemblies System.Core, System.IO.Compression -IgnoreWarnings
     function Get-SensorCerts { $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadOnly'); try { @($st.Certificates | Where-Object { [WebInv.SensorCert]::SensorId($_) -eq 'wi-ci01' }) } finally { $st.Close() } }
-    function Get-KeyAcl($c) { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c); try { $n = $k.Key.UniqueName } finally { $k.Dispose() }; (Get-Acl -LiteralPath (Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$n")).Access | ForEach-Object { [string]$_.IdentityReference } }
+    function Get-KeyAcl($c) { $k = [WebInv.SensorCert]::PrivateKey($c); try { $n = $k.Key.UniqueName } finally { $k.Dispose() }; (Get-Acl -LiteralPath (Join-Path $env:ProgramData "Microsoft\Crypto\Keys\$n")).Access | ForEach-Object { [string]$_.IdentityReference } }
     function Test-Exportable($c) { try { [void]$c.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pkcs12); $true } catch { $false } }
 
     # ---- enroll
@@ -85,7 +85,11 @@ try {
     else { Fail ("enroll (exit $rc, $($certs.Count) certificates, pin $pinFp, intermediate $interIn)") (Join-Path $Work 'enroll.txt') }
     if ($certs.Count -ne 1) { throw 'enrollment failed; the remaining checks need its certificate' }
     $c1 = $certs[0]
-    $k1 = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c1)
+    $loc = [WebInv.SensorCert]::KeyLocation($c1)
+    Write-Host ("key location: {0}" -f ($loc -join ' | '))
+    $direct = $(try { [void][Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c1); 'ok' } catch { $_.Exception.Message })
+    Write-Host ("::notice title=Tideline (Windows)::GetECDsaPrivateKey on the bound key: {0}; key {1}" -f $direct, ($loc -join ' | '))
+    $k1 = [WebInv.SensorCert]::PrivateKey($c1)
     if ($k1 -is [Security.Cryptography.ECDsaCng] -and $k1.KeySize -eq 256 -and $k1.Key.IsMachineKey -and -not (Test-Exportable $c1) -and $k1.Key.ExportPolicy -eq 0) { Pass ("key: ECDSA P-256, machine key ({0}), export refused" -f $k1.Key.Provider) } else { Fail ("key properties: {0} {1} machine={2} exportable={3}" -f $k1.GetType().Name, $k1.KeySize, $k1.Key.IsMachineKey, (Test-Exportable $c1)) }
     $rq = New-Object Security.Cryptography.X509Certificates.X509Store('REQUEST', 'LocalMachine'); $rq.Open('ReadOnly'); $left = @($rq.Certificates | Where-Object { $_.FriendlyName -like 'Tideline sensor request*' }).Count; $rq.Close()
     if ($left -eq 0) { Pass 'no pending certreq request left in LocalMachine\REQUEST' } else { Fail "$left pending request(s) left in LocalMachine\REQUEST" }
@@ -121,7 +125,7 @@ try {
     $c2 = $certs | Select-Object -First 1
     $ok = $rc -eq 0 -and $certs.Count -eq 1 -and $c2.Thumbprint -ne $c1.Thumbprint -and -not (Test-Exportable $c2)
     $acl2 = if ($c2) { @(Get-KeyAcl $c2) } else { @() }
-    $k2 = if ($c2) { [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c2) } else { $null }
+    $k2 = if ($c2) { [WebInv.SensorCert]::PrivateKey($c2) } else { $null }
     $newKey = $k2 -and $k2.Key.UniqueName -ne $k1.Key.UniqueName
     $oldKeyGone = -not (Test-Path (Join-Path $env:ProgramData ("Microsoft\Crypto\Keys\{0}" -f $k1.Key.UniqueName)))
     if ($ok -and $newKey -and $oldKeyGone -and $acl2 -contains 'NT AUTHORITY\NETWORK SERVICE') { Pass ("renewed: {0} -> {1}, new non-exportable key, previous certificate and key removed, NETWORK SERVICE kept" -f $c1.Thumbprint.Substring(0, 8), $c2.Thumbprint.Substring(0, 8)) }
