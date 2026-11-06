@@ -237,8 +237,9 @@ $WorkerScript = {
         if ($RawTls -and $RawTls.Alpn) { $Obs.Add('alpn', $RawTls.Alpn) }
     }
 
-    function Complete-Row($Row, $Obs) {
-        $dets = [WebInv.Matcher]::Evaluate($Obs)
+    function Complete-Row($Row, $Obs, $Dets) {
+        # $Dets: an evaluation of exactly these observations (-VersionPaths already made one), else evaluated here
+        $dets = if ($null -ne $Dets) { $Dets } else { [WebInv.Matcher]::Evaluate($Obs) }
         $svc = New-Object System.Collections.Generic.List[string]; $tech = New-Object System.Collections.Generic.List[string]
         $cats = New-Object System.Collections.Generic.List[string]; $cpes = New-Object System.Collections.Generic.List[string]
         $os = New-Object System.Collections.Generic.List[string]; $hw = New-Object System.Collections.Generic.List[string]
@@ -534,6 +535,7 @@ $WorkerScript = {
         $obs = New-Object WebInv.Observation
         $obs.Port = $J.Port
         $web = $null
+        $preDets = $null
         if ($final) {
             $web = Get-RedirectChain $final $J.Host
             Set-HttpFields $row $web
@@ -615,7 +617,25 @@ $WorkerScript = {
         }
         Add-CertObs $obs $cert $rawTls
         if ($Cfg.TlsFingerprint -and $isTls) { Add-TlsFingerprint $row $obs $rawTls }
-        Complete-Row $row $obs
+        # ---- 8b. optional version paths: the documented version URL of a product detected here without a version
+        #          (after every observation of this row is in, so the evaluation can be handed to Complete-Row) ----
+        if ($Cfg.VersionPaths -and $web) {
+            $preDets = [WebInv.Matcher]::Evaluate($obs)
+            $vp = [WebInv.Matcher]::VersionPaths($preDets, $Cfg.MinConfidence, 4)
+            if ($vp.Length) {
+                $hits = New-Object System.Collections.Generic.List[string]
+                foreach ($p in $vp) {
+                    if ($Cfg.IdentifyPaths -and $Cfg.PathList -contains $p) { continue }   # already requested and observed
+                    $pr = Invoke-Fetch $oTls 'GET' $p $oHost $oIp $oPort $oSni 0
+                    if (-not $pr.Resp.IsHttp) { continue }
+                    if ($pr.Resp.Code -eq 200) { Add-BodyObs $obs ('path:{0}.' -f $p) $pr.Resp }
+                    [void]$hits.Add(('{0}={1}' -f $p, $pr.Resp.Code))
+                }
+                $row.VersionPaths = ($hits -join ';')
+                $preDets = $null   # the observations changed: Complete-Row evaluates again
+            }
+        }
+        Complete-Row $row $obs $preDets
         [void]$rows.Add($row)
 
         # ---- 9. optional SAN virtual-host probing (same IP only => stays inside scope) ----

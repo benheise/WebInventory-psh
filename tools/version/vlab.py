@@ -65,6 +65,14 @@ def capture(case, port, outdir):
         res['extras'][name] = {'status': st, 'headers': hd, 'len': len(body), 'md5': hashlib.md5(body).hexdigest()}
         if name != 'favicon':
             open(os.path.join(outdir, name + '.body'), 'wb').write(body)
+    # -VersionPaths candidates of this product: recorded so replay.ps1 can serve them when the engine asks for them
+    for i, p in enumerate(case.get('vpaths', [])):
+        try:
+            st, rs, hd, body = fetch(tls, port, p, host)
+        except Exception as e:
+            res['extras']['vpath%d' % i] = {'path': p, 'error': str(e)}; continue
+        res['extras']['vpath%d' % i] = {'path': p, 'status': st, 'headers': hd, 'len': len(body)}
+        open(os.path.join(outdir, 'vpath%d.body' % i), 'wb').write(body)
     json.dump(res, open(os.path.join(outdir, 'capture.json'), 'w'), indent=1)
     return res
 

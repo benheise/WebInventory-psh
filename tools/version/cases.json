@@ -400,6 +400,14 @@
   },
   "tags4": [
    "1.37.5"
+  ],
+  "vpaths": [
+   "/api/version",
+   "/api/config"
+  ],
+  "tags5": [
+   "1.35.8",
+   "1.37.5"
   ]
  },
  {
@@ -703,5 +711,80 @@
    "v2.15.3"
   ],
   "note": "embedded k3s: needs a cgroup v2 host (the lab daemon here is cgroup v1, where it exits)"
+ },
+ {
+  "name": "netdata",
+  "image": "netdata/netdata",
+  "port": 19999,
+  "wait": 180,
+  "ready": "etdata",
+  "settle": 10,
+  "tags5": [
+   "v2.12.3",
+   "v1.47.5"
+  ],
+  "vpaths": [
+   "/api/v1/info"
+  ],
+  "products": [
+   "Netdata"
+  ],
+  "tags": [
+   "v2.12.3",
+   "v1.47.5"
+  ],
+  "tags6": [
+   "v1.47.5"
+  ]
+ },
+ {
+  "name": "flink",
+  "image": "flink",
+  "port": 8081,
+  "cmd": [
+   "jobmanager"
+  ],
+  "env": {
+   "FLINK_PROPERTIES": "jobmanager.rpc.address: localhost"
+  },
+  "wait": 180,
+  "ready": "Flink",
+  "settle": 5,
+  "tags5": [
+   "2.2.1",
+   "1.20.5"
+  ],
+  "vpaths": [
+   "/config"
+  ],
+  "products": [
+   "Apache Flink"
+  ],
+  "tags": [
+   "2.2.1",
+   "1.20.5"
+  ]
+ },
+ {
+  "name": "plex",
+  "image": "plexinc/pms-docker",
+  "port": 32400,
+  "wait": 240,
+  "ready": "",
+  "settle": 10,
+  "tags5": [
+   "latest",
+   "1.40.0.7998-c29d4c0c8"
+  ],
+  "vpaths": [
+   "/identity"
+  ],
+  "products": [
+   "Plex Media Server"
+  ],
+  "tags": [
+   "latest",
+   "1.40.0.7998-c29d4c0c8"
+  ]
  }
 ]

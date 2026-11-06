@@ -56,7 +56,7 @@ templates, Recog examples, webappanalyzer).
 - **Coverage.** Of the 1,327 products with a CPE, 690 now have a rule that gives them a version (598 in v2.3.1). Of
   the 637 without, 31 share their CPE with a product whose rules read one; the others, by reason: no-known-location
   390, hidden 87, not-version 42, hardware 30, other-url 27, platform 21, coarse 7, unverified 2. Per product:
-  [`web-inventory-v2.3.2-coverage.md`](web-inventory-v2.3.2-coverage.md).
+  [`web-inventory-coverage.md`](web-inventory-coverage.md) (the current table; the 2.3.2 one is in its history).
 - **Containers run** (`vlab.py`, then `replay.ps1` through the built script's matcher): Solr 9.4.1/10.1.0, Consul
   1.22.7/2.1.0, Nextcloud 32.0.15/35.0.2, Roundcube 1.6.20/1.7.5, Spark 3.5.9/4.1.4, JupyterHub 5.5.4/6.1.1, Forgejo
   9.0.3/17.0.1, Gitea 1.22.3/1.27.3, Checkmk 2.3.0p38/2.4.0p39, n8n 1.123.92/2.47.2, Mattermost 10.11.26/12.1.0,
@@ -86,7 +86,7 @@ templates, Recog examples, webappanalyzer).
   from KEV-only listing to `version`/`range` and the row count changes.
 
 ## Not covered, and why
-Per-product table: [`web-inventory-v2.3.2-coverage.md`](web-inventory-v2.3.2-coverage.md). Categories: platform
+Per-product table: [`web-inventory-coverage.md`](web-inventory-coverage.md) (current). Categories: platform
 (general-purpose OS), hardware, hidden (checked: no version in what the scanner receives), other-url (only at an API
 or file the scanner does not request: not added, by design), coarse, not-version, no-known-location (none of the four
 public databases extracts one and none was found), unverified (a candidate exists but there is no image or sample to

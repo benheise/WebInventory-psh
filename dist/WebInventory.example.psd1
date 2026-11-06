@@ -12,6 +12,7 @@
     TimeoutMs    = 4000
 
     IdentifyPaths = $true            # fixed list of public product/version pages
+    # VersionPaths = $true          # one GET to a detected product's version URL when the page showed no version
     ProbeSans     = $true            # vhosts from certificate SANs that resolve to the same IP
     ReverseDns    = $true
     # TlsFingerprint = $true         # JARM (+10 handshakes per TLS service) and JA4S (see the FoxIO licence note)

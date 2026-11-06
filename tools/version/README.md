@@ -17,7 +17,21 @@ header. A **version-only rule** reads it from there.
 - it never changes that detection's name, category or confidence, and never lifts a `requiresCategory` gate;
 - a version a detection rule captured beats it; it beats a version a rule merely writes in (a favicon's `1.5.0+`).
 
-So a version-only rule can add a version to a scan result, and nothing else. The rules are part of the built-in pack
+So a version-only rule can add a version to a scan result, and nothing else.
+
+A version-only rule may also name a fixed path of its own with `"get"` (v2.4.0). Its field is then
+`path:<get>.<part>`, and the path is requested only with `-VersionPaths`, only for a product that was detected without
+a version, once per service (at most 4 per service, GET, no redirects, no credentials):
+
+```json
+{"id":"v:vaultwarden-version","get":"/api/version","f":"path:/api/version.body","r":"^\"(\\d+\\.\\d+\\.\\d+)\"\\s*$",
+ "n":"Vaultwarden","v":"{1}","p":"cpe:2.3:a:dani-garcia:vaultwarden:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"1.37.5\"","exv":"1.37.5"}
+```
+
+The engine refuses a `get` on a rule with a detection output and on a path that is relative, has `.`/`..` segments,
+`//`, a query string or more than 200 characters.
+
+The rules are part of the built-in pack
 (`src/version-rules.json`, appended by `build.py`), carry the `v:` id prefix, and each has an example that
 `-SelfTest`/`-TestRules` checks. A version template uses group numbers (`{1}`) or named groups (`{a}.{b}`); the name
 `v` is reserved for the CPE's version slot (`gen_rules.py` refuses it). `"o": "b"` matches the base64-decoded value (n8n puts its
@@ -30,11 +44,11 @@ release in a base64 JSON meta tag); such a rule has no literal prefilter.
 | `rules.py` | The reviewed rules (with their evidence) and `NO_VERSION`: reviewed products that get none, and why |
 | `gen_rules.py` | Builds `src/version-rules.json` from `rules.py`, with one output per CPE product the detection rules use |
 | `targets.py` | Products whose rules carry a CPE but capture no version, with the names and CPEs a rule must join |
-| `coverage.py` | Version coverage of the packs (`--md` writes the per-product table used in the docs) |
+| `coverage.py` | Version coverage of the packs (`--doc docs/web-inventory-coverage.md --version <release>` writes the per-product table; the list refresh runs it too) |
 | `external.py`, `external.json` | Which products a public fingerprint database extracts a version for (review candidates) |
 | `vlab.py`, `cases.json`, `batch.sh` | Runs a product container and records exactly what the scanner fetches |
 | `wplab.py` | WordPress with plugins at known versions: which assets carry the plugin's own `?ver=` |
-| `replay.ps1` | Feeds recorded responses into the scanner's own matcher and prints the detections with versions |
+| `replay.ps1` | Feeds recorded responses into the scanner's own matcher and prints the detections with versions (`-VersionPaths` also serves the recorded version URLs the engine asks for, and prints which it asked for) |
 
 ## Acceptance rules
 
@@ -46,8 +60,9 @@ A rule is added only when all of these hold:
    releases (`Varnish/6.6`) is rejected: `2.4` would compare as `2.4.0` and match every fix in the branch. Where the
    vendor numbers releases major.minor (pgAdmin 8.6, Proxmox VE 8.1), that is the version.
 3. **It is in a response the scanner already receives**: `GET /` and its same-host redirects, the 404 probe,
-   `robots.txt`, `security.txt`, the favicon, or (with `-IdentifyPaths`) one of its fixed paths. No new request is
-   ever added for a version.
+   `robots.txt`, `security.txt`, the favicon, or (with `-IdentifyPaths`) one of its fixed paths. The one exception
+   is a `get` rule for `-VersionPaths`: a fixed, documented URL of the product that answers without a login, a POST
+   or a per-site path, and that a rule could not read from those responses.
 4. **There is evidence for the exact location**, in this order of strength:
    - *container*: the product's own image was run (`vlab.py`) and the version appeared where the rule reads it, for
      two releases; `replay.ps1` confirms the rule yields the image's version;

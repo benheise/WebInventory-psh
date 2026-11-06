@@ -436,6 +436,21 @@ function Invoke-SelfTest {
     Assert 'a captured version-only version replaces one written into a rule (favicon "1.5.0+")' { @([WebInv.Matcher]::Evaluate($vo6) | Where-Object { $_.Name -eq 'ST Delta' -and $_.Version -eq '1.6.20' -and $_.Cpe -eq 'cpe:2.3:a:stdelta:delta:1.6.20:*:*:*:*:*:*:*' }).Count -eq 1 }
     $vo5 = New-Object WebInv.Observation; $vo5.Add('selftest.page', 'Gamma v5.6.7'); $vo5.Add('selftest.det3', 'Gamma')
     Assert 'version-only rule does not lift a requiresCategory gate' { @([WebInv.Matcher]::Evaluate($vo5) | Where-Object { $_.Name -eq 'ST Gamma' }).Count -eq 0 }
+    # -VersionPaths: a version-only rule's fixed path is asked for only when its product is detected without a version
+    $vpErr = New-Object 'System.Collections.Generic.List[string]'
+    $vpPack = [WebInv.Matcher]::ReadPack('{"name":"vptest","rules":[{"id":"st:vpdet","f":"selftest.vp","r":"^zeta(?: (\\d+\\.\\d+))?$","n":"ST Zeta","c":"Web application","v":"{1}","k":80},{"id":"st:vp","f":"path:/st/ver.body","get":"/st/ver","r":"^v(\\d+\\.\\d+)$","n":"ST Zeta","v":"{1}","vo":true},{"id":"st:vpbad1","f":"path:/st/x.body","get":"/st/x","r":"x","n":"ST Zeta","c":"Web application","k":80},{"id":"st:vpbad2","f":"path:/st/../x.body","get":"/st/../x","r":"x","n":"ST Zeta","v":"{0}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($vpPack, $vpErr)
+    $vp1 = New-Object WebInv.Observation; $vp1.Add('selftest.vp', 'zeta')
+    $vp2 = New-Object WebInv.Observation; $vp2.Add('selftest.vp', 'zeta 1.2')
+    $vp3 = New-Object WebInv.Observation; $vp3.Add('selftest.vp', 'eta')
+    Assert 'version path asked only for a detected product without a version' {
+        (@([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp1), 50, 4)) -join ',') -eq '/st/ver' -and
+        @([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp2), 50, 4)).Count -eq 0 -and
+        @([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp3), 50, 4)).Count -eq 0 }
+    $vp1.Add('path:/st/ver.body', 'v3.4')
+    Assert 'version path response adds the version; a path on a detection rule or with dot segments is refused' {
+        @([WebInv.Matcher]::Evaluate($vp1) | Where-Object { $_.Name -eq 'ST Zeta' -and $_.Version -eq '3.4' }).Count -eq 1 -and
+        @($vpErr | Where-Object { $_ -like 'st:vpbad1:*' }).Count -eq 1 -and @($vpErr | Where-Object { $_ -like 'st:vpbad2:*' }).Count -eq 1 }
     # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
     $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
     [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))

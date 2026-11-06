@@ -215,3 +215,29 @@ Rule matching: the new rules are literal-prefiltered like all others: 103 of the
 occur in the value before their regex runs, so a page without those strings costs nothing beyond the existing
 Aho-Corasick pass; of the other three, two read a dedicated header (`X-Version-Id`, `X-JupyterHub-Version`) that only
 those products send, and n8n's reads one short base64 meta value (`n8n:config:sentry`), decoded only when present.
+
+## v2.4.0: same scan path; `-VersionPaths` sends nothing unless a product needs it
+
+v2.4.0 adds 9 rules (8 version-only, 1 title rule), two CPE alias groups, and the opt-in `-VersionPaths` step, which
+runs after a service's other observations and only when a detected product has no version and a rule names a version
+URL for it. A/B against v2.3.2 on the same lab, two runs each (PowerShell 7.4, 2 vCPU):
+
+| Scenario | v2.3.2 wall (s) | v2.4.0 wall (s) | v2.4.0 with `-VersionPaths` (s) |
+|---|---|---|---|
+| farm (200 services) | 11.42, 11.29 | 11.03, 10.97 | 11.39, 10.82 |
+| lab (26 services, all probes of the lab profile) | 39.16, 38.89 | 39.08, 39.00 | 39.06, 39.10 |
+| closed ports | 11.17, 10.90 | 10.70, 11.05 | |
+| startup only | 3.12, 3.17 | 3.37, 3.24 | |
+
+Accuracy, field by field (`tests/perf/golden.py`, CSV and JSONL): lab, farm and closed-port runs of v2.4.0 are
+identical to v2.3.2 (0 differences; the new `VersionPaths` column is empty). With `-VersionPaths` the lab and the
+farm are identical too, with the same request counts (457 and 1,400): none of their products is detected without a
+version and has a version URL, so no request was added and `VersionPaths` stayed empty on every row. Against the
+product containers (Vaultwarden 1.37.5 and Flink 2.2.1 scanned without and with the switch), the switch added
+one request per service, the one its `VersionPaths` cell lists (`/api/version=200`, `/config=200`; Vaultwarden's
+log shows a single `/api/version` request), and the version.
+
+Startup: in 4 more interleaved pairs, v2.4.0 took 3.20–3.41 s and v2.3.2 2.98–3.23 s (median +0.12 s). The rule
+engine is not where it goes: loading the same built-in, Recog and Wappalyzer packs with each version's engine in
+isolation takes no longer (median 447 ms with the v2.4.0 engine, 540 ms with v2.3.2's, 15 loads of all three each),
+and the scan phases are unchanged. The difference is within the 0.35 s spread v2.3.2 showed in its own A/B (2.81–3.17 s).

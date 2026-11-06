@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.3.2 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.4.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -10,7 +10,8 @@
 
     Discovery and identification only. No exploits, no brute force, no credentials, no path
     enumeration. The optional -IdentifyPaths switch requests a fixed list of 16 public product
-    landing/version pages; it is off by default.
+    landing/version pages; the optional -VersionPaths switch requests a product's documented version URL only
+    after that product was detected without a version. Both are off by default.
 
     Console output shows positive hits only (nmap --open behaviour). A run log and an error log are
     written to the CURRENT directory; results go to CSV + JSONL (+ HTML report) in -OutputDir.
@@ -41,6 +42,12 @@
 .PARAMETER IdentifyPaths
     Opt-in: request a fixed list of public product pages (OWA logon, /certsrv/, AD FS, RD Web, VPN portals,
     /version, Grafana /api/health, Atlassian applinks manifest, OIDC discovery...) to confirm product/version.
+.PARAMETER VersionPaths
+    Opt-in: after fingerprinting, when a product is detected without a version and its version is published at a fixed
+    URL of the same service (Netdata /api/v1/info, Apache Flink /config, Plex /identity, Argo CD /api/version,
+    Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
+    that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
+    their status codes are listed in the VersionPaths column.
 .PARAMETER ProbeSans
     For HTTPS services, re-request / using each certificate SAN that resolves to the SAME IP as Host/SNI and
     record distinct virtual hosts as extra rows.
@@ -155,7 +162,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.3.2. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.4.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -195,6 +202,7 @@ param(
     [switch]$NoTlsScan,
     [switch]$Options,
     [switch]$IdentifyPaths,
+    [switch]$VersionPaths,
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
@@ -277,7 +285,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.3.2'
+$ScriptVersion = '2.4.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -1729,6 +1737,8 @@ namespace WebInv
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
         [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
+        // -VersionPaths: the fixed path a version-only rule reads; its field is path:<get>.<part>
+        [DataMember(Name = "get", EmitDefaultValue = false)] public string Get;
         // self-test vector
         [DataMember(Name = "ex", EmitDefaultValue = false)] public string Ex;
         [DataMember(Name = "exv", EmitDefaultValue = false)] public string Exv;
@@ -1750,6 +1760,7 @@ namespace WebInv
         public string Id; public string Field; public Regex Re; public Cond[] And; public int[] Ports; public string Src; public OutDef[] Out;
         public string Ex; public string Exv;
         public bool B64;   // o contains 'b': the value is base64 text; the regex runs on its UTF-8 decoding (no literal prefilter)
+        public string Get; // -VersionPaths: path requested only when this rule's product is detected without a version
         public string[][] Lits; public int[][] LitIds;   // requirement formula (OR of AND-sets of folded literals) + ids in the field automaton
     }
 
@@ -2120,6 +2131,7 @@ namespace WebInv
     {
         static List<Rule> rules = new List<Rule>();
         static Dictionary<string, List<Rule>> byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
+        static List<Rule> getRules = new List<Rule>();   // version-only rules with a fixed path (-VersionPaths)
         // first literal definition of each technology name: lets implied detections inherit kind/category/CPE
         static Dictionary<string, OutDef> nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase);
         // per-field literal prefilter (fields with enough literal-bearing rules); see Lit / AhoCorasick
@@ -2134,7 +2146,7 @@ namespace WebInv
         public static long Timeouts { get { return System.Threading.Interlocked.Read(ref timeouts); } }
         public static int Count { get { return rules.Count; } }
 
-        public static void Clear() { lock (sync) { rules = new List<Rule>(); byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase); nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase); fieldAc = new Dictionary<string, AhoCorasick>(StringComparer.OrdinalIgnoreCase); } }
+        public static void Clear() { lock (sync) { rules = new List<Rule>(); getRules = new List<Rule>(); byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase); nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase); fieldAc = new Dictionary<string, AhoCorasick>(StringComparer.OrdinalIgnoreCase); } }
 
         public static RulePack ReadPack(string json)
         {
@@ -2209,6 +2221,13 @@ namespace WebInv
                 bool any = false;
                 foreach (OutDef o in r.Out) if (!string.IsNullOrEmpty(o.N) || !string.IsNullOrEmpty(o.Flag)) any = true;
                 if (!any) { errors.Add(r.Id + ": no output name/flag"); continue; }
+                if (!string.IsNullOrEmpty(d.Get))
+                {
+                    string why = GetProblem(d.Get, r.Field);
+                    foreach (OutDef o in r.Out) if (!o.Vo || string.IsNullOrEmpty(o.N)) why = why ?? "only version-only outputs may name a path";
+                    if (why != null) { errors.Add(r.Id + ": get '" + d.Get + "': " + why); continue; }
+                    r.Get = d.Get;
+                }
                 add.Add(r); n++;
             }
             lock (sync)
@@ -2219,6 +2238,9 @@ namespace WebInv
                     foreach (OutDef o in r.Out)
                         if (!o.Vo && !string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
                 nameInfo = ni;
+                List<Rule> ng = new List<Rule>(getRules);
+                foreach (Rule r in add) if (r.Get != null) ng.Add(r);
+                getRules = ng;
                 Dictionary<string, List<Rule>> nb = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in nr)
                 {
@@ -2411,6 +2433,44 @@ namespace WebInv
             string fp;
             if (fill.TryGetValue((string.IsNullOrEmpty(kind) ? "service" : kind) + "|" + name, out fp)) { cpe = fp; return 1; }
             return 0;
+        }
+
+        // a fixed absolute path (no query, no dot segments, no doubled slash, conservative characters) that the rule's field reads
+        static readonly Regex GetPath = new Regex(@"^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+/?$", RegexOptions.CultureInvariant);
+        static string GetProblem(string get, string field)
+        {
+            if (get.Length > 200) return "longer than 200 characters";
+            if (!GetPath.IsMatch(get) || get.Contains("/.") || get.Contains("//")) return "not a plain absolute path";
+            if (!field.StartsWith("path:" + get + ".", StringComparison.Ordinal)) return "the rule's field must be path:" + get + ".<part>";
+            return null;
+        }
+
+        // -VersionPaths: the paths of version-only rules whose product was detected (same kind, and the same CPE product or
+        // name, at the reporting confidence) without a version a detection rule captured; at most max, in rule order
+        public static string[] VersionPaths(List<Detection> dets, int minConfidence, int max)
+        {
+            List<string> res = new List<string>();
+            List<Rule> gr = getRules;
+            if (dets == null || gr.Count == 0 || max <= 0) return res.ToArray();
+            foreach (Rule r in gr)
+            {
+                if (res.Contains(r.Get)) continue;
+                bool need = false;
+                foreach (OutDef o in r.Out)
+                {
+                    string kind = string.IsNullOrEmpty(o.T) ? "service" : o.T;
+                    string ok = CpeKey(o.P);
+                    foreach (Detection d in dets)
+                    {
+                        if (d.VersionOnly || d.Kind != kind || d.Confidence < minConfidence) continue;
+                        if (d.Version.Length > 0 && !d.FixedVersion) continue;
+                        if ((ok.Length > 0 && CpeKey(d.Cpe) == ok) || string.Equals(d.Name, o.N, StringComparison.OrdinalIgnoreCase)) { need = true; break; }
+                    }
+                    if (need) break;
+                }
+                if (need) { res.Add(r.Get); if (res.Count >= max) break; }
+            }
+            return res.ToArray();
         }
 
         static string MergeKey(Detection d)
@@ -3370,7 +3430,7 @@ namespace WebInv
     // ------------------------------------------------------------------ Misc helpers
     public static class Util
     {
-        public const string EngineVersion = "2.3.2";
+        public const string EngineVersion = "2.4.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3466,7 +3526,7 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 
 #region ---------- Embedded rule pack ----------
 $BuiltinRulesJson = @'
-{"name":"builtin","version":"2.3.2","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.4.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -3660,6 +3720,7 @@ $BuiltinRulesJson = @'
 {"id":"b:t-orion","f":"title","r":"SolarWinds Orion|Orion Platform","n":"SolarWinds Orion","c":"Monitoring","p":"cpe:2.3:a:solarwinds:orion_platform:*","k":95,"flag":"MgmtInterface"},
 {"id":"b:t-kuma","f":"title","r":"^Uptime Kuma","n":"Uptime Kuma","c":"Monitoring","k":90,"p":"cpe:2.3:a:uptime.kuma:uptime_kuma:{v}"},
 {"id":"b:t-netdata","f":"title","r":"^netdata","o":"i","n":"Netdata","c":"Monitoring","k":85,"p":"cpe:2.3:a:netdata:netdata:{v}"},
+{"id":"b:t-vaultwarden","f":"title","r":"^Vaultwarden Web(?: Vault)?$","n":"Vaultwarden","c":"Web application","k":90,"p":"cpe:2.3:a:dani-garcia:vaultwarden:{v}","ex":"Vaultwarden Web"},
 {"id":"b:t-cadvisor","f":"title","r":"^cAdvisor","n":"cAdvisor","c":"Monitoring","k":90},
 {"id":"b:t-graylog","f":"title","r":"^Graylog","n":"Graylog","c":"SIEM","k":90,"p":"cpe:2.3:a:graylog:graylog:{v}"},
 {"id":"b:t-splunk","f":"title","r":"\\bSplunk\\b","n":"Splunk","c":"SIEM","p":"cpe:2.3:a:splunk:splunk:*","k":85},
@@ -3993,6 +4054,11 @@ $BuiltinRulesJson = @'
 {"id":"v:wp-coblocks","f":"body","r":"/wp-content/plugins/coblocks/dist/js/coblocks-animation\\.js\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"GoDaddy CoBlocks","v":"{1}","p":"cpe:2.3:a:godaddy:coblocks:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<script src=\"https://www.example.org/wp-content/plugins/coblocks/dist/js/coblocks-animation.js?ver=2.24.0\" id=\"coblocks-animation-js\"></script>","exv":"2.24.0"},
 {"id":"v:wp-gutenberg","f":"body","r":"/wp-content/plugins/gutenberg/build/(?:styles/)?components/style(?:\\.min)?\\.css\\?ver=(\\d+\\.\\d+\\.\\d+)","src":"builtin","n":"Gutenberg","v":"{1}","p":"cpe:2.3:a:wordpress:gutenberg:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel='stylesheet' id='wp-components-css' href='https://www.example.org/wp-content/plugins/gutenberg/build/components/style.css?ver=18.4.0' media='all' />","exv":"18.4.0"},
 {"id":"v:wp-events-calendar","f":"body","r":"/wp-content/plugins/the-events-calendar/build/css/tribe-events-[\\w-]+\\.css\\?ver=(\\d+\\.\\d+\\.\\d+(?:\\.\\d+)?)","src":"builtin","n":"The Events Calendar","v":"{1}","p":"cpe:2.3:a:stellarwp:the_events_calendar:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel='stylesheet' id='tribe-events-v2-single-skeleton-css' href='https://www.example.org/wp-content/plugins/the-events-calendar/build/css/tribe-events-single-skeleton.css?ver=6.18.3.1' media='all' />","exv":"6.18.3.1"},
+{"id":"v:netdata-server","f":"header:server","r":"^Netdata Embedded HTTP Server v(\\d+\\.\\d+\\.\\d+)$","o":"i","src":"builtin","n":"Netdata","v":"{1}","p":"cpe:2.3:a:netdata:netdata:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Netdata Embedded HTTP Server v2.12.3","exv":"2.12.3"},
+{"id":"v:netdata-info","f":"path:/api/v1/info.body","r":"\"version\"\\s*:\\s*\"v(\\d+\\.\\d+\\.\\d+)\"","get":"/api/v1/info","src":"builtin","n":"Netdata","v":"{1}","p":"cpe:2.3:a:netdata:netdata:{v}:*:*:*:*:*:*:*","vo":true,"ex":"{\n    \"version\":\"v2.12.3\",\n    \"uid\":\"f44c1bd6-b99d-4ab3-af10-1e6e14b166f1\",","exv":"2.12.3"},
+{"id":"v:flink-config","f":"path:/config.body","r":"\"flink-version\"\\s*:\\s*\"(\\d+\\.\\d+\\.\\d+)\"","get":"/config","src":"builtin","n":"Apache Flink","v":"{1}","p":"cpe:/a:apache:flink:{v}","vo":true,"ex":"{\"refresh-interval\":3000,\"timezone-name\":\"Coordinated Universal Time\",\"timezone-offset\":0,\"flink-version\":\"1.20.5\",\"flink-revision\":\"0980485 @ 2026-06-08T09:21:06+02:00\"}","exv":"1.20.5"},
+{"id":"v:plex-identity","f":"path:/identity.body","r":"<MediaContainer\\b[^>]*\\sversion=\"(\\d+\\.\\d+\\.\\d+\\.\\d+)-[0-9a-f]+\"","get":"/identity","src":"builtin","n":"Plex Media Server","v":"{1}","p":"cpe:2.3:a:plex:media_server:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<MediaContainer size=\"0\" apiVersion=\"1.2.3\" claimed=\"0\" machineIdentifier=\"6a4039d41ad18d7439e01744066a31f68c3259d4\" version=\"1.43.5.11079-b3b13e506\">\n</MediaContainer>\n","exv":"1.43.5.11079"},
+{"id":"v:vaultwarden-version","f":"path:/api/version.body","r":"^\"(\\d+\\.\\d+\\.\\d+)\"\\s*$","get":"/api/version","src":"builtin","n":"Vaultwarden","v":"{1}","p":"cpe:2.3:a:dani-garcia:vaultwarden:{v}:*:*:*:*:*:*:*","vo":true,"ex":"\"1.37.5\"","exv":"1.37.5"},
 {"id":"v:bugzilla","f":"body","r":"class=\"header_addl_info\">version (\\d+\\.\\d+(?:\\.\\d+)?)<","src":"builtin","n":"Mozilla Bugzilla","v":"{1}","p":"cpe:/a:mozilla:bugzilla:{v}","vo":true,"ex":"<span id=\"information\" class=\"header_addl_info\">version 5.0.4</span>","exv":"5.0.4"},
 {"id":"v:bludit","f":"body","r":"/bl-(?:kernel|themes)/[^\"\\'?]+\\.(?:css|js)\\?version=(\\d+\\.\\d+\\.\\d+)[\"\\']","src":"builtin","n":"Bludit","v":"{1}","p":"cpe:2.3:a:bludit:bludit:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<link rel=\"stylesheet\" href=\"/bl-kernel/css/bootstrap.min.css?version=3.14.1\">","exv":"3.14.1"},
 {"id":"v:weblate","f":"body","r":"Powered by <a href=\"https://weblate\\.org/[^\"]*\">Weblate (\\d+\\.\\d+(?:\\.\\d+)?)</a>","src":"builtin","n":"Weblate","v":"{1}","p":"cpe:2.3:a:weblate:weblate:{v}:*:*:*:*:*:*:*","vo":true,"ex":"Powered by <a href=\"https://weblate.org/\">Weblate 5.8.4</a>","exv":"5.8.4"},
@@ -4018,6 +4084,7 @@ $BuiltinRulesJson = @'
 {"id":"v:gitea-footer","f":"body","r":">Powered by Gitea</a>\\s*(?:<span>\\s*)?Version:\\s*(\\d+\\.\\d+\\.\\d+)\\s","src":"builtin","n":"Gitea","v":"{1}","p":"cpe:2.3:a:gitea:gitea:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<a target=\"_blank\" href=\"https://about.gitea.com\">Powered by Gitea</a>\n\t\t\n\t\t\n\t\t\t<span>\n\t\t\tVersion:\n\t\t\t\n\t\t\t\t1.27.3\n\t\t\t\n\t\t\t</span>","exv":"1.27.3"},
 {"id":"v:gitea-asset","f":"scriptsrc","r":"(?:^|/)assets/js/(?:index|webcomponents)\\.js\\?v=(\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"Gitea","v":"{1}","p":"cpe:2.3:a:gitea:gitea:{v}:*:*:*:*:*:*:*","vo":true,"ex":"/assets/js/index.js?v=1.22.3","exv":"1.22.3"},
 {"id":"v:n8n","f":"meta:n8n:config:sentry","r":"\"release\"\\s*:\\s*\"n8n@(\\d+\\.\\d+\\.\\d+)\"","o":"b","src":"builtin","n":"n8n","v":"{1}","p":"cpe:2.3:a:n8n:n8n:{v}:*:*:*:*:*:*:*","vo":true,"ex":"eyJkc24iOiIiLCJlbnZpcm9ubWVudCI6ImRldmVsb3BtZW50IiwicmVsZWFzZSI6Im44bkAyLjQ3LjIifQ==","exv":"2.47.2"},
+{"id":"v:argocd-version","f":"path:/api/version.body","r":"\"Version\"\\s*:\\s*\"v(\\d+\\.\\d+\\.\\d+)\"","get":"/api/version","src":"builtin","n":"Argo CD","v":"{1}","p":"cpe:2.3:a:linuxfoundation:argo-cd:{v}:*:*:*:*:*:*:*","vo":true,"ex":"{\"Version\":\"v3.1.5\"}","exv":"3.1.5"},
 {"id":"v:exchange2007-imap","f":"banner.imap","r":"^Microsoft Exchange Server (2007) IMAP4 service ready","src":"builtin","n":"Microsoft Exchange 2007 Server","v":"{1}","p":"cpe:/a:microsoft:exchange_server:{v}","vo":true,"ex":"Microsoft Exchange Server 2007 IMAP4 service ready","exv":"2007"},
 {"id":"v:exchange2007-pop3","f":"banner.pop3","r":"^Microsoft Exchange Server (2007) POP3 service ready","src":"builtin","n":"Microsoft Exchange 2007 Server","v":"{1}","p":"cpe:/a:microsoft:exchange_server:{v}","vo":true,"ex":"Microsoft Exchange Server 2007 POP3 service ready","exv":"2007"},
 {"id":"v:prtg-server","f":"header:server","r":"^PRTG/(\\d+\\.\\d+\\.\\d+\\.\\d+)$","src":"builtin","n":"PRTG Network Monitor","v":"{1}","p":"cpe:2.3:a:paessler:prtg_network_monitor:{v}:*:*:*:*:*:*:*","vo":true,"ex":"PRTG/23.4.90.1299","exv":"23.4.90.1299"},
@@ -4061,6 +4128,8 @@ $BuiltinRulesJson = @'
 {"id":"v:edirectory","f":"body","r":"<blockquote class=\"eDirectoryVersion\"><span class=\"basePowered\">Powered by <a href=\"[^\"]*\" target=\"_blank\">eDirectory&trade;</a> </span> v\\.(\\d+\\.\\d+(?:\\.\\d+)*)</blockquote>","src":"builtin","n":"eDirectory","v":"{1}","p":"cpe:2.3:a:arcasolutions:edirectory:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<blockquote class=\"eDirectoryVersion\"><span class=\"basePowered\">Powered by <a href=\"http://www.edirectory.com\" target=\"_blank\">eDirectory&trade;</a> </span> v.10.4</blockquote>","exv":"10.4"},
 {"id":"v:uportal","f":"body","r":"(?:alt=\"Powered by uPortal (?<ver>\\d+\\.\\d+(?:\\.\\d+)*)\"|>Powered by uPortal (?<ver>\\d+\\.\\d+(?:\\.\\d+)*)</a>)","src":"builtin","n":"uPortal","v":"{ver}","p":"cpe:2.3:a:apereo:uportal:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<img src=\"media/skins/universality/uportal3/images/portal_logo.png\" alt=\"Powered by uPortal 3.2.4\" />","exv":"3.2.4"},
 {"id":"v:uportal-header","f":"header:uportal-version","r":"^uPortal_rel-(\\d+)-(\\d+)-(\\d+)\\b","o":"i","src":"builtin","n":"uPortal","v":"{1}.{2}.{3}","p":"cpe:2.3:a:apereo:uportal:{v}:*:*:*:*:*:*:*","vo":true,"ex":"uPortal_rel-3-2-4","exv":"3.2.4"},
+{"id":"v:mailman-listinfo","f":"path:/mailman/listinfo.body","r":"(?:>Delivered by Mailman<br>version |alt=\"Delivered by Mailman\"[^>]*><br>version )(\\d+\\.\\d+\\.\\d+)(?![\\w.])","get":"/mailman/listinfo","src":"builtin","n":"Mailman","v":"{1}","p":"cpe:2.3:a:gnu:mailman:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<td><img src=\"/icons/mailman.jpg\" alt=\"Delivered by Mailman\" border=0><br>version 2.1.39</td>","exv":"2.1.39"},
+{"id":"v:sitecore-versionxml","f":"path:/sitecore/shell/sitecore.version.xml.body","r":"<major>(?<maj>9|[1-9]\\d)</major>\\s*<minor>(?<min>\\d+)</minor>\\s*<build>0</build>","get":"/sitecore/shell/sitecore.version.xml","src":"builtin","n":"Sitecore","v":"{maj}.{min}","p":"cpe:2.3:a:sitecore:experience_platform:{v}:*:*:*:*:*:*:*","vo":true,"ex":"<information>\n  <version>\n    <major>10</major>\n    <minor>3</minor>\n    <build>0</build>\n    <revision>008463</revision>\n  </version>","exv":"10.3"},
 {"id":"v:cdn-tinymce","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/tinymce/|cdn\\.jsdelivr\\.net/npm/tinymce@|unpkg\\.com/tinymce@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"TinyMCE","v":"{1}","p":"cpe:2.3:a:tiny:tinymce:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/tinymce/5.10.9/tinymce.min.js","exv":"5.10.9"},
 {"id":"v:cdn-jspdf","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/jspdf/|cdn\\.jsdelivr\\.net/npm/jspdf@|unpkg\\.com/jspdf@)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"jsPDF","v":"{1}","p":"cpe:2.3:a:parall:jspdf:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js","exv":"2.5.1"},
 {"id":"v:cdn-yui","f":"scriptsrc","r":"(?:^|//)(?:cdnjs\\.cloudflare\\.com/ajax/libs/yui/|cdn\\.jsdelivr\\.net/npm/yui@|unpkg\\.com/yui@|yui\\.yahooapis\\.com/)(\\d+\\.\\d+\\.\\d+)/","o":"i","src":"builtin","n":"YUI","v":"{1}","p":"cpe:2.3:a:yahoo:yui:{v}:*:*:*:*:*:*:*","vo":true,"ex":"https://yui.yahooapis.com/3.18.1/build/yui/yui-min.js","exv":"3.18.1"},
@@ -4638,6 +4707,7 @@ $CpeSupplementJson = @'
 ["a:apereo:uportal","a:jasig:uportal"],
 ["a:argoproj:argo_cd","a:linuxfoundation:argo-cd"],
 ["a:atlassian:confluence","a:atlassian:confluence_data_center","a:atlassian:confluence_server"],
+["a:atlassian:jira","a:atlassian:jira_data_center","a:atlassian:jira_server","a:atlassian:jira_server_and_data_center","a:atlassian:jira_software_data_center"],
 ["a:atlassian:jira_service_management","a:atlassian:jira_service_management_server_and_data_center"],
 ["a:awesomemotive:easy_digital_downloads","a:easydigitaldownloads:easy_digital_downloads","a:sandhillsdev:easy_digital_downloads"],
 ["a:boldgrid:w3_total_cache","a:w3-edge:total_cache"],
@@ -4762,7 +4832,6 @@ $CpeSupplementJson = @'
 ["a:puppet:puppet_enterprise","a:puppetlabs:puppet_enterprise","a:puppetlabs:puppet_enterprise_users"],
 ["a:python:cpython","a:python:python"],
 ["a:qnap:qts","o:qnap:qts"],
-["a:qualiteam:x-cart","a:x-cart:x-cart"],
 ["a:rafflepress:rafflepress","a:seedprod:rafflepress"],
 ["a:rancher:rancher","a:suse:rancher"],
 ["a:rankmath:rankmath","a:rankmath:seo"],
@@ -4787,6 +4856,7 @@ $CpeSupplementJson = @'
 ["a:umbraco:umbraco","a:umbraco:umbraco_cms"],
 ["a:uptime-kuma_project:uptime-kuma","a:uptime.kuma:uptime_kuma","a:uptime_kuma_project:uptime_kuma"],
 ["a:vanillaforums:vanilla","a:vanillaforums:vanilla_forums"],
+["a:varnish-cache:varnish","a:varnish-cache:varnish_cache","a:varnish-software:varnish_cache","a:varnish_cache_project:varnish_cache"],
 ["a:veeam:backup_&_replication","a:veeam:backup_and_replication","a:veeam:veeam_backup_&_replication"],
 ["a:vmware:esx_server","o:vmware:esx"],
 ["a:vmware:vcenter_server","a:vmware:vsphere_server"],
@@ -5234,8 +5304,9 @@ $WorkerScript = {
         if ($RawTls -and $RawTls.Alpn) { $Obs.Add('alpn', $RawTls.Alpn) }
     }
 
-    function Complete-Row($Row, $Obs) {
-        $dets = [WebInv.Matcher]::Evaluate($Obs)
+    function Complete-Row($Row, $Obs, $Dets) {
+        # $Dets: an evaluation of exactly these observations (-VersionPaths already made one), else evaluated here
+        $dets = if ($null -ne $Dets) { $Dets } else { [WebInv.Matcher]::Evaluate($Obs) }
         $svc = New-Object System.Collections.Generic.List[string]; $tech = New-Object System.Collections.Generic.List[string]
         $cats = New-Object System.Collections.Generic.List[string]; $cpes = New-Object System.Collections.Generic.List[string]
         $os = New-Object System.Collections.Generic.List[string]; $hw = New-Object System.Collections.Generic.List[string]
@@ -5531,6 +5602,7 @@ $WorkerScript = {
         $obs = New-Object WebInv.Observation
         $obs.Port = $J.Port
         $web = $null
+        $preDets = $null
         if ($final) {
             $web = Get-RedirectChain $final $J.Host
             Set-HttpFields $row $web
@@ -5612,7 +5684,25 @@ $WorkerScript = {
         }
         Add-CertObs $obs $cert $rawTls
         if ($Cfg.TlsFingerprint -and $isTls) { Add-TlsFingerprint $row $obs $rawTls }
-        Complete-Row $row $obs
+        # ---- 8b. optional version paths: the documented version URL of a product detected here without a version
+        #          (after every observation of this row is in, so the evaluation can be handed to Complete-Row) ----
+        if ($Cfg.VersionPaths -and $web) {
+            $preDets = [WebInv.Matcher]::Evaluate($obs)
+            $vp = [WebInv.Matcher]::VersionPaths($preDets, $Cfg.MinConfidence, 4)
+            if ($vp.Length) {
+                $hits = New-Object System.Collections.Generic.List[string]
+                foreach ($p in $vp) {
+                    if ($Cfg.IdentifyPaths -and $Cfg.PathList -contains $p) { continue }   # already requested and observed
+                    $pr = Invoke-Fetch $oTls 'GET' $p $oHost $oIp $oPort $oSni 0
+                    if (-not $pr.Resp.IsHttp) { continue }
+                    if ($pr.Resp.Code -eq 200) { Add-BodyObs $obs ('path:{0}.' -f $p) $pr.Resp }
+                    [void]$hits.Add(('{0}={1}' -f $p, $pr.Resp.Code))
+                }
+                $row.VersionPaths = ($hits -join ';')
+                $preDets = $null   # the observations changed: Complete-Row evaluates again
+            }
+        }
+        Complete-Row $row $obs $preDets
         [void]$rows.Add($row)
 
         # ---- 9. optional SAN virtual-host probing (same IP only => stays inside scope) ----
@@ -5721,7 +5811,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.3.2";
+        public const string Version = "2.4.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
@@ -7430,7 +7520,9 @@ $Columns = @(
     'CertKeyAlg', 'CertKeySize', 'CertSerial', 'CertSha1', 'CertSha256', 'CertPolicyErrors', 'CertChainStatus', 'CertSource',
     'Flags', 'Advisories', 'Banner', 'Notes',
     # v2.3 (appended so existing CSV consumers keep their column positions)
-    'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s')
+    'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s',
+    # v2.4 (appended)
+    'VersionPaths')
 
 function Open-Outputs {
     param([string]$Dir, [string]$RunId)
@@ -8325,7 +8417,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.3.2";
+        public const string Version = "2.4.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -8626,7 +8718,9 @@ namespace WebInv
             "CertNotBefore", "CertNotAfter", "CertSelfSigned", "CertSigAlg", "CertKeyAlg", "CertKeySize", "CertSerial", "CertSha1",
             "CertSha256", "CertPolicyErrors", "CertChainStatus", "CertSource", "Flags", "Advisories", "Banner",
             // v2.3: appended (empty values do not enter the hash, so every earlier version keeps its hash)
-            "DeviceName", "Domain", "ProtocolInfo", "Jarm", "Ja4s" };
+            "DeviceName", "Domain", "ProtocolInfo", "Jarm", "Ja4s",
+            // v2.4: appended
+            "VersionPaths" };
         // recorded with each sighting, never a reason for a new version (response time, dynamic page hashes, scan clock)
         public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag" };
         // profile flag -> fields that only that probe collects; a run without the probe keeps the previous values
@@ -8636,6 +8730,7 @@ namespace WebInv
             new[] { "extras", "Robots", "SecurityTxt" },
             new[] { "options", "AllowedMethods", "RiskyMethods" },
             new[] { "identifyPaths", "IdentifiedPaths" },
+            new[] { "versionPaths", "VersionPaths" },
             new[] { "reverseDns", "ReverseDns" },
             new[] { "tlsFingerprint", "Jarm" },
             new[] { "ja4s", "Ja4s" } };
@@ -8712,6 +8807,7 @@ namespace WebInv
         public bool Complete = true, Synthesized;
         public bool TlsScan = true, Favicon = true, Extras = true, Options, IdentifyPaths, ProbeSans, ReverseDns;
         public bool TlsFingerprint, Ja4s, Smb, Rdp, Snmp;   // v2.3 opt-in probes (appended to Profile only when on)
+        public bool VersionPaths;                            // v2.4 opt-in (appended to Profile only when on)
         public long Checks;
         public bool Collected(string flag)
         {
@@ -8726,10 +8822,11 @@ namespace WebInv
                 case "probeSans": return ProbeSans;
                 case "tlsFingerprint": return TlsFingerprint;
                 case "ja4s": return Ja4s;
+                case "versionPaths": return VersionPaths;
             }
             return true;
         }
-        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s); } }
+        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths); } }
         // flag as written in a Profile string ("tls=1 favicon=1 ..."); missing = off (flags added later are appended only when on)
         public static bool ProfileHas(string profile, string flag)
         {
@@ -8744,7 +8841,7 @@ namespace WebInv
             {
                 return string.Format(CultureInfo.InvariantCulture, "tls={0} favicon={1} extras={2} options={3} identifyPaths={4} probeSans={5} reverseDns={6}",
                     TlsScan ? 1 : 0, Favicon ? 1 : 0, Extras ? 1 : 0, Options ? 1 : 0, IdentifyPaths ? 1 : 0, ProbeSans ? 1 : 0, ReverseDns ? 1 : 0)
-                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "");
+                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "");
             }
         }
         public DateTimeOffset Started { get { return StoreUtil.ParseIso(StartedAt); } }
@@ -8770,6 +8867,7 @@ namespace WebInv
                 r.Options = Flag(p, "options", false); r.IdentifyPaths = Flag(p, "identifyPaths", false); r.ProbeSans = Flag(p, "probeSans", false);
                 r.ReverseDns = Flag(p, "reverseDns", false);
                 r.TlsFingerprint = Flag(p, "tlsFingerprint", false); r.Ja4s = Flag(p, "ja4s", false); r.Smb = Flag(p, "smb", false); r.Rdp = Flag(p, "rdp", false); r.Snmp = Flag(p, "snmp", false);
+                r.VersionPaths = Flag(p, "versionPaths", false);
             }
             if (r.RunId.Length == 0) throw new InvalidDataException("run.json has no runId");
             DateTimeOffset t;
@@ -8785,6 +8883,7 @@ namespace WebInv
             if (Smb) p.Bool("smb", true);
             if (Rdp) p.Bool("rdp", true);
             if (Snmp) p.Bool("snmp", true);
+            if (VersionPaths) p.Bool("versionPaths", true);
             return new JsonObj().Num("format", 1).Str("runId", RunId).Str("startedAt", StartedAt).Str("finishedAt", FinishedAt).Bool("complete", Complete)
                 .Bool("synthesized", Synthesized).Str("scanner", Scanner).Str("tag", Tag).Str("operator", Operator).Str("computer", Computer)
                 .Num("checks", Checks).Raw("profile", p.ToString()).ToString();
@@ -8813,6 +8912,7 @@ namespace WebInv
                 if (StoreUtil.Str(o, "Robots").Length > 0 || StoreUtil.Str(o, "SecurityTxt").Length > 0) extras = true;
                 if (StoreUtil.Str(o, "AllowedMethods").Length > 0) r.Options = true;
                 if (StoreUtil.Str(o, "IdentifiedPaths").Length > 0) r.IdentifyPaths = true;
+                if (StoreUtil.Str(o, "VersionPaths").Length > 0) r.VersionPaths = true;
                 if (StoreUtil.Str(o, "Vhost") == "True") r.ProbeSans = true;
                 if (StoreUtil.Str(o, "ReverseDns").Length > 0) r.ReverseDns = true;
                 if (StoreUtil.Str(o, "Jarm").Length > 0) r.TlsFingerprint = true;
@@ -12068,7 +12168,7 @@ function Write-RunInfo {
         scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
         profile = [ordered]@{
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
-            identifyPaths = [bool]$IdentifyPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
+            identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
@@ -13067,6 +13167,21 @@ function Invoke-SelfTest {
     Assert 'a captured version-only version replaces one written into a rule (favicon "1.5.0+")' { @([WebInv.Matcher]::Evaluate($vo6) | Where-Object { $_.Name -eq 'ST Delta' -and $_.Version -eq '1.6.20' -and $_.Cpe -eq 'cpe:2.3:a:stdelta:delta:1.6.20:*:*:*:*:*:*:*' }).Count -eq 1 }
     $vo5 = New-Object WebInv.Observation; $vo5.Add('selftest.page', 'Gamma v5.6.7'); $vo5.Add('selftest.det3', 'Gamma')
     Assert 'version-only rule does not lift a requiresCategory gate' { @([WebInv.Matcher]::Evaluate($vo5) | Where-Object { $_.Name -eq 'ST Gamma' }).Count -eq 0 }
+    # -VersionPaths: a version-only rule's fixed path is asked for only when its product is detected without a version
+    $vpErr = New-Object 'System.Collections.Generic.List[string]'
+    $vpPack = [WebInv.Matcher]::ReadPack('{"name":"vptest","rules":[{"id":"st:vpdet","f":"selftest.vp","r":"^zeta(?: (\\d+\\.\\d+))?$","n":"ST Zeta","c":"Web application","v":"{1}","k":80},{"id":"st:vp","f":"path:/st/ver.body","get":"/st/ver","r":"^v(\\d+\\.\\d+)$","n":"ST Zeta","v":"{1}","vo":true},{"id":"st:vpbad1","f":"path:/st/x.body","get":"/st/x","r":"x","n":"ST Zeta","c":"Web application","k":80},{"id":"st:vpbad2","f":"path:/st/../x.body","get":"/st/../x","r":"x","n":"ST Zeta","v":"{0}","vo":true}]}')
+    [void][WebInv.Matcher]::Load($vpPack, $vpErr)
+    $vp1 = New-Object WebInv.Observation; $vp1.Add('selftest.vp', 'zeta')
+    $vp2 = New-Object WebInv.Observation; $vp2.Add('selftest.vp', 'zeta 1.2')
+    $vp3 = New-Object WebInv.Observation; $vp3.Add('selftest.vp', 'eta')
+    Assert 'version path asked only for a detected product without a version' {
+        (@([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp1), 50, 4)) -join ',') -eq '/st/ver' -and
+        @([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp2), 50, 4)).Count -eq 0 -and
+        @([WebInv.Matcher]::VersionPaths([WebInv.Matcher]::Evaluate($vp3), 50, 4)).Count -eq 0 }
+    $vp1.Add('path:/st/ver.body', 'v3.4')
+    Assert 'version path response adds the version; a path on a detection rule or with dot segments is refused' {
+        @([WebInv.Matcher]::Evaluate($vp1) | Where-Object { $_.Name -eq 'ST Zeta' -and $_.Version -eq '3.4' }).Count -eq 1 -and
+        @($vpErr | Where-Object { $_ -like 'st:vpbad1:*' }).Count -eq 1 -and @($vpErr | Where-Object { $_ -like 'st:vpbad2:*' }).Count -eq 1 }
     # o=b: the value is base64 text and the regex runs on its decoding (n8n's n8n:config:sentry meta tag)
     $b64Pack = [WebInv.Matcher]::ReadPack('{"name":"b64test","rules":[{"id":"st:b64","f":"selftest.b64","o":"b","r":"\"rel\":\"st@(\\d+\\.\\d+\\.\\d+)\"","n":"ST Epsilon","v":"{1}","c":"Web application","k":80}]}')
     [void][WebInv.Matcher]::Load($b64Pack, (New-Object 'System.Collections.Generic.List[string]'))
@@ -13477,13 +13592,13 @@ $Cfg = @{
     TimeoutMs = $TimeoutMs; Retries = $Retries; MaxBodyBytes = $MaxBodyBytes; MaxRedirects = $MaxRedirects; BannerWaitMs = $BannerWaitMs
     DelayMs = $DelayMs; JitterMs = $JitterMs; SslProto = $sslProto; TlsPorts = $TlsHintPorts; HttpPorts = $HttpPorts
     NoTlsScan = [bool]$NoTlsScan; NoFavicon = [bool]$NoFavicon; NoExtras = [bool]$NoExtras; Options = [bool]$Options
-    IdentifyPaths = [bool]$IdentifyPaths; PathList = $IdentifyPathList; ProbeSans = [bool]$ProbeSans; MaxSans = $MaxSans
+    IdentifyPaths = [bool]$IdentifyPaths; PathList = $IdentifyPathList; VersionPaths = [bool]$VersionPaths; ProbeSans = [bool]$ProbeSans; MaxSans = $MaxSans
     ReverseDns = [bool]$ReverseDns; FollowOffHost = [bool]$FollowOffHost; Exclude = $ExSet; Scope = $ScopeSet
     MinConfidence = $MinConfidence; CertWarnDays = $CertWarnDays; Advisories = $Advisories; MgmtCategories = $MgmtCategories; MismatchStrings = $script:MismatchStrings
     RdnsCache = [hashtable]::Synchronized(@{}); VhostSeen = [hashtable]::Synchronized(@{})
     TlsFingerprint = [bool]$TlsFingerprint; Ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); Snmp = $snmpCred; Proxy = [bool]$Proxy
 }
-$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
+$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
 $budgetMs = [long]$ops * ($TimeoutMs * 3 + $DelayMs + $JitterMs + $BannerWaitMs) + 30000
 $banner = "WebInventory v{0}: {1} checks across {2} hosts ({3} excluded{4}). Pace={5} threads={6} per-host={7} timeout={8}ms. Authorised scope only." -f $ScriptVersion, $Jobs.Count, $hostSet.Count, $excludedCount, $(if ($ScopeSet.IsEmpty) { ', no -Scope set' } else { ', scope enforced' }), $Pace, $Threads, $MaxPerHost, $TimeoutMs
 Write-RunLog $banner; Write-RunLog ("Outputs: {0} ; {1} ; {2}; watchdog budget {3} ms per check" -f $script:CsvPath, $script:JsonlPath, $script:ProgressPath, $budgetMs)

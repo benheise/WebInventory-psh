@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.3.2 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.4.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -10,7 +10,8 @@
 
     Discovery and identification only. No exploits, no brute force, no credentials, no path
     enumeration. The optional -IdentifyPaths switch requests a fixed list of 16 public product
-    landing/version pages; it is off by default.
+    landing/version pages; the optional -VersionPaths switch requests a product's documented version URL only
+    after that product was detected without a version. Both are off by default.
 
     Console output shows positive hits only (nmap --open behaviour). A run log and an error log are
     written to the CURRENT directory; results go to CSV + JSONL (+ HTML report) in -OutputDir.
@@ -41,6 +42,12 @@
 .PARAMETER IdentifyPaths
     Opt-in: request a fixed list of public product pages (OWA logon, /certsrv/, AD FS, RD Web, VPN portals,
     /version, Grafana /api/health, Atlassian applinks manifest, OIDC discovery...) to confirm product/version.
+.PARAMETER VersionPaths
+    Opt-in: after fingerprinting, when a product is detected without a version and its version is published at a fixed
+    URL of the same service (Netdata /api/v1/info, Apache Flink /config, Plex /identity, Argo CD /api/version,
+    Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
+    that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
+    their status codes are listed in the VersionPaths column.
 .PARAMETER ProbeSans
     For HTTPS services, re-request / using each certificate SAN that resolves to the SAME IP as Host/SNI and
     record distinct virtual hosts as extra rows.
@@ -155,7 +162,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.3.2. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.4.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -195,6 +202,7 @@ param(
     [switch]$NoTlsScan,
     [switch]$Options,
     [switch]$IdentifyPaths,
+    [switch]$VersionPaths,
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
@@ -277,7 +285,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.3.2'
+$ScriptVersion = '2.4.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 

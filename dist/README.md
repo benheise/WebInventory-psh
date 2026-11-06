@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.3.2
+# Invoke-WebInventory.ps1 v2.4.0
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -8,24 +8,25 @@ service, kept in Windows' built-in ESENT database engine and backed by an append
 the known vulnerabilities of what was found (see "What v2.3 adds").
 
 It does not exploit, brute-force, guess credentials or enumerate paths. The optional `-IdentifyPaths` set is a fixed list
-of 16 public landing/version pages. The only credentials it ever uses are an SNMP community or SNMPv3 user you supply
+of 16 public landing/version pages; the optional `-VersionPaths` sends one GET to a product's documented version URL,
+and only after that product was detected without a version. The only credentials it ever uses are an SNMP community or SNMPv3 user you supply
 with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM message.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 512 curated rules, 106 version-only rules and the reviewed CPE supplement) |
+| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 513 curated rules, 114 version-only rules and the reviewed CPE supplement) |
 | `WebInventory.rules.recog.json` | 3,098 Rapid7 Recog rules converted to .NET regex (BSD-2), including SNMP sysDescr/sysObjectID, SMB NativeOS/NativeLM and JARM fingerprints. Auto-loaded when it sits next to the script |
 | `WebInventory.rules.wappalyzer.json` | 7,824 webappanalyzer (Wappalyzer fork) rules covering 5,926 technologies: JS libraries, CMS, frameworks, analytics, CDNs, e-commerce (GPL-3.0 data). Auto-loaded |
 | `WebInventory.example.psd1` | Example settings file for scheduled runs (`-ConfigFile`) |
 | `THIRD-PARTY-NOTICES.txt` | Licences, upstream commits and how to regenerate each pack |
 | `LICENSE-GPL-3.0.txt` | Full GPL-3.0 text, which must travel with the Wappalyzer pack |
-| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1 and v2.3.2 A/B runs showing the scan path unchanged |
+| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1, v2.3.2 and v2.4.0 A/B runs showing the scan path unchanged |
 | `Test-WebInventoryStore.ps1` | One-off validation of the inventory store on the scanner host (ESENT vs portable engine, hard kills, verify, rebuild) |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-All three rule sets load together: 11,540 rules (with the 106 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
+All three rule sets load together: 11,549 rules (with the 114 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
 
 ### The Wappalyzer pack
 - **Generated from** enthec/webappanalyzer commit `d91f7e510e93` (2026-10-19), passive HTTP patterns only:
@@ -39,17 +40,18 @@ All three rule sets load together: 11,540 rules (with the 106 version-only rules
   - Version capture (946 rules), CPE (1,294 rules: 867 upstream, 427 from the v2.3.1 CPE supplement), `implies`/`excludes`/`requires`, and `requiresCategory`. That last one matters: 100 rules, mostly shipping carriers matched on page text, count only when something in the required category (e-commerce) is also detected, which stops a page that merely mentions "DHL" from being flagged.
   - Implied technologies inherit kind, category and CPE (IIS → Windows Server goes to `OsHint`).
 - **Licence:** GPL-3.0. Using it inside your organisation creates no obligations. If you pass the pack outside the organisation, keep `LICENSE-GPL-3.0.txt` and the notice with it; the upstream commit is recorded inside the pack for source traceability. The script itself only reads the pack as data at runtime.
-- **Refresh:** `git clone https://github.com/enthec/webappanalyzer`, run `.\Invoke-WebInventory.ps1 -ImportRules .\webappanalyzer\src -ImportOutput .\WebInventory.rules.wappalyzer.json`, then `-TestRules`. The same pattern works for Recog with `-ImportRules .\recog\xml`. Rules that won't compile or that fail their own published example are dropped and listed in the error log.
+- **Refresh:** the repository's weekly workflow does this and opens a pull request (`tools/refresh`, "What v2.4.0 adds"). By hand: `git clone https://github.com/enthec/webappanalyzer`, run `.\Invoke-WebInventory.ps1 -ImportRules .\webappanalyzer\src -ImportOutput .\WebInventory.rules.wappalyzer.json`, then `-TestRules`. The same pattern works for Recog with `-ImportRules .\recog\xml`. Rules that won't compile or that fail their own published example are dropped and listed in the error log.
 
 ## Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                   # 138 offline checks on Windows (131 without ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                   # 140 offline checks on Windows (133 without ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                    # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 10.0.0.5
 .\Invoke-WebInventory.ps1 10.0.0.0/24 web01:8443 '10.0.1.1-50' -Port web -Exclude 10.0.0.1 -Scope 10.0.0.0/16
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -PortFile .\ports.txt -ScopeFile .\authorized.txt -Pace Polite -BaselineCsv auto
 .\Invoke-WebInventory.ps1 -TargetFile .\hostports.txt -IdentifyPaths -ProbeSans -ReverseDns -Tag Weekly-DMZ
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -VersionPaths -Store D:\WebInventoryStore   # + version URLs of detected products
 .\Invoke-WebInventory.ps1 -ConfigFile .\WebInventory.example.psd1    # scheduled-task style
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore   # ...and keep history (see "Inventory store")
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore
@@ -65,6 +67,44 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.4.0 adds
+
+- **`-VersionPaths` (opt-in): version URLs as a confirmation step.** Some products publish their version only at a
+  fixed URL of their own (Apache Flink `/config`, Plex `/identity`, Vaultwarden and Argo CD `/api/version`, Mailman 2
+  `/mailman/listinfo`, Sitecore `/sitecore/shell/sitecore.version.xml`). With `-VersionPaths`, after a service is
+  fingerprinted, the engine lists the products it detected **without** a version whose rules name such a URL, and the
+  worker sends one GET to each (same scheme, host and port as the page; no redirects followed; no login; at most 4 per
+  service). The response only feeds version-only rules, so it can add a version but never a product. Nothing is sent
+  for a product that is not detected or whose version is already known; the `VersionPaths` column lists what was
+  requested and the status codes. Off by default (the behaviour WhatWeb calls aggression level 3, here limited to
+  documented version URLs). In the store, `VersionPaths` is gated like `IdentifiedPaths`; switching `-VersionPaths`
+  on or off between runs records the versions it adds or no longer adds as `Changed` events (their `ProfileChange`
+  shows `versionPaths=1` on one side), so keep it consistent per store.
+- **Version coverage of the 27 products whose version was "only at another URL":** 6 are read with `-VersionPaths`
+  (Flink, Plex and Vaultwarden checked on their own containers at two releases, Argo CD in its source, whose
+  anonymous `/api/version` returns the release tag, Mailman and Sitecore from published samples). The other 21 stay
+  without a version, each with a recorded reason: behind a login (Harbor's `systeminfo`, ActiveMQ's console, Power BI
+  Report Server, Ametys, Subrion), in a POST reply (Odoo, VMware vCenter), a per-site path (PrestaShop, phpwcms), a
+  number NVD does not use (Cisco UCM builds, Horizon's client version, Matomo's changelog, Cloudflare's CDN edge), no
+  patch level (Pulse Secure, Zimbra), or nothing to verify against (QNAP, N-central, Contao). Netdata, found on the
+  way, prints its version in its `Server` header, so it gets it without any extra request. Products with a CPE that
+  get a version: 691 by default (690 in v2.3.2), 697 with `-VersionPaths`; `docs/web-inventory-coverage.md` lists
+  every product.
+- **Vaultwarden is recognised again:** current web vaults title their page `Vaultwarden Web`, which the Recog title
+  rule (`Vaultwarden Web Vault`) no longer matched; a built-in title rule covers both.
+- **Two CPE alias groups found by comparing with run-recon's product table:** Atlassian Jira (NVD files most Jira
+  Server and Data Center CVEs under `jira_server`, `jira_data_center`, `jira_software_data_center`) and Varnish
+  (`varnish_cache_project:varnish_cache` and the LTS edition's `varnish-software:varnish_cache`). For a Jira 8.20.0
+  service the vulnerability join goes from 2 to 18 rows (1 KEV), for Varnish 6.0.10 from 1 to 3 (KEV CVE-2023-44487).
+  The full comparison is `docs/web-inventory-v2.4.0-run-recon.md`.
+- **The external lists refresh themselves** (repository): `.github/workflows/refresh-lists.yml` runs every Monday,
+  pulls the newest Recog, webappanalyzer, NVD CPE Dictionary, NVD CVE feeds, CISA KEV, nuclei-templates and WhatWeb,
+  rebuilds the packs, checks the reviewed CPE names and the version-only rules against them, runs the tests on
+  PowerShell 7 and Windows PowerShell 5.1, and opens one pull request with a summary. New CPE mappings and version
+  candidates are listed for review, never applied unreviewed. `.github/workflows/check.yml` runs the self-test, the
+  rule examples and `Test-WebInventoryStore.ps1` on Windows PowerShell 5.1 for every push and pull request. See
+  `tools/refresh/README.md`.
 
 ## What v2.3.2 adds: version capture
 
@@ -100,13 +140,14 @@ footer, a meta tag, an asset URL, a JSON bootstrap block or a header. **Version-
     CDN), or in the library's own file name (`lodash-4.17.21.min.js`); never a query string.
 - **What was rejected.** A number that is not the product's release (a build hash, a cache-buster, an API or
   component version, a copyright year, a build timestamp), a major or major.minor where releases have more parts,
-  pre-releases, and anything only at another URL (the tool sends no extra request for a version). The ManageEngine
+  pre-releases, and anything only at another URL (no extra request is sent for a version by default; v2.4.0 adds
+  the opt-in `-VersionPaths` for six such products). The ManageEngine
   family, for instance, shows build numbers that NVD would need a build-to-release table for.
 - **Coverage.** Of the 1,327 products with a CPE, 690 now have a rule that gives them a version (598 in v2.3.1; 92
   gained one). Of the 637 without, 31 share their CPE with a product whose rules read one (often on another service,
   e.g. an SNMP sysDescr); the others, by reason: no-known-location 390, hidden 87, not-version 42, hardware 30,
   other-url 27, platform 21, coarse 7, unverified 2. Every product and its reason is listed in
-  `docs/web-inventory-v2.3.2-coverage.md` (repository and development suite); `tools/version/coverage.py` recomputes
+  `docs/web-inventory-coverage.md` (repository and development suite); `tools/version/coverage.py` recomputes
   it.
 - **Effect on results:** `Products`, `CPEs` and the JSONL detections gain versions; no product appears or
   disappears. On the lab and the 200-service farm, every other column is identical to v2.3.1 (see
@@ -511,13 +552,14 @@ on Windows before quoting these numbers.
 - Rule tooling: `-SelfTest`, `-TestRules`, `-ImportRules` (Recog / webappanalyzer), `-ExportRules`.
 
 ## Outputs (in `-OutputDir`; logs always in the current directory)
-`WebInventory_<RunId>.csv` (78 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
+`WebInventory_<RunId>.csv` (79 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
 
 Columns that matter most for a CMDB import:
 - **Identity:** `Host`, `IP`, `Port`, `Service`, `Url`/`FinalUrl`, `Title`, `Server`
 - **Fingerprint:** `Products` (name + version), `CPEs` (CPE 2.3), `Categories`, `OsHint`, `Hardware`
 - **TLS and certificate:** `TlsSupported`, `CertSubject`/`CertSANs`/`CertNotAfter`/`CertSha256`
 - **Review:** `Flags`
+- **Requests beyond the default set:** `IdentifiedPaths` (`-IdentifyPaths`), `VersionPaths` (`-VersionPaths`: each version URL requested and its status)
 
 CPEs built from banners are hints: distros backport fixes without changing version strings.
 
@@ -531,7 +573,7 @@ CPEs built from banners are hints: distros backport fixes without changing versi
 - `favicon.mmh3`, `favicon.md5`, `cert.subject`, `cert.issuer`, `cert.san`, `alpn`
 - `banner`, `banner.ssh|ftp|smtp|pop3|imap|mysql`, `robots`, `path:<path>.<field>`
 
-Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the value is base64 text and the pattern is matched against its UTF-8 decoding, e.g. n8n's `n8n:config:sentry` meta tag), `and` (list of `{f,r,not}`), `ports`, `out` (several outputs with `t`: service/os/hw), `im`/`xs`/`rq`, `flag`, `vo` (version-only: the output only adds its version to a product another rule detected, see "What v2.3.2 adds"). Run `-TestRules` after editing; every rule with `ex` is checked.
+Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the value is base64 text and the pattern is matched against its UTF-8 decoding, e.g. n8n's `n8n:config:sentry` meta tag), `and` (list of `{f,r,not}`), `ports`, `out` (several outputs with `t`: service/os/hw), `im`/`xs`/`rq`, `flag`, `vo` (version-only: the output only adds its version to a product another rule detected, see "What v2.3.2 adds"), `get` (a version-only rule's fixed path, requested with `-VersionPaths` only when its product is detected without a version; the rule's `f` must be `path:<get>.<field>`). Run `-TestRules` after editing; every rule with `ex` is checked.
 
 ## Operational notes
 - **Signing and placement.** Sign the script (`Set-AuthenticodeSignature`), run it under AllSigned/RemoteSigned, and keep it plus the rule packs in a write-protected folder. The run log records the signature status and pack hashes, so tampering shows up.
@@ -599,6 +641,34 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
     `-SelfTest` and `Test-WebInventoryStore.ps1` (now also backfill on ESENT and event-log anchoring) on the scanner
     host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
     canary reports it).
+
+- **v2.4.0 additions** (same Linux workspace):
+  - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
+    warnings; PSScriptAnalyzer findings unchanged (16 deliberate empty `catch` blocks, 12 notes on the explicitly
+    loaded `System.Security.Cryptography.Pkcs` types). Self-test 133/133 (140 with ESENT on Windows); the 25 lab
+    regression scenarios pass; all 3,223 rule examples pass (`-TestRules`, 11,549 rules); the store scenarios pass
+    (v2.2: 40/40, v2.3: 34/34, enriched gating: 4/4).
+  - `-VersionPaths` against the product containers: Vaultwarden 1.37.5 and Flink 2.2.1 scanned without the switch
+    report no version; with it, `Vaultwarden 1.37.5` (`/api/version=200`) and `Apache Flink 2.2.1` (`/config=200`),
+    one extra request each (Vaultwarden's log shows a single `/api/version` request). Recordings replayed with
+    `-VersionPaths` ask only for the products detected without a version (Gitea and Solr, which have a version, ask
+    for nothing). Flink 1.20.5, Plex 1.40.0.7998 and 1.43.5.11079, Vaultwarden 1.35.8 and Netdata v1.47.5 and v2.12.3
+    (whose `Server` header needs no request) give exactly the image's version.
+  - Store: the Vaultwarden/Flink scans without and with the switch, ingested in order, record `Changed` on
+    `Products`, `CPEs` and `VersionPaths` for those two services only, with `versionPaths=1` in `ProfileChange`.
+  - A/B against v2.3.2, two runs each (`PERFORMANCE.md`): lab, 200-service farm and closed ports identical field by
+    field; with `-VersionPaths`, lab and farm also identical with the same request counts (no product there needs a
+    version URL). Wall times within run-to-run noise (farm 11.03/10.97 s vs 11.42/11.29 s, lab 39.08/39.00 s vs
+    39.16/38.89 s); startup +0.1 s (median of 6 interleaved pairs), not in the rule engine.
+  - Jira and Varnish aliases on real feeds (NVD 2002–2026, KEV): a Jira 8.20.0 service 2 → 18 rows (1 KEV), Varnish
+    6.0.10 1 → 3 (KEV CVE-2023-44487).
+  - The list refresh run end to end on current upstream data in a scratch copy (exit 10: files changed, all checks
+    passed): webappanalyzer d91f7e5 → c708f0b (7,824 → 7,874 rules, 38 new products), Recog unchanged, supplement
+    unchanged, 1 CPE candidate listed for review, `-SelfTest` and `-TestRules` pass.
+  - **Windows PowerShell 5.1:** `.github/workflows/check.yml` runs `-SelfTest`, `-TestRules` and
+    `Test-WebInventoryStore.ps1` on GitHub's `windows-2022` runners (Windows PowerShell 5.1, ESENT) for every push
+    and pull request; see the repository's Actions tab for the result of this release's commit. Edge headless policy
+    and Schannel for the RDP probe still need a check on the scanner host itself.
 
 - **v2.3.2 additions** (same Linux workspace):
   - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
@@ -669,6 +739,28 @@ The `Advisories` column holds the reasoning for each finding, including "fixed" 
 - The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
 
 Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.4.0
+- **`-VersionPaths`** (off by default): one GET to the version URL of each product detected without a version, at
+  most 4 per service, no redirects, no credentials. Engine: version-only rules may carry `"get"` (validated path;
+  field `path:<get>.<part>`), and `Matcher.VersionPaths` returns the paths of detected, version-less products only.
+  Worker: the step runs after every other observation of the service and re-evaluates the row only when something
+  was fetched. New CSV/JSONL column `VersionPaths` (79 columns); run.json profile `versionPaths`; the store gates the
+  column like `IdentifiedPaths`.
+- **Rules:** 8 new version-only rules (Netdata `Server` header and `/api/v1/info`, Flink, Plex, Vaultwarden, Argo
+  CD, Mailman, Sitecore), 114 in all; `b:t-vaultwarden` detects current Vaultwarden web vaults again (513 built-in
+  rules). The 21 products that stay without a version are recorded with their reason.
+- **CPE supplement:** alias groups for Atlassian Jira (Server / Data Center names) and Varnish (both editions), 184
+  groups.
+- **Repository:** `tools/refresh/` and `.github/workflows/refresh-lists.yml` (weekly refresh of every external list
+  as one pull request), `.github/workflows/check.yml` (Windows PowerShell 5.1 and PowerShell 7 checks on every push
+  and pull request); `docs/web-inventory-coverage.md` (renamed from the 2.3.2 table; regenerated with each release
+  and refresh); `docs/web-inventory-v2.4.0-run-recon.md`.
+- **Self-test:** 133 checks (140 on Windows): `VersionPaths` returns the path for a detected product without a
+  version and nothing once a version is captured or when the product is not detected; the fetched response adds the
+  version; a `get` on a detection rule or with a `..` segment is refused.
+- **Results:** default scans unchanged except Netdata (gains its version) and Vaultwarden (detected again); A/B in
+  `PERFORMANCE.md`.
 
 ## Changes in 2.3.2
 - **Version-only rules:** 106 rules (`v:` ids) in the built-in pack read the version of 92 products whose
@@ -790,10 +882,12 @@ Treat these flags as a prioritised work list for the owning teams, not as confir
 2. **RDP certificates from TLS 1.0-only servers on hardened scanner hosts.** The RDP probe uses Schannel; a raw
    ClientHello after the X.224 exchange (as the HTTPS probe already does) would read the certificate regardless of the
    host's TLS policy.
-3. **Version capture, continued.** v2.3.2 reads the version of 92 more products; 637 of the 1,327
-   products with a CPE still get none, mostly because nothing a scan receives shows it (the reasons are listed per
-   product in `docs/web-inventory-v2.3.2-coverage.md`). Two have a candidate location in a public fingerprint
-   database that could not be checked here (Sophos Firewall: no image or sample of the value; Rancher: its image needs
-   a cgroup v2 host); `tools/version/coverage.py` lists them as `unverified`. Products whose version is
-   only at another URL (an API, a `version.txt`) would need product-specific follow-up requests, which this tool does
-   not send by design.
+3. **Version capture, continued.** 636 of the 1,327 products with a CPE still get no version by default (630 with
+   `-VersionPaths`), mostly because nothing a scan receives shows it (the reasons are listed per product in
+   `docs/web-inventory-coverage.md`). Six have a candidate that could not be checked here (Sophos Firewall: no image or
+   sample of the value; Rancher: its image needs a cgroup v2 host; QNAP QTS (service and OS), N-central, Contao: no sample of how the
+   version is printed); `tools/version/coverage.py` lists them as `unverified`. The weekly refresh pull request lists
+   new candidates as upstream databases add them.
+4. **From the run-recon comparison** (`docs/web-inventory-v2.4.0-run-recon.md`): hosting attribution from the
+   providers' published IP ranges (offline), screenshot capture validation, a distinct exit code for a run in which
+   nothing answered, and the CNAME chain of hostname targets as inventory data.

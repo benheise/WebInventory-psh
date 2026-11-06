@@ -282,13 +282,13 @@ $Cfg = @{
     TimeoutMs = $TimeoutMs; Retries = $Retries; MaxBodyBytes = $MaxBodyBytes; MaxRedirects = $MaxRedirects; BannerWaitMs = $BannerWaitMs
     DelayMs = $DelayMs; JitterMs = $JitterMs; SslProto = $sslProto; TlsPorts = $TlsHintPorts; HttpPorts = $HttpPorts
     NoTlsScan = [bool]$NoTlsScan; NoFavicon = [bool]$NoFavicon; NoExtras = [bool]$NoExtras; Options = [bool]$Options
-    IdentifyPaths = [bool]$IdentifyPaths; PathList = $IdentifyPathList; ProbeSans = [bool]$ProbeSans; MaxSans = $MaxSans
+    IdentifyPaths = [bool]$IdentifyPaths; PathList = $IdentifyPathList; VersionPaths = [bool]$VersionPaths; ProbeSans = [bool]$ProbeSans; MaxSans = $MaxSans
     ReverseDns = [bool]$ReverseDns; FollowOffHost = [bool]$FollowOffHost; Exclude = $ExSet; Scope = $ScopeSet
     MinConfidence = $MinConfidence; CertWarnDays = $CertWarnDays; Advisories = $Advisories; MgmtCategories = $MgmtCategories; MismatchStrings = $script:MismatchStrings
     RdnsCache = [hashtable]::Synchronized(@{}); VhostSeen = [hashtable]::Synchronized(@{})
     TlsFingerprint = [bool]$TlsFingerprint; Ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); Snmp = $snmpCred; Proxy = [bool]$Proxy
 }
-$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
+$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
 $budgetMs = [long]$ops * ($TimeoutMs * 3 + $DelayMs + $JitterMs + $BannerWaitMs) + 30000
 $banner = "WebInventory v{0}: {1} checks across {2} hosts ({3} excluded{4}). Pace={5} threads={6} per-host={7} timeout={8}ms. Authorised scope only." -f $ScriptVersion, $Jobs.Count, $hostSet.Count, $excludedCount, $(if ($ScopeSet.IsEmpty) { ', no -Scope set' } else { ', scope enforced' }), $Pace, $Threads, $MaxPerHost, $TimeoutMs
 Write-RunLog $banner; Write-RunLog ("Outputs: {0} ; {1} ; {2}; watchdog budget {3} ms per check" -f $script:CsvPath, $script:JsonlPath, $script:ProgressPath, $budgetMs)

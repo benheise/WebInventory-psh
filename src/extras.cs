@@ -27,7 +27,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.3.2";
+        public const string Version = "2.4.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();

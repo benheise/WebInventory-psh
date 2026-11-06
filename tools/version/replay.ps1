@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory)][string]$Script,      # built Invoke-WebInventory.ps1 (its engine and embedded rules are used)
     [Parameter(Mandatory)][string[]]$Capture,   # capture folders written by vlab.py (capture.json + *.body)
     [string]$PackDir,                           # folder with WebInventory.rules.*.json (default: next to the script)
-    [string]$Json                               # also write the detections (name, version, CPE) per capture to this file
+    [string]$Json,                              # also write the detections (name, version, CPE) per capture to this file
+    [switch]$VersionPaths                       # as -VersionPaths: serve recorded version URLs (vpath*) the engine asks for
 )
 # Feeds what vlab.py recorded from a real product into the scanner's own matcher, the same way a scan builds its
 # observations (headers of every hop, redirect locations, final status/url/body/title/meta/script sources, the 404
@@ -68,8 +69,22 @@ foreach ($dir in $Capture) {
         if ($t) { $obs.Add('body', $(if ($t.Length -gt 32768) { $t.Substring(0, 32768) } else { $t })) }
     }
     $dets = [WebInv.Matcher]::Evaluate($obs)
-    if ($Json) { $script:out += [pscustomobject]@{ capture = $dir; detections = @(foreach ($d in $dets) { if ($d.Kind -ne 'flag' -and $d.Confidence -ge 50) { [pscustomobject]@{ kind = $d.Kind; name = $d.Name; version = $d.Version; cpe = $d.Cpe } } }) } }
+    # -VersionPaths: serve the recorded version URLs the engine asks for (only for a product detected without a version)
+    $asked = @()
+    if ($VersionPaths) {
+        $want = [WebInv.Matcher]::VersionPaths($dets, 50, 4)
+        $vps = @($cap.extras.PSObject.Properties | Where-Object { $_.Name -like 'vpath*' -and $_.Value.status })
+        foreach ($w in $want) {
+            $asked += $w
+            $vp = $vps | Where-Object { $_.Value.path -eq $w } | Select-Object -First 1
+            if ($vp -and [int]$vp.Value.status -eq 200) {
+                [WebInv.Html]::AddBody($obs, ('path:{0}.' -f $w), (New-Resp $vp.Value.status $vp.Value.headers (Join-Path $dir ('{0}.body' -f $vp.Name))))
+            }
+        }
+        if ($asked.Count) { $dets = [WebInv.Matcher]::Evaluate($obs) }
+    }
+    if ($Json) { $script:out += [pscustomobject]@{ capture = $dir; asked = @($asked); detections = @(foreach ($d in $dets) { if ($d.Kind -ne 'flag' -and $d.Confidence -ge 50) { [pscustomobject]@{ kind = $d.Kind; name = $d.Name; version = $d.Version; cpe = $d.Cpe } } }) } }
     $list = foreach ($d in $dets) { if ($d.Kind -ne 'flag' -and $d.Confidence -ge 50) { '{0}{1} [{2}]' -f $d.Name, $(if ($d.Version) { ' ' + $d.Version } else { '' }), $d.Source } }
-    '{0}: {1}' -f $dir, ($list -join '; ')
+    '{0}: {1}{2}' -f $dir, ($list -join '; '), $(if ($asked.Count) { ' [asked: ' + ($asked -join ', ') + ']' } else { '' })
 }
 if ($Json) { $script:out | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Json -Encoding utf8 }

@@ -61,6 +61,11 @@ def main():
             bad.append('%s: the group name v is the CPE placeholder; use another name' % e['id'])
         seen.add(e['id'])
         r = {'id': e['id'], 'f': e['f'], 'r': e['r']}
+        if e.get('get'):
+            # -VersionPaths: one GET to this path when the product is detected without a version; the field must read it
+            if not e['f'].startswith('path:%s.' % e['get']):
+                bad.append('%s: get %s needs field path:%s.<part>' % (e['id'], e['get'], e['get']))
+            r['get'] = e['get']
         if e.get('o'):
             r['o'] = e['o']
         if e.get('and'):

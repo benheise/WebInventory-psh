@@ -11,7 +11,9 @@ $Columns = @(
     'CertKeyAlg', 'CertKeySize', 'CertSerial', 'CertSha1', 'CertSha256', 'CertPolicyErrors', 'CertChainStatus', 'CertSource',
     'Flags', 'Advisories', 'Banner', 'Notes',
     # v2.3 (appended so existing CSV consumers keep their column positions)
-    'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s')
+    'DeviceName', 'Domain', 'ProtocolInfo', 'Jarm', 'Ja4s',
+    # v2.4 (appended)
+    'VersionPaths')
 
 function Open-Outputs {
     param([string]$Dir, [string]$RunId)

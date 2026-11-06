@@ -903,6 +903,11 @@ REPLACE = [
 # NVD files the same product under several names over time (vendor renames, product renames, firmware vs software);
 # the vulnerability join treats each group as one product. Fully deprecated names are added from the dictionary.
 ALIASES = [
+    # v2.4: found by cross-checking run-recon's product table: NVD files Jira Server / Data Center CVEs (4 KEV) and the
+    # Varnish Cache project's CVEs (1 KEV) under names the rules did not carry
+    ['a:atlassian:jira', 'a:atlassian:jira_server', 'a:atlassian:jira_data_center', 'a:atlassian:jira_software_data_center',
+     'a:atlassian:jira_server_and_data_center'],
+    ['a:varnish_cache_project:varnish_cache', 'a:varnish-software:varnish_cache', 'a:varnish-cache:varnish_cache', 'a:varnish-cache:varnish'],
     ['a:suse:rancher', 'a:rancher:rancher'],
     ['a:checkmk:checkmk', 'a:tribe29:checkmk', 'a:check_mk_project:check_mk'],
     ['a:salesagility:suitecrm', 'a:suitecrm:suitecrm'],

@@ -50,7 +50,7 @@ function Write-RunInfo {
         scanner = "WebInventory $ScriptVersion"; tag = [string]$Tag; operator = $script:Operator; computer = [Environment]::MachineName; checks = $checks
         profile = [ordered]@{
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
-            identifyPaths = [bool]$IdentifyPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
+            identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses

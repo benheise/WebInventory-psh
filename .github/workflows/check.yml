@@ -1,0 +1,64 @@
+# Offline checks of the release files: the build is reproducible from src/, and the self-test, the rule examples and
+# the store validation pass on Windows PowerShell 5.1 (ESENT) and on PowerShell 7. Nothing is scanned.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows PowerShell 5.1
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Self-test (includes ESENT conformance) and rule examples
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          $s = Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s -SelfTest
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s -TestRules
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Store validation (ESENT against the portable engine, hard kills, rebuild)
+        shell: powershell
+        working-directory: ${{ runner.temp }}
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:GITHUB_WORKSPACE 'dist\Test-WebInventoryStore.ps1') -Services 2000
+          exit $LASTEXITCODE
+      - name: Keep the logs
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: windows-logs
+          path: |
+            ${{ runner.temp }}/WebInventory_*.log
+            ${{ runner.temp }}/Test-WebInventoryStore_*.log
+          if-no-files-found: ignore
+
+  linux:
+    name: Build and PowerShell 7
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: The release files are what src/ builds
+        run: |
+          python3 build.py
+          git diff --exit-code --stat -- dist/
+      - name: Self-test and rule examples
+        working-directory: ${{ runner.temp }}
+        run: |
+          pwsh -NoProfile -File "$GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1" -SelfTest
+          pwsh -NoProfile -File "$GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1" -TestRules
+      - name: Checksums match
+        working-directory: dist
+        run: sha256sum -c SHA256SUMS.txt

@@ -1377,6 +1377,8 @@ namespace WebInv
         [DataMember(Name = "rc", EmitDefaultValue = false)] public string[] Rc;
         [DataMember(Name = "flag", EmitDefaultValue = false)] public string Flag;
         [DataMember(Name = "vo", EmitDefaultValue = false)] public bool Vo;
+        // -VersionPaths: the fixed path a version-only rule reads; its field is path:<get>.<part>
+        [DataMember(Name = "get", EmitDefaultValue = false)] public string Get;
         // self-test vector
         [DataMember(Name = "ex", EmitDefaultValue = false)] public string Ex;
         [DataMember(Name = "exv", EmitDefaultValue = false)] public string Exv;
@@ -1398,6 +1400,7 @@ namespace WebInv
         public string Id; public string Field; public Regex Re; public Cond[] And; public int[] Ports; public string Src; public OutDef[] Out;
         public string Ex; public string Exv;
         public bool B64;   // o contains 'b': the value is base64 text; the regex runs on its UTF-8 decoding (no literal prefilter)
+        public string Get; // -VersionPaths: path requested only when this rule's product is detected without a version
         public string[][] Lits; public int[][] LitIds;   // requirement formula (OR of AND-sets of folded literals) + ids in the field automaton
     }
 
@@ -1768,6 +1771,7 @@ namespace WebInv
     {
         static List<Rule> rules = new List<Rule>();
         static Dictionary<string, List<Rule>> byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
+        static List<Rule> getRules = new List<Rule>();   // version-only rules with a fixed path (-VersionPaths)
         // first literal definition of each technology name: lets implied detections inherit kind/category/CPE
         static Dictionary<string, OutDef> nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase);
         // per-field literal prefilter (fields with enough literal-bearing rules); see Lit / AhoCorasick
@@ -1782,7 +1786,7 @@ namespace WebInv
         public static long Timeouts { get { return System.Threading.Interlocked.Read(ref timeouts); } }
         public static int Count { get { return rules.Count; } }
 
-        public static void Clear() { lock (sync) { rules = new List<Rule>(); byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase); nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase); fieldAc = new Dictionary<string, AhoCorasick>(StringComparer.OrdinalIgnoreCase); } }
+        public static void Clear() { lock (sync) { rules = new List<Rule>(); getRules = new List<Rule>(); byField = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase); nameInfo = new Dictionary<string, OutDef>(StringComparer.OrdinalIgnoreCase); fieldAc = new Dictionary<string, AhoCorasick>(StringComparer.OrdinalIgnoreCase); } }
 
         public static RulePack ReadPack(string json)
         {
@@ -1857,6 +1861,13 @@ namespace WebInv
                 bool any = false;
                 foreach (OutDef o in r.Out) if (!string.IsNullOrEmpty(o.N) || !string.IsNullOrEmpty(o.Flag)) any = true;
                 if (!any) { errors.Add(r.Id + ": no output name/flag"); continue; }
+                if (!string.IsNullOrEmpty(d.Get))
+                {
+                    string why = GetProblem(d.Get, r.Field);
+                    foreach (OutDef o in r.Out) if (!o.Vo || string.IsNullOrEmpty(o.N)) why = why ?? "only version-only outputs may name a path";
+                    if (why != null) { errors.Add(r.Id + ": get '" + d.Get + "': " + why); continue; }
+                    r.Get = d.Get;
+                }
                 add.Add(r); n++;
             }
             lock (sync)
@@ -1867,6 +1878,9 @@ namespace WebInv
                     foreach (OutDef o in r.Out)
                         if (!o.Vo && !string.IsNullOrEmpty(o.N) && o.N.IndexOf('{') < 0 && !ni.ContainsKey(o.N) && (!string.IsNullOrEmpty(o.C) || !string.IsNullOrEmpty(o.T))) ni[o.N] = o;
                 nameInfo = ni;
+                List<Rule> ng = new List<Rule>(getRules);
+                foreach (Rule r in add) if (r.Get != null) ng.Add(r);
+                getRules = ng;
                 Dictionary<string, List<Rule>> nb = new Dictionary<string, List<Rule>>(StringComparer.OrdinalIgnoreCase);
                 foreach (Rule r in nr)
                 {
@@ -2059,6 +2073,44 @@ namespace WebInv
             string fp;
             if (fill.TryGetValue((string.IsNullOrEmpty(kind) ? "service" : kind) + "|" + name, out fp)) { cpe = fp; return 1; }
             return 0;
+        }
+
+        // a fixed absolute path (no query, no dot segments, no doubled slash, conservative characters) that the rule's field reads
+        static readonly Regex GetPath = new Regex(@"^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+/?$", RegexOptions.CultureInvariant);
+        static string GetProblem(string get, string field)
+        {
+            if (get.Length > 200) return "longer than 200 characters";
+            if (!GetPath.IsMatch(get) || get.Contains("/.") || get.Contains("//")) return "not a plain absolute path";
+            if (!field.StartsWith("path:" + get + ".", StringComparison.Ordinal)) return "the rule's field must be path:" + get + ".<part>";
+            return null;
+        }
+
+        // -VersionPaths: the paths of version-only rules whose product was detected (same kind, and the same CPE product or
+        // name, at the reporting confidence) without a version a detection rule captured; at most max, in rule order
+        public static string[] VersionPaths(List<Detection> dets, int minConfidence, int max)
+        {
+            List<string> res = new List<string>();
+            List<Rule> gr = getRules;
+            if (dets == null || gr.Count == 0 || max <= 0) return res.ToArray();
+            foreach (Rule r in gr)
+            {
+                if (res.Contains(r.Get)) continue;
+                bool need = false;
+                foreach (OutDef o in r.Out)
+                {
+                    string kind = string.IsNullOrEmpty(o.T) ? "service" : o.T;
+                    string ok = CpeKey(o.P);
+                    foreach (Detection d in dets)
+                    {
+                        if (d.VersionOnly || d.Kind != kind || d.Confidence < minConfidence) continue;
+                        if (d.Version.Length > 0 && !d.FixedVersion) continue;
+                        if ((ok.Length > 0 && CpeKey(d.Cpe) == ok) || string.Equals(d.Name, o.N, StringComparison.OrdinalIgnoreCase)) { need = true; break; }
+                    }
+                    if (need) break;
+                }
+                if (need) { res.Add(r.Get); if (res.Count >= max) break; }
+            }
+            return res.ToArray();
         }
 
         static string MergeKey(Detection d)
@@ -3018,7 +3070,7 @@ namespace WebInv
     // ------------------------------------------------------------------ Misc helpers
     public static class Util
     {
-        public const string EngineVersion = "2.3.2";
+        public const string EngineVersion = "2.4.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
