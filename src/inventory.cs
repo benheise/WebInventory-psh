@@ -102,7 +102,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.4.1";
+        public const string Version = "2.5.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -405,7 +405,9 @@ namespace WebInv
             // v2.3: appended (empty values do not enter the hash, so every earlier version keeps its hash)
             "DeviceName", "Domain", "ProtocolInfo", "Jarm", "Ja4s",
             // v2.4: appended
-            "VersionPaths" };
+            "VersionPaths",
+            // v2.5: appended
+            "Cname", "Cloud", "CloudRegion", "CloudService" };
         // recorded with each sighting, never a reason for a new version (response time, dynamic page hashes, scan clock)
         public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag" };
         // profile flag -> fields that only that probe collects; a run without the probe keeps the previous values
@@ -418,7 +420,9 @@ namespace WebInv
             new[] { "versionPaths", "VersionPaths" },
             new[] { "reverseDns", "ReverseDns" },
             new[] { "tlsFingerprint", "Jarm" },
-            new[] { "ja4s", "Ja4s" } };
+            new[] { "ja4s", "Ja4s" },
+            new[] { "cname", "Cname" },
+            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" } };
         static readonly HashSet<string> MaterialSet = new HashSet<string>(Material, StringComparer.Ordinal);
         public static bool IsMaterial(string f) { return MaterialSet.Contains(f); }
 
@@ -493,6 +497,7 @@ namespace WebInv
         public bool TlsScan = true, Favicon = true, Extras = true, Options, IdentifyPaths, ProbeSans, ReverseDns;
         public bool TlsFingerprint, Ja4s, Smb, Rdp, Snmp;   // v2.3 opt-in probes (appended to Profile only when on)
         public bool VersionPaths;                            // v2.4 opt-in (appended to Profile only when on)
+        public bool Cname, Cloud;                            // v2.5: -Cname; cloud ranges loaded (appended only when on)
         public long Checks;
         public bool Collected(string flag)
         {
@@ -508,10 +513,12 @@ namespace WebInv
                 case "tlsFingerprint": return TlsFingerprint;
                 case "ja4s": return Ja4s;
                 case "versionPaths": return VersionPaths;
+                case "cname": return Cname;
+                case "cloud": return Cloud;
             }
             return true;
         }
-        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths); } }
+        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud); } }
         // flag as written in a Profile string ("tls=1 favicon=1 ..."); missing = off (flags added later are appended only when on)
         public static bool ProfileHas(string profile, string flag)
         {
@@ -526,7 +533,8 @@ namespace WebInv
             {
                 return string.Format(CultureInfo.InvariantCulture, "tls={0} favicon={1} extras={2} options={3} identifyPaths={4} probeSans={5} reverseDns={6}",
                     TlsScan ? 1 : 0, Favicon ? 1 : 0, Extras ? 1 : 0, Options ? 1 : 0, IdentifyPaths ? 1 : 0, ProbeSans ? 1 : 0, ReverseDns ? 1 : 0)
-                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "");
+                    + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "")
+                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "");
             }
         }
         public DateTimeOffset Started { get { return StoreUtil.ParseIso(StartedAt); } }
@@ -553,6 +561,7 @@ namespace WebInv
                 r.ReverseDns = Flag(p, "reverseDns", false);
                 r.TlsFingerprint = Flag(p, "tlsFingerprint", false); r.Ja4s = Flag(p, "ja4s", false); r.Smb = Flag(p, "smb", false); r.Rdp = Flag(p, "rdp", false); r.Snmp = Flag(p, "snmp", false);
                 r.VersionPaths = Flag(p, "versionPaths", false);
+                r.Cname = Flag(p, "cname", false); r.Cloud = Flag(p, "cloud", false);
             }
             if (r.RunId.Length == 0) throw new InvalidDataException("run.json has no runId");
             DateTimeOffset t;
@@ -569,6 +578,8 @@ namespace WebInv
             if (Rdp) p.Bool("rdp", true);
             if (Snmp) p.Bool("snmp", true);
             if (VersionPaths) p.Bool("versionPaths", true);
+            if (Cname) p.Bool("cname", true);
+            if (Cloud) p.Bool("cloud", true);
             return new JsonObj().Num("format", 1).Str("runId", RunId).Str("startedAt", StartedAt).Str("finishedAt", FinishedAt).Bool("complete", Complete)
                 .Bool("synthesized", Synthesized).Str("scanner", Scanner).Str("tag", Tag).Str("operator", Operator).Str("computer", Computer)
                 .Num("checks", Checks).Raw("profile", p.ToString()).ToString();
@@ -598,6 +609,8 @@ namespace WebInv
                 if (StoreUtil.Str(o, "AllowedMethods").Length > 0) r.Options = true;
                 if (StoreUtil.Str(o, "IdentifiedPaths").Length > 0) r.IdentifyPaths = true;
                 if (StoreUtil.Str(o, "VersionPaths").Length > 0) r.VersionPaths = true;
+                if (StoreUtil.Str(o, "Cname").Length > 0) r.Cname = true;
+                if (StoreUtil.Str(o, "Cloud").Length > 0) r.Cloud = true;
                 if (StoreUtil.Str(o, "Vhost") == "True") r.ProbeSans = true;
                 if (StoreUtil.Str(o, "ReverseDns").Length > 0) r.ReverseDns = true;
                 if (StoreUtil.Str(o, "Jarm").Length > 0) r.TlsFingerprint = true;

@@ -174,7 +174,7 @@ opt-in probe code (-TlsFingerprint); no upstream code is shipped.
 6. NVD CPE names (cpe-supplement table embedded in Invoke-WebInventory.ps1; -ImportRules, -StoreQuery Vulnerabilities)
 
    The CPE names in the built-in rules and the cpe-supplement table (fill, replace and alias groups, version
-   2026.11.06) were checked against the NVD CPE Dictionary 2.0 feed (lastModified 2026-11-04) published by the U.S.
+   2026.11.06.2) were checked against the NVD CPE Dictionary 2.0 feed (lastModified 2026-11-04) published by the U.S.
    National Institute of Standards and Technology (NIST), National Vulnerability Database: https://nvd.nist.gov/
 
    This product uses data from the NVD API but is not endorsed or certified by the NVD.
@@ -194,3 +194,17 @@ opt-in probe code (-TlsFingerprint); no upstream code is shipped.
    data file of these projects is included; only the location of a version string was taken from them. Library
    versions are read from the paths of public CDNs (cdnjs, jsDelivr, unpkg); WordPress plugins were installed from
    wordpress.org for testing only.
+
+
+8. WebInventory.cloud.json (Cloud, CloudRegion, CloudService columns)
+
+   IP ranges that cloud and CDN providers publish for customers to configure firewalls and allow-lists, combined by
+   tools/cloud/build.py (development suite). The file records each source's URL, SHA-256 and the provider's own
+   version marker. Sources: Amazon Web Services (https://ip-ranges.amazonaws.com/ip-ranges.json), Microsoft Azure
+   Service Tags for the public cloud, Azure Government and Azure China (Microsoft Download Center ids 56519, 57063
+   and 57062), Google Cloud and Google (https://www.gstatic.com/ipranges/cloud.json and goog.json), Cloudflare
+   (https://www.cloudflare.com/ips-v4 and ips-v6), Fastly (https://api.fastly.com/public-ip-list), Oracle Cloud
+   Infrastructure (https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json), DigitalOcean
+   (https://www.digitalocean.com/geo/google.csv) and Akamai Connected Cloud / Linode (https://geoip.linode.com/).
+   The ranges belong to their providers and change often; the repository's weekly workflow rebuilds the file. Matching
+   is offline: no request is sent to the providers or the targets while scanning.

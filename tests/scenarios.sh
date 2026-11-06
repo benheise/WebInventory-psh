@@ -75,7 +75,16 @@ check "-PassThru emits one object per row" "$n" "2"
 
 newdir
 rc=$(run -Target 127.0.0.1:18999 -NoProgress)
-check "closed port only: exit 0, nothing printed as a hit" "$rc:$(grep -c '^\[+\]' "$WORK"/last.out)" "0:0"
+check "closed port only: exit 4 (nothing answered), nothing printed as a hit" "$rc:$(grep -c '^\[+\]' "$WORK"/last.out)" "4:0"
+check "nothing answered is logged" "$(grep -c 'NOTHING ANSWERED' "$WORK"/*_run.log)" "1"
+rc=$(run -Target no-such-host.invalid -NoProgress -NoHtml)
+check "every target name unresolved: exit 4" "$rc" "4"
+rc=$(run -Target 127.0.0.1:18080 127.0.0.1:18999 -NoProgress -NoHtml)
+check "one service answers: exit 0 again" "$rc" "0"
+rc=$(run -Target 127.0.0.1:18080 -DnsServer 127.0.0.1 -NoProgress)
+check "-DnsServer without -Cname is refused (exit 1)" "$rc" "1"
+rc=$(run -Target 127.0.0.1:18080 -CloudFile missing-ranges.json -NoProgress)
+check "-CloudFile that does not exist is refused (exit 1)" "$rc" "1"
 
 newdir
 n=$(cd "$WORK" && "$PWSH" -NoProfile -Command "@(& '$SCRIPT' -Target 127.0.0.1:18080,18443 -ListTargets) -match ':184|:180' | Measure-Object | Select-Object -ExpandProperty Count" 2>/dev/null | tail -1)

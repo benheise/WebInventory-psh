@@ -41,6 +41,8 @@ if ($TestRules) { Invoke-TestRules; Close-Logs; exit $script:ExitCode }
 
 # ---------- opt-in probe options (refused before anything is sent) ----------
 if ($NoJa4s -and -not $TlsFingerprint) { Stop-Fatal '-NoJa4s goes with -TlsFingerprint.' }
+if ($DnsServer -and -not $Cname) { Stop-Fatal '-DnsServer goes with -Cname.' }
+if ($CloudFile -and $NoCloud) { Stop-Fatal 'Give -CloudFile or -NoCloud, not both.' }
 $snmpCred = $null
 if (-not $Snmp -and ($SnmpCommunity -or $SnmpCredential -or $SnmpPrivPassword -or $SnmpVersion -or $SnmpPrivProtocol)) { Stop-Fatal 'SNMP options were given without -Snmp.' }
 if ($Snmp) {
@@ -120,8 +122,9 @@ if ($Proxy) {
 }
 
 # ---------- opt-in probes: compiled only when used ----------
-$useExtras = $TlsFingerprint -or $Smb -or $Rdp -or $Snmp -or $Screenshot
+$useExtras = $TlsFingerprint -or $Smb -or $Rdp -or $Snmp -or $Screenshot -or $Cname
 if ($useExtras) { try { Initialize-Extras } catch { Stop-Fatal "Extras compile failed: $($_.Exception.Message)" } }
+if ($Cname -and $DnsServer) { try { foreach ($ds in $DnsServer.Split(@(',', ';', ' '), [StringSplitOptions]::RemoveEmptyEntries)) { [void][WebInv.Cname]::ParseServer($ds) } } catch { Stop-Fatal "-DnsServer: $($_.Exception.Message)" } }
 if ($Snmp) {
     $sc = New-Object WebInv.SnmpCredential
     foreach ($k in @($snmpCred.Keys)) { $sc.$k = $snmpCred[$k] }
@@ -206,6 +209,16 @@ if ($names.Count) {
     foreach ($k in $dnsErr.Keys) { Write-ErrLog 'DNS' $k $dnsErr[$k] }
     Write-RunLog ("DNS: {0} names, {1} resolved, {2} failed in {3} ms" -f $names.Count, $resolved.Count, $dnsErr.Count, $swDns.ElapsedMilliseconds)
 }
+# -Cname: the CNAME chain of each name that resolved (one A query per name to the resolvers; nothing to the targets)
+$script:CnameMap = $null
+if ($Cname -and $resolved.Count -and -not $ListTargets) {
+    $swCn = [Diagnostics.Stopwatch]::StartNew()
+    $cnErr = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+    $script:CnameMap = [WebInv.Cname]::Many([string[]]@($resolved.Keys), [string]$DnsServer, [Math]::Max(2000, $TimeoutMs), 16, $cnErr)
+    foreach ($k in $cnErr.Keys) { Write-ErrLog 'CNAME' $k $cnErr[$k] }
+    $withChain = @($script:CnameMap.Values | Where-Object { $_ }).Count
+    Write-RunLog ("CNAME: {0} names via {1}: {2} with a CNAME chain, {3} without, {4} failed in {5} ms" -f $resolved.Count, $(if ($DnsServer) { "-DnsServer $DnsServer" } elseif ([WebInv.Cname]::IsWindows) { 'the Windows DNS client' } else { 'the system resolvers (UDP)' }), $withChain, ($script:CnameMap.Count - $withChain), $cnErr.Count, $swCn.ElapsedMilliseconds)
+}
 
 # Build jobs (port-major within each entry => natural round-robin across hosts)
 $jb = [WebInv.JobBuilder]::new($ExSet, $ScopeSet, $resolved, [bool]$AllAddresses)
@@ -245,7 +258,13 @@ if ($ListTargets) {
     Write-RunLog $msg; Write-Host $msg -ForegroundColor Cyan
     Close-Logs; exit 0
 }
-if ($Jobs.Count -eq 0) { Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow; Close-Logs; exit $(if ($script:ErrTotal) { 2 } else { 0 }) }
+if ($Jobs.Count -eq 0) {
+    Write-RunLog 'Nothing to scan.' 'WARN'; Write-Host 'Nothing to scan (all targets excluded, unresolved, or already done).' -ForegroundColor Yellow
+    # every target that was not excluded was a name that did not resolve: nothing could answer (exit 4, see below)
+    $allUnresolved = $dnsErr.Count -gt 0 -and $resolved.Count -eq 0 -and -not $Resume -and @($parsed | Where-Object { @($_.Spec.Ranges).Count }).Count -eq 0
+    if ($allUnresolved) { Write-RunLog 'NOTHING ANSWERED: no target name resolved (exit 4)' 'WARN' }
+    Close-Logs; exit $(if ($allUnresolved) { 4 } elseif ($script:ErrTotal) { 2 } else { 0 })
+}
 
 if ($Proxy) {
     # one CONNECT to the first check: a proxy that wants authentication (407) would otherwise fail every check
@@ -298,6 +317,9 @@ if (-not $Quiet) { Write-Host $banner -ForegroundColor Cyan }
 # for seconds (measured) and made servers time out, losing HTTPS services under load
 Write-RunLog ("TLS/chain engine warm-up: {0} ms" -f [WebInv.Net]::WarmUp([Convert]::FromBase64String($script:SelfTestCertB64))) 'DEBUG'
 
+# ---------- cloud / CDN IP ranges (offline lookup of each service's IP) ----------
+Initialize-Cloud
+
 # ---------- dispatcher ----------
 # Threads long-lived workers pull checks from a C# scheduler (per-host cap, round-robin across hosts) and push results to
 # a queue this thread waits on. No per-check PowerShell instance, no polling.
@@ -340,6 +362,8 @@ function Complete-Result {
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
         $counts.rows++
+        if ($script:CloudOn) { $cf = [WebInv.Cloud]::Find([string]$row.IP); if ($cf) { $row.Cloud = $cf[0]; $row.CloudRegion = $cf[1]; $row.CloudService = $cf[2] } }
+        if ($script:CnameMap -and -not $row.Vhost -and $script:CnameMap.ContainsKey([string]$row.Host)) { $row.Cname = $script:CnameMap[[string]$row.Host] }
         if ($row.IsWeb) { $counts.web++ }
         try { Write-ResultRow $row } catch { Write-ErrLog 'IO' $row.Url ("write failed: {0}" -f $_.Exception.Message) }
         Write-RunLog ("HIT {0} web={1} status={2} products=[{3}] flags=[{4}]" -f $row.Url, $row.IsWeb, $row.StatusCode, $row.Products, $row.Flags)
@@ -476,7 +500,14 @@ finally {
     Write-Host ("Results: {0}{1}" -f $script:CsvPath, $(if ($script:HtmlPath) { " | $($script:HtmlPath)" } else { '' })) -ForegroundColor Cyan
     Write-Host ("Logs:    {0} | {1}" -f $RunLogPath, $ErrLogPath) -ForegroundColor DarkGray
     if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Resume:  re-run the same command with -Resume '{0}'" -f $script:ProgressPath) -ForegroundColor Yellow }
-    $script:ExitCode = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
+    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
+    # Rows from earlier sessions of a resumed run count as answers.
+    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
+    if (-not $interrupted -and -not $script:TimeLimitHit -and -not $answered) {
+        $na = "NOTHING ANSWERED: {0} checks, no open service (exit 4)" -f $doneCount
+        Write-RunLog $na 'WARN'; Write-Host $na -ForegroundColor Yellow
+    }
+    $script:ExitCode = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif (-not $answered) { 4 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
     Close-Logs
     try {
         $script:ManifestPath = Join-Path $OutputDir ("WebInventory_{0}_manifest.txt" -f $script:RunId)

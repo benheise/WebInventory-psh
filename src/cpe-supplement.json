@@ -1,4 +1,4 @@
-{"name":"cpe-supplement","version":"2026.11.06",
+{"name":"cpe-supplement","version":"2026.11.06.2",
 "source":"Product names from the built-in, Recog and Wappalyzer rules mapped to NVD CPE names, checked against the NVD CPE Dictionary 2.0 feed (lastModified 2026-11-04T23:50:02-05:00, sha256 af94a9dbb31583557931b5e3740fe76394ad3fe102934497265218acfb58c4bd) and reviewed by hand",
 "notice":"This product uses data from the NVD API but is not endorsed or certified by the NVD.",
 "fill":[
@@ -530,7 +530,8 @@
 {"n":"AWS Certificate Manager","was":"a:awstats:awstats","p":""},
 {"n":"Sitecore","was":"a:sitecore:*","p":"cpe:2.3:a:sitecore:experience_platform:{v}"},
 {"n":"Okta","was":"a:okta:*","p":""},
-{"n":"Salesforce","was":"a:salesforce:*","p":""}
+{"n":"Salesforce","was":"a:salesforce:*","p":""},
+{"n":"Cloudflare","was":"a:cloudflare:cloudflare","p":""}
 ],"aliases":[
 ["a:10web:photo_gallery","a:web-dorado:photo_gallery"],
 ["a:acquia:mautic","a:mautic:mautic"],

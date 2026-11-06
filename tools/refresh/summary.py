@@ -124,6 +124,18 @@ for x, y in zip(before, after):
     w(('  ' + y) if x == y else ('- %s\n+ %s' % (x, y)))
 w('```\n')
 
+w('### Cloud / CDN IP ranges\n')
+co, cn = load(os.path.join(B, 'WebInventory.cloud.json')), load(os.path.join(a.repo, 'dist', 'WebInventory.cloud.json'))
+if all(co.get(k) == cn.get(k) for k in ('names', 'v4', 'v6')):
+    w('Unchanged (v%s).' % co.get('version'))
+else:
+    w('v%s -> v%s: %d -> %d prefixes.\n' % (co.get('version'), cn.get('version'), len(co['v4']) + len(co['v6']), len(cn['v4']) + len(cn['v6'])))
+    w('| Provider | Was | Now |\n|---|---:|---:|')
+    for p in sorted(set(co.get('counts', {})) | set(cn.get('counts', {}))):
+        w('| %s | %d | %d |' % (p, co.get('counts', {}).get(p, 0), cn.get('counts', {}).get(p, 0)))
+    w('\nSources: ' + '; '.join('%s (%s)' % (x['name'], x.get('note') or x['sha256'][:12]) for x in cn.get('sources', [])))
+w('')
+
 w('### Tests\n')
 w('- `-SelfTest`: ' + tail('selftest.txt'))
 w('- `-TestRules`: ' + tail('testrules.txt'))
