@@ -10,7 +10,12 @@ rm -rf "$WD"; mkdir -p "$WD"; P=$WD/pki
 python3 "$W/tests/v26/mkcerts.py" "$P" > /dev/null
 pass=0; fail=0
 ok() { pass=$((pass+1)); echo "PASS $1"; }
-bad() { fail=$((fail+1)); echo "FAIL $1"; [ -n "${2:-}" ] && sed 's/^/     | /' "$2" | tail -8; }
+bad() {
+    fail=$((fail+1)); echo "FAIL $1"; [ -n "${2:-}" ] && sed 's/^/     | /' "$2" | tail -8
+    # on GitHub Actions the details become an annotation (job logs are not always at hand)
+    if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${2:-}" ]; then echo "::warning title=detail of FAIL ${1%% *}::$(tail -6 "$2" | tr '\n' '|' | sed 's/::/: :/g' | cut -c1-1500)"; fi
+    true
+}
 MOCKS=()
 trap 'kill ${MOCKS[*]} 2>/dev/null; true' EXIT
 mock() {   # mock <name> <port> [serve options]; CERT/KEY pick the server certificate

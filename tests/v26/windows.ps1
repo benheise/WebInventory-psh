@@ -18,7 +18,11 @@ $script:pass = 0; $script:fail = 0
 function Pass([string]$T) { $script:pass++; Write-Host "PASS $T" -ForegroundColor Green; Write-Host "::notice title=Tideline (Windows)::$T" }
 function Fail([string]$T, [string]$File) {
     $script:fail++; Write-Host "FAIL $T" -ForegroundColor Red; Write-Host ("::error title=Tideline (Windows)::{0}" -f ($T -replace '::', ': :'))
-    if ($File -and (Test-Path -LiteralPath $File)) { Get-Content -LiteralPath $File -Tail 12 | ForEach-Object { Write-Host "     | $_" } }
+    if ($File -and (Test-Path -LiteralPath $File)) {
+        $tail = @(Get-Content -LiteralPath $File -Tail 12)
+        $tail | ForEach-Object { Write-Host "     | $_" }
+        Write-Host ("::warning title=detail::{0}" -f (($tail -join ' | ') -replace '::', ': :' -replace '%', ' ' | ForEach-Object { $_.Substring(0, [Math]::Min(1500, $_.Length)) }))
+    }
 }
 function Run([string]$Name, [string]$Script, [string[]]$Arguments) {
     $out = Join-Path $Work "$Name.txt"

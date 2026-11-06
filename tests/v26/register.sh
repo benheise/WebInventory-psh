@@ -9,7 +9,12 @@ rm -rf "$WD"; mkdir -p "$WD/home"
 export STEPPATH=$WD/ca HOME_SENSOR=$WD/home
 pass=0; fail=0
 ok() { pass=$((pass+1)); echo "PASS $1"; }
-bad() { fail=$((fail+1)); echo "FAIL $1"; [ -n "${2:-}" ] && sed 's/^/     | /' "$2" | tail -8; }
+bad() {
+    fail=$((fail+1)); echo "FAIL $1"; [ -n "${2:-}" ] && sed 's/^/     | /' "$2" | tail -8
+    # on GitHub Actions the details become an annotation (job logs are not always at hand)
+    if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${2:-}" ]; then echo "::warning title=detail of FAIL ${1%% *}::$(tail -6 "$2" | tr '\n' '|' | sed 's/::/: :/g' | cut -c1-1500)"; fi
+    true
+}
 PIDS=(); trap 'kill ${PIDS[*]} 2>/dev/null; true' EXIT
 echo "test-only-password" > "$WD/pw.txt"
 "$B/step" ca init --name "Tideline Test CA" --dns localhost --dns 127.0.0.1 --address 127.0.0.1:19100 --provisioner sensors@tideline \
