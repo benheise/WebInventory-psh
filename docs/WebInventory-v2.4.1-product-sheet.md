@@ -1,8 +1,8 @@
-# Invoke-WebInventory v2.4.0 — Product Sheet
+# Invoke-WebInventory v2.4.1 — Product Sheet
 
 **Agentless web and service inventory for Windows, with history, evidence and offline vulnerability correlation, in a single PowerShell file.**
 
-Release 2.4.0 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
+Release 2.4.1 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
 
 ---
 
@@ -553,9 +553,11 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 
 | Check | Result | Where |
 |---|---|---|
+| C# compile of all three blocks with Windows PowerShell 5.1's compiler (CodeDom csc, C# 5), warnings as errors | 0 errors, 0 warnings (2.4.1; earlier releases failed here on warning CS0675) | GitHub `windows-2022` runner |
 | C# 5 compile of all three blocks against .NET Framework 4.7.2 reference assemblies | 0 errors, 0 warnings | Linux workspace |
 | PSScriptAnalyzer, Windows PowerShell 5.1 compatibility profiles | Clean, apart from deliberate empty `catch` blocks and the explicitly loaded `System.Security.Cryptography.Pkcs` types | Linux workspace |
-| `-SelfTest` | 133/133 (140 expected on Windows with ESENT) | PowerShell 7.4 |
+| `-SelfTest` | 140/140 with ESENT on Windows PowerShell 5.1; 133/133 on PowerShell 7 | GitHub `windows-2022` and `ubuntu-24.04` runners; PowerShell 7.4 locally |
+| `Test-WebInventoryStore.ps1` | 10/10: ESENT against the portable engine (3 runs of 2,000 services), four hard kills, verify, rebuild across engines, backfill, event-log anchoring | GitHub `windows-2022` runner |
 | Lab regression scenarios | 25/25 | Local lab |
 | Store scenarios | v2.2: 40/40 · v2.3: 34/34 (v2.3.1 adds alias, platform-check and OS-suppression cases) · Enriched gating: 4/4 | Portable engine |
 | Interleaved A/B against v2.2.0 | Identical in 12/12 | Lab and 200-service farm |
@@ -580,9 +582,10 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 | v2.4.0 list refresh, end to end | Current upstream in a scratch copy: webappanalyzer 7,824 → 7,874 rules, Recog and supplement unchanged, 1 CPE candidate listed, tests pass, exit 10 (changed, checks passed) | NVD feeds and CPE Dictionary 2026-11-06 |
 | v2.3.2 vulnerabilities | 17 product recordings: 149 rows (52 KEV) before, 197 (35 KEV) after. Gone: 21 Roundcube range rows (6 KEV) from a favicon's `1.5.0` for a 1.6.20 server, and 11 KEV listings whose real version is outside the range (TeamCity 4, Solr 3, Metabase 2, Spark, n8n). New: range or exact-version matches for Gitea 1.22.3 (40), TeamCity 2025.11.8 (13), Solr 9.4.1 (7), Metabase 0.58.39 (5), CoBlocks and PixelYourSite (5), Checkmk 2.4.0p39 (4), Mattermost 10.11.26 (3) | NVD 2002–2026, KEV, EPSS |
 
-**Windows PowerShell 5.1 in CI:** the repository's `Check` workflow runs `-SelfTest` (140 expected with ESENT), `-TestRules` and `Test-WebInventoryStore.ps1` (ESENT against the portable engine, hard-killed ESENT ingests, cross-engine verify and rebuild, backfill on ESENT, event-log anchoring) on GitHub's `windows-2022` runners for every push and pull request.
+**Windows PowerShell 5.1 in CI:** the repository's `Check` workflow compiles the three C# blocks with Windows PowerShell 5.1's compiler and runs `-SelfTest`, `-TestRules` and `Test-WebInventoryStore.ps1` on GitHub's `windows-2022` runners for every push and pull request. Its first runs found that releases before 2.4.1 did not compile on Windows PowerShell 5.1 (`Add-Type` treats compiler warnings as errors there, and csc warned on the OID parser); 2.4.1 passes every check there.
 
 **Still to run on the Windows scanner host:**
+- A lab VLAN scan from the Windows scanner host against known IIS, nginx, iDRAC/iLO and printer hosts (live scans have only been run from Linux).
 - Edge headless policy: one interactive `-Screenshot`; the canary reports a blocking policy.
 - Schannel for the RDP probe against real Windows hosts.
 
@@ -673,7 +676,7 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 | `THIRD-PARTY-NOTICES.txt`, `LICENSE-GPL-3.0.txt` | Licences and upstream provenance |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-The dev suite (`WebInventory-v2.4.0-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary) `tools/version/` (the version-only rules, their review, and the container, WordPress and replay harnesses), `tools/refresh/` (the list refresh) and `.github/workflows/` (the weekly refresh and the Windows PowerShell 5.1 / PowerShell 7 checks).
+The dev suite (`WebInventory-v2.4.1-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary) `tools/version/` (the version-only rules, their review, and the container, WordPress and replay harnesses), `tools/refresh/` (the list refresh) and `.github/workflows/` (the weekly refresh and the Windows PowerShell 5.1 / PowerShell 7 checks).
 
 ## 14. Quick start
 

@@ -1,4 +1,4 @@
-# WebInventory 2.4.0 — version coverage by product
+# WebInventory 2.4.1 — version coverage by product
 
 Every product (kind + name, as the rules name it) whose rules carry an NVD CPE but whose detection rules capture no
 version, with what WebInventory does about it. Products whose detection rules capture a version are not listed.

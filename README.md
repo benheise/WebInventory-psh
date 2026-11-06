@@ -12,8 +12,10 @@ credentials it ever uses are an SNMP community or SNMPv3 user you supply. Reques
 `-IdentifyPaths` (16 fixed public pages) and `-VersionPaths` (one GET to a product's documented version URL, only
 after that product was detected without a version).
 
-**Current release: 2.4.0** (opt-in version URLs for detected products, `-VersionPaths`; Jira and Varnish CPE
-aliases from a comparison with run-recon; the external lists refresh themselves through a weekly pull request). See
+**Current release: 2.4.1**, the first release verified on Windows PowerShell 5.1 itself (CI on GitHub's Windows
+runners: earlier releases did not compile there; see "What v2.4.1 fixes" in [`dist/README.md`](dist/README.md)).
+2.4.0 added opt-in version URLs for detected products (`-VersionPaths`), Jira and Varnish CPE aliases from a
+comparison with run-recon, and a weekly pull request that refreshes the external lists. See
 [`docs/web-inventory-v2.4.0.md`](docs/web-inventory-v2.4.0.md) and
 [`docs/web-inventory-v2.4.0-run-recon.md`](docs/web-inventory-v2.4.0-run-recon.md); 2.3.2 (version capture):
 [`docs/web-inventory-v2.3.2-versions.md`](docs/web-inventory-v2.3.2-versions.md); 2.3.1 (CPE coverage):
@@ -72,8 +74,10 @@ bash lab/with-lab.sh /tmp/wi-certs bash tests/scenarios.sh pwsh "$PWD/dist/Invok
 ```
 
 Inline C# targets C# 5 / .NET Framework 4.7.2 so the script compiles on stock Windows PowerShell 5.1;
-`tests/cscheck.ps1` checks that against the reference assemblies. The `Check` workflow runs the self-test, the rule
-examples and `Test-WebInventoryStore.ps1` on Windows PowerShell 5.1 for every push and pull request.
+`tests/cscheck.ps1` checks that against the reference assemblies. The `Check` workflow compiles the three C# blocks
+with Windows PowerShell 5.1's own compiler (any warning fails it) and runs the self-test, the rule examples and
+`Test-WebInventoryStore.ps1` on Windows PowerShell 5.1 (ESENT) and PowerShell 7 for every push and pull request;
+failing checks show as annotations on the commit.
 
 ## Keeping the lists current
 

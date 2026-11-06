@@ -102,6 +102,26 @@ the supplement unchanged; 1 CPE candidate for review; version-only rules all joi
   `Products`, `CPEs` and `VersionPaths` for exactly those two services); keep the switch consistent per store.
 - Vulnerabilities: Jira and Varnish services match more CVEs (the alias groups above).
 
+## 2.4.1: Windows PowerShell 5.1
+The new `Check` workflow's first runs on GitHub's `windows-2022` runners found that the engine had never compiled
+on Windows PowerShell 5.1 with stock `Add-Type`: Windows PowerShell treats compiler warnings as errors, and its
+compiler (CodeDom csc, C# 5) warned CS0675 on the OID parser's `v = (v << 7) | (long)(b & 0x7f)`, which the Roslyn
+C# 5 check on Linux does not report. PowerShell 7 on .NET 10 (GitHub's Ubuntu runner) failed the same way on
+SYSLIB0058 (`SslStream.CipherAlgorithm` obsolete). Fixed:
+
+- the OID parser adds instead of ORing (identical result);
+- every runtime compile uses `IgnoreWarnings`, and CI compiles each block with Windows PowerShell 5.1's compiler
+  and fails on any warning, so the code stays warning-free while a scanner host never fails on one;
+- the prefilter's fold map pins the four characters Unicode case-maps onto ASCII letters (Kelvin sign, long s,
+  dotted and dotless I): .NET Framework's invariant tables leave two of them unmapped, which made the filter
+  stricter than a culture-sensitive IgnoreCase regex there (self-test 139/140 on Windows);
+- `Test-WebInventoryStore.ps1` resolves its default `-Script` in the body (`$PSScriptRoot` is empty in parameter
+  defaults under `powershell.exe -File`).
+
+Results on Windows PowerShell 5.1: the three C# blocks 0 errors, 0 warnings; `-SelfTest` 140/140 including the
+ESENT checks; `-TestRules` 0 mismatches over 11,549 rules; `Test-WebInventoryStore.ps1` 10/10. Lab, farm and
+closed-port output identical to 2.4.0 (Linux).
+
 ## Pre-existing, noted, not changed
 - Forgejo is also reported as Gitea (Gitea's rules match Forgejo's pages; Forgejo is a fork and NVD lists them
   separately).

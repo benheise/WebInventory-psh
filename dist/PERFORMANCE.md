@@ -241,3 +241,8 @@ Startup: in 4 more interleaved pairs, v2.4.0 took 3.20–3.41 s and v2.3.2 2.98�
 engine is not where it goes: loading the same built-in, Recog and Wappalyzer packs with each version's engine in
 isolation takes no longer (median 447 ms with the v2.4.0 engine, 540 ms with v2.3.2's, 15 loads of all three each),
 and the scan phases are unchanged. The difference is within the 0.35 s spread v2.3.2 showed in its own A/B (2.81–3.17 s).
+
+**2.4.1** changes nothing on the scan path except the prefilter's fold map for four non-ASCII characters (the
+Kelvin sign, long s, dotted and dotless I now fold onto k, s and i on every runtime). One run each of the lab, the
+200-service farm and the closed-port sweep: identical to 2.4.0 field by field (farm 10.98 s, lab 38.96 s, closed
+11.41 s).

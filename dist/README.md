@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.4.0
+# Invoke-WebInventory.ps1 v2.4.1
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -67,6 +67,31 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.4.1 fixes: Windows PowerShell 5.1
+
+The first runs of the new Windows CI (GitHub's `windows-2022` runners, Windows PowerShell 5.1, ESENT) showed that
+**earlier releases did not start on Windows PowerShell 5.1**: `Add-Type` there treats compiler warnings as errors,
+and the Windows C# compiler (CodeDom csc, C# 5) raised warning CS0675 on the certificate OID parser, a warning the
+C# 5 check on Linux does not report. 2.4.1 is the first release verified on Windows PowerShell 5.1 itself.
+
+- **Engine compile:** the OID parser no longer ORs a sign-extended operand (same result: the low seven bits are
+  free after the shift). All three C# blocks compile through Windows PowerShell 5.1's compiler with 0 errors and
+  0 warnings; CI fails on any new warning.
+- **Warnings no longer stop the tool:** the script compiles its C# blocks with `IgnoreWarnings`, so a newer .NET
+  marking an API obsolete cannot stop it at startup (PowerShell 7 on .NET 10 does that today with SYSLIB0058 for
+  `SslStream.CipherAlgorithm`, which still works).
+- **Prefilter case folding:** .NET Framework's invariant casing leaves the Kelvin sign and the long s unmapped, so
+  the literal prefilter could be stricter there than a culture-sensitive case-insensitive rule. The fold map now
+  pins the four characters Unicode case-maps onto ASCII letters (K, long s, dotted and dotless I) on every runtime;
+  the filter stays a necessary condition for a match. ASCII values are unaffected (lab and farm output identical).
+- **`Test-WebInventoryStore.ps1`:** `$PSScriptRoot` is empty in parameter defaults under `powershell.exe -File`, so
+  the default `-Script` path failed; it is resolved in the script body now.
+- **Results on Windows PowerShell 5.1 (CI):** `-SelfTest` 140/140 (with the ESENT checks), `-TestRules` 0 mismatches
+  over 11,549 rules, `Test-WebInventoryStore.ps1` 10/10 (ESENT against the portable engine on three runs of 2,000
+  services, four hard kills of an ESENT ingest, verify, rebuild across engines, backfill, event-log anchoring); the
+  three C# blocks 0 errors and 0 warnings. The lab and 200-service farm scans of 2.4.1 are identical to 2.4.0's and
+  the 25 regression scenarios pass (Linux).
 
 ## What v2.4.0 adds
 
@@ -597,7 +622,7 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
 - **Performance suite (v2.1):** 8 macro scenarios x 3 runs with field-by-field comparison against a low-concurrency v2.0.2 reference, a leave-one-out A/B study of each change, micro-benchmarks, and a prefilter equivalence check over every rule example. Details in `PERFORMANCE.md`.
 - **Recog import:** 2,336 published examples checked after conversion; the one rule that failed its own example (catastrophic backtracking) was dropped, and the remaining 2,335 pass.
 - **Wappalyzer import:** all 7,824 patterns compile. On the lab pages the pack identified jQuery 3.5.1, Bootstrap 5.2.3, React 18.2.0, Lodash, Moment.js, Google Analytics/Tag Manager, Express → Node.js and WooCommerce 8.2.1, and it correctly suppressed "DHL" on the non-store page. The upstream data has no published examples, so per-rule accuracy beyond these pages is Wappalyzer's own.
-- **Not yet run on Windows PowerShell 5.1 itself.** Run `-SelfTest`, then a lab VLAN pass against known IIS, nginx, iDRAC/iLO and printer hosts, before production. Schannel behaviour (cipher order, TLS 1.0 policy) differs from the Linux/OpenSSL stack used in testing.
+- **Windows PowerShell 5.1:** since 2.4.1 the repository's CI compiles every C# block with Windows PowerShell 5.1's compiler and runs `-SelfTest` (with ESENT), `-TestRules` and `Test-WebInventoryStore.ps1` there; releases before 2.4.1 did not compile on 5.1 (see "What v2.4.1 fixes"). Live scans have only been run from Linux: before production, run a lab VLAN pass from the Windows scanner host against known IIS, nginx, iDRAC/iLO and printer hosts. Schannel behaviour (cipher order, TLS 1.0 policy) differs from the Linux/OpenSSL stack used in testing.
 - **Inventory store** (Linux workspace, portable engine; ESENT itself needs Windows, see below):
   - Both C# blocks (scan engine, store engine) compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0 warnings. The scan engine is the v2.1.0 source with only the version constant changed.
   - 14 store self-test checks (19 on Windows), and a 40-check command-line scenario: five synthetic runs with every expected event and no other (title change with the expiry-day count ignored, three kinds of address move, an ambiguous move left unpaired, carry-over through a `-NoTlsScan` run, no false absence for SAN vhosts without `-ProbeSans`, retirement, reappearance with the diff), every query mode and filter form, refused imports (duplicate, older, incomplete), tampered archive file, edited ledger line, torn ledger tail, interrupted ingest, deleted database, rebuild, lock wait.
@@ -665,10 +690,9 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
   - The list refresh run end to end on current upstream data in a scratch copy (exit 10: files changed, all checks
     passed): webappanalyzer d91f7e5 → c708f0b (7,824 → 7,874 rules, 38 new products), Recog unchanged, supplement
     unchanged, 1 CPE candidate listed for review, `-SelfTest` and `-TestRules` pass.
-  - **Windows PowerShell 5.1:** `.github/workflows/check.yml` runs `-SelfTest`, `-TestRules` and
-    `Test-WebInventoryStore.ps1` on GitHub's `windows-2022` runners (Windows PowerShell 5.1, ESENT) for every push
-    and pull request; see the repository's Actions tab for the result of this release's commit. Edge headless policy
-    and Schannel for the RDP probe still need a check on the scanner host itself.
+  - **Windows PowerShell 5.1:** the first CI runs on GitHub's `windows-2022` runners found that the engine did not
+    compile there; fixed in 2.4.1, which passes every check there (see "What v2.4.1 fixes"). Edge headless policy,
+    Schannel for the RDP probe and live scans from a Windows host still need a check on the scanner host itself.
 
 - **v2.3.2 additions** (same Linux workspace):
   - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
@@ -739,6 +763,15 @@ The `Advisories` column holds the reasoning for each finding, including "fixed" 
 - The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
 
 Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.4.1
+- **Windows PowerShell 5.1:** the engine compiles (OID parser without a sign-extended OR, CS0675); every C# block is
+  compiled with `IgnoreWarnings`; the prefilter folds the Kelvin sign, long s and dotted/dotless I onto ASCII on
+  every runtime; `Test-WebInventoryStore.ps1` resolves its default `-Script` path in the body.
+- **CI** (`.github/workflows/check.yml`): compiles the three C# blocks with Windows PowerShell 5.1's compiler and
+  fails on any warning; runs `-SelfTest`, `-TestRules` and `Test-WebInventoryStore.ps1` there and on PowerShell 7;
+  reports every failing check as an annotation on the commit or pull request.
+- No change to what is scanned or reported (lab and 200-service farm identical to 2.4.0, `PERFORMANCE.md`).
 
 ## Changes in 2.4.0
 - **`-VersionPaths`** (off by default): one GET to the version URL of each product detected without a version, at
