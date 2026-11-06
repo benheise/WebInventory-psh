@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.4.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.4.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -162,7 +162,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.4.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.4.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest failed, see
     store.log; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit.
 #>
@@ -285,7 +285,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.4.0'
+$ScriptVersion = '2.4.1'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -3433,7 +3433,7 @@ namespace WebInv
     // ------------------------------------------------------------------ Misc helpers
     public static class Util
     {
-        public const string EngineVersion = "2.4.0";
+        public const string EngineVersion = "2.4.1";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3531,7 +3531,7 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 
 #region ---------- Embedded rule pack ----------
 $BuiltinRulesJson = @'
-{"name":"builtin","version":"2.4.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
+{"name":"builtin","version":"2.4.1","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
 {"id":"b:httpapi","f":"header:server","r":"^Microsoft-HTTPAPI/([\\d.]+)","out":[{"n":"Microsoft HTTP.sys","c":"Web server","v":"{1}","k":90},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}]},
 {"id":"b:winrm","f":"header:server","r":"^Microsoft-HTTPAPI/","ports":[5985,5986],"n":"Microsoft WinRM","c":"Remote access","k":85,"flag":"MgmtInterface"},
@@ -5816,7 +5816,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.4.0";
+        public const string Version = "2.4.1";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
@@ -8422,7 +8422,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.4.0";
+        public const string Version = "2.4.1";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {

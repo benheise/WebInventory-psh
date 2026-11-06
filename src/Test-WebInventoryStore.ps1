@@ -21,12 +21,14 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Script = (Join-Path $PSScriptRoot 'Invoke-WebInventory.ps1'),
+    [string]$Script = '',   # default: Invoke-WebInventory.ps1 next to this file (set below; $PSScriptRoot is empty in
+                            # parameter defaults under Windows PowerShell 5.1 -File)
     [ValidateRange(100, 1000000)][int]$Services = 20000,
     [string]$Work = (Join-Path ([IO.Path]::GetTempPath()) ('webinv-store-validate-' + (Get-Date -Format 'yyyyMMdd_HHmmss'))),
     [switch]$Keep
 )
 $ErrorActionPreference = 'Stop'
+if (-not $Script) { $Script = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'Invoke-WebInventory.ps1' }
 $Script = (Resolve-Path -LiteralPath $Script).ProviderPath
 $exe = (Get-Process -Id $PID).Path
 $logPath = Join-Path (Get-Location).ProviderPath ('Test-WebInventoryStore_{0}.log' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
