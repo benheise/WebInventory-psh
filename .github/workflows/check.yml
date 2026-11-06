@@ -95,7 +95,9 @@ jobs:
               $ref = @(Resolve-DnsName -Name $n -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'CNAME' } | ForEach-Object { $_.NameHost.ToLowerInvariant().TrimEnd('.') })
               $ok = $null -eq $e -and ($mine -join ' > ') -eq ($ref -join ' > ')
               if ($ok) { $same++ }
-              Write-Host ("{0}: DnsQuery_W [{1}] Resolve-DnsName [{2}] {3}" -f $n, ($mine -join ' > '), ($ref -join ' > '), $(if ($ok) { 'same' } else { "DIFFERENT $e" }))
+              $line = "{0}: DnsQuery_W [{1}] Resolve-DnsName [{2}] {3}" -f $n, ($mine -join ' > '), ($ref -join ' > '), $(if ($ok) { 'same' } else { "DIFFERENT $e" })
+              Write-Host $line
+              if (-not $ok) { Write-Host ("::warning title=CNAME differs::{0}" -f $line) }
           }
           Write-Host ("::{0} title=CNAME (Windows DNS client)::{1} of {2} names give the same chain as Resolve-DnsName" -f $(if ($same -eq $names.Count) { 'notice' } else { 'error' }), $same, $names.Count)
           if ($same -ne $names.Count) { $rc = 1 }
@@ -175,6 +177,7 @@ jobs:
             ref=$(dig +short "$n" A | grep -E '\.$' | sed 's/\.$//' | tr 'A-Z' 'a-z' | paste -sd '>' -)
             got=$(awk -v n="$n" '$1==n {print $2}' mine.txt)
             echo "$n: UDP [$got] dig [$ref]"
+            [ "$got" = "$ref" ] || echo "::warning title=CNAME differs::$n: UDP [$got] dig [$ref]"
             [ "$got" = "$ref" ] && same=$((same+1))
           done
           echo "::$([ $same = $total ] && echo notice || echo error) title=CNAME (UDP, PowerShell 7)::$same of $total names give the same chain as dig"

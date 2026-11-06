@@ -52,12 +52,12 @@ want = [lpm(ip) for ip in ips]
 tmp = tempfile.mkdtemp(prefix='wi-cloud-oracle-')
 ipf = os.path.join(tmp, 'ips.txt'); open(ipf, 'w').write('\n'.join(ips) + '\n')
 ps = os.path.join(tmp, 'look.ps1')
-open(ps, 'w').write(r'''param($Script, $Pack, $Ips)
+open(ps, 'w').write(r'''param($Script, $Pack, $Ips, $OutFile)
 $code = [IO.File]::ReadAllText($Script)
 if ($code -notmatch "(?s)\`$EngineSource = @'\r?\n(.*?)\r?\n'@") { throw 'no engine' }
 $at = @{ TypeDefinition = $Matches[1]; IgnoreWarnings = $true }
 if ($PSVersionTable.PSEdition -ne 'Core') { $at.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
-Add-Type @at
+Add-Type @at -WarningAction SilentlyContinue   # newer .NET marks some engine APIs obsolete: warnings only
 $sw = [Diagnostics.Stopwatch]::StartNew()
 [void][WebInv.Cloud]::Load([WebInv.Cloud]::Read([IO.File]::ReadAllText($Pack)), $null)
 [Console]::Error.WriteLine("load ms " + $sw.ElapsedMilliseconds)
@@ -65,10 +65,12 @@ $sw.Restart()
 $out = New-Object System.Text.StringBuilder
 foreach ($ip in [IO.File]::ReadAllLines($Ips)) { if (-not $ip) { continue }; $r = [WebInv.Cloud]::Find($ip); [void]$out.AppendLine($(if ($r) { $r -join '/' } else { '-' })) }
 [Console]::Error.WriteLine("lookup ms " + $sw.ElapsedMilliseconds)
-[Console]::Out.Write($out.ToString())
+[IO.File]::WriteAllText($OutFile, $out.ToString())
 ''')
-r = subprocess.run([a.shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps, os.path.abspath(a.script), os.path.abspath(a.pack), ipf], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-got = r.stdout.splitlines()
+outf = os.path.join(tmp, 'found.txt')
+r = subprocess.run([a.shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps, os.path.abspath(a.script), os.path.abspath(a.pack), ipf, outf], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+sys.stderr.write(r.stdout)
+got = open(outf).read().splitlines() if os.path.exists(outf) else []
 sys.stderr.write(r.stderr)
 bad = [(ip, w, g) for ip, w, g in zip(ips, want, got) if w != g]
 hits = sum(1 for w in want if w != '-')
