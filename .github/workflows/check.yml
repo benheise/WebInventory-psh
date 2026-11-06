@@ -22,18 +22,35 @@ jobs:
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
-          $PSVersionTable.PSVersion.ToString()
+          # failing checks and the result lines become annotations, so they show on the commit and the pull request
+          function Invoke-Check([string]$Title, [string[]]$Arguments) {
+              $out = @(powershell.exe -NoProfile -ExecutionPolicy Bypass @Arguments 2>&1 | ForEach-Object { "$_" })
+              $rc = $LASTEXITCODE
+              # Write-Host, not the pipeline: the function's only output is the exit code
+              $out | ForEach-Object { Write-Host $_ }
+              $out | Where-Object { $_ -match '^\s*FAIL\b' } | Select-Object -First 9 | ForEach-Object { Write-Host "::error title=$Title::$_" }
+              $last = @($out | Where-Object { $_.Trim() }) | Select-Object -Last 1
+              Write-Host ("::{0} title={1}::{2} (exit {3})" -f $(if ($rc) { 'error' } else { 'notice' }), $Title, $last, $rc)
+              return $rc
+          }
+          "Windows PowerShell $($PSVersionTable.PSVersion) on $([Environment]::OSVersion.VersionString)"
           $s = Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s -SelfTest
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $s -TestRules
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $a = Invoke-Check 'SelfTest (Windows PowerShell 5.1)' @('-File', $s, '-SelfTest')
+          $b = Invoke-Check 'TestRules (Windows PowerShell 5.1)' @('-File', $s, '-TestRules')
+          if ($a -or $b) {
+              Get-ChildItem -Filter 'WebInventory_*_error.log' | Get-Content | Select-Object -First 9 | ForEach-Object { Write-Output "::warning title=error log::$_" }
+              exit 1
+          }
       - name: Store validation (ESENT against the portable engine, hard kills, rebuild)
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:GITHUB_WORKSPACE 'dist\Test-WebInventoryStore.ps1') -Services 2000
-          exit $LASTEXITCODE
+          $out = @(powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:GITHUB_WORKSPACE 'dist\Test-WebInventoryStore.ps1') -Services 2000 2>&1 | ForEach-Object { "$_" })
+          $rc = $LASTEXITCODE
+          $out | Write-Output
+          $out | Where-Object { $_ -match '^\s*FAIL\b' } | Select-Object -First 9 | ForEach-Object { Write-Output "::error title=Test-WebInventoryStore::$_" }
+          Write-Output ("::{0} title=Test-WebInventoryStore::{1} (exit {2})" -f $(if ($rc) { 'error' } else { 'notice' }), (@($out | Where-Object { $_.Trim() }) | Select-Object -Last 1), $rc)
+          exit $rc
       - name: Keep the logs
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -57,8 +74,21 @@ jobs:
       - name: Self-test and rule examples
         working-directory: ${{ runner.temp }}
         run: |
-          pwsh -NoProfile -File "$GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1" -SelfTest
-          pwsh -NoProfile -File "$GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1" -TestRules
+          # failing checks and the result lines become annotations, so they show on the commit and the pull request
+          check() {
+            local title=$1; shift
+            pwsh -NoProfile -File "$GITHUB_WORKSPACE/dist/Invoke-WebInventory.ps1" "$@" > out.txt 2>&1; local rc=$?
+            cat out.txt
+            grep -E '^\s*FAIL\b' out.txt | head -9 | sed "s/^/::error title=$title::/"
+            echo "::$([ $rc = 0 ] && echo notice || echo error) title=$title::$(grep -v '^\s*$' out.txt | tail -1) (exit $rc)"
+            return $rc
+          }
+          pwsh -NoProfile -Command '"PowerShell $($PSVersionTable.PSVersion) on $([Environment]::OSVersion.VersionString)"'
+          rc=0
+          check 'SelfTest (PowerShell 7)' -SelfTest || rc=1
+          check 'TestRules (PowerShell 7)' -TestRules || rc=1
+          if [ $rc != 0 ]; then head -9 WebInventory_*_error.log 2>/dev/null | sed 's/^/::warning title=error log::/'; fi
+          exit $rc
       - name: Checksums match
         working-directory: dist
         run: sha256sum -c SHA256SUMS.txt
