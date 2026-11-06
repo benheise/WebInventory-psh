@@ -12,7 +12,7 @@ function Initialize-StoreEngine {
         return
     }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop' }
+    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
     if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
     Add-Type @addType
     if ($script:RunLog) { Write-RunLog ("Store engine compiled in {0} ms" -f $sw.ElapsedMilliseconds) 'DEBUG' }

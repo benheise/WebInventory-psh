@@ -10,7 +10,7 @@ function Initialize-Extras {
     }
     else {
         $swc = [Diagnostics.Stopwatch]::StartNew()
-        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop' }
+        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
         Add-Type @addType
         Write-RunLog ("Extras compiled in {0} ms" -f $swc.ElapsedMilliseconds) 'DEBUG'

@@ -89,7 +89,7 @@ try {
     $genText = @'
 $code = [IO.File]::ReadAllText('__SCRIPT__')
 if ($code -notmatch "(?s)\`$StoreSource = @'\r?\n(.*?)\r?\n'@") { throw 'store engine not found in the script' }
-$addType = @{ TypeDefinition = $Matches[1] }
+$addType = @{ TypeDefinition = $Matches[1]; IgnoreWarnings = $true }
 if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
 Add-Type @addType
 [void][WebInv.StoreSelfTest]::WriteRuns('__RUNS__', __N__)

@@ -860,7 +860,7 @@ namespace WebInv
             long v = 0; bool first = true;
             for (int i = 0; i < len; i++)
             {
-                v = (v << 7) | (long)(d[p + i] & 0x7f);
+                v = (v << 7) + (d[p + i] & 0x7f);   // low 7 bits are free after the shift (no sign-extended OR, csc CS0675)
                 if ((d[p + i] & 0x80) == 0)
                 {
                     if (first)

@@ -1220,7 +1220,7 @@ namespace WebInv
             long v = 0; bool first = true;
             for (int i = 0; i < len; i++)
             {
-                v = (v << 7) | (long)(d[p + i] & 0x7f);
+                v = (v << 7) + (d[p + i] & 0x7f);   // low 7 bits are free after the shift (no sign-extended OR, csc CS0675)
                 if ((d[p + i] & 0x80) == 0)
                 {
                     if (first)
@@ -3516,7 +3516,9 @@ try {
         }
     }
     else {
-        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop' }
+        # Add-Type treats compiler warnings as errors; a newer .NET marking an API obsolete must not stop the tool from starting
+        # (CI compiles every block with warnings as errors on Windows PowerShell 5.1: .github/workflows/check.yml)
+        $addType = @{ TypeDefinition = $EngineSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core', 'System.Security', 'System.Runtime.Serialization', 'System.Xml') }
         Add-Type @addType
     }
@@ -7260,7 +7262,7 @@ function Initialize-Extras {
     }
     else {
         $swc = [Diagnostics.Stopwatch]::StartNew()
-        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop' }
+        $addType = @{ TypeDefinition = $ExtrasSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
         if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
         Add-Type @addType
         Write-RunLog ("Extras compiled in {0} ms" -f $swc.ElapsedMilliseconds) 'DEBUG'
@@ -12130,7 +12132,7 @@ function Initialize-StoreEngine {
         return
     }
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop' }
+    $addType = @{ TypeDefinition = $StoreSource; ErrorAction = 'Stop'; IgnoreWarnings = $true }   # see the engine compile
     if ($PSVersionTable.PSEdition -ne 'Core') { $addType.ReferencedAssemblies = @('System.Core') }
     Add-Type @addType
     if ($script:RunLog) { Write-RunLog ("Store engine compiled in {0} ms" -f $sw.ElapsedMilliseconds) 'DEBUG' }

@@ -18,7 +18,36 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: C# blocks through Windows PowerShell 5.1's compiler, warnings as errors
+        # the same compiler Add-Type uses on Windows PowerShell 5.1 (CodeDom csc, C# 5); the script itself compiles with
+        # IgnoreWarnings so that a warning never stops it on a scanner host, and this step keeps the code warning-free
+        shell: powershell
+        run: |
+          $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'))
+          $refs = @{ EngineSource = @('System.dll', 'System.Core.dll', 'System.Security.dll', 'System.Runtime.Serialization.dll', 'System.Xml.dll')
+                     ExtrasSource = @('System.dll', 'System.Core.dll'); StoreSource = @('System.dll', 'System.Core.dll') }
+          $failed = 0
+          foreach ($b in 'EngineSource', 'ExtrasSource', 'StoreSource') {
+              if ($script -notmatch "(?s)\`$$b = @'\r?\n(.*?)\r?\n'@") { Write-Host "::error title=$b::block not found"; $failed++; continue }
+              $src = $Matches[1]; $lines = $src -split "\r?\n"
+              $cp = New-Object System.CodeDom.Compiler.CompilerParameters
+              $cp.ReferencedAssemblies.AddRange([string[]]$refs[$b]); $cp.WarningLevel = 4; $cp.TreatWarningsAsErrors = $false
+              $cp.GenerateInMemory = $false; $cp.OutputAssembly = Join-Path $env:RUNNER_TEMP "$b.dll"
+              $r = (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($cp, $src)
+              $diags = @($r.Errors)
+              Write-Host ("{0}: {1} errors, {2} warnings ({3} lines)" -f $b, @($diags | Where-Object { -not $_.IsWarning }).Count, @($diags | Where-Object IsWarning).Count, $lines.Count)
+              $i = 0
+              foreach ($d in $diags) {
+                  $text = if ($d.Line -gt 0 -and $d.Line -le $lines.Count) { $lines[$d.Line - 1].Trim() } else { '' }
+                  $msg = '{0} line {1}: {2} {3} | {4}' -f $b, $d.Line, $d.ErrorNumber, $d.ErrorText, $text
+                  Write-Host $msg
+                  if ($i++ -lt 9) { Write-Host ('::{0} title={1} {2}::{3}' -f $(if ($d.IsWarning) { 'warning' } else { 'error' }), $b, $d.ErrorNumber, $msg) }
+              }
+              if ($diags.Count) { $failed++ }
+          }
+          if ($failed) { exit 1 }
       - name: Self-test (includes ESENT conformance) and rule examples
+        if: success() || failure()
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
@@ -42,6 +71,7 @@ jobs:
               exit 1
           }
       - name: Store validation (ESENT against the portable engine, hard kills, rebuild)
+        if: success() || failure()
         shell: powershell
         working-directory: ${{ runner.temp }}
         run: |
