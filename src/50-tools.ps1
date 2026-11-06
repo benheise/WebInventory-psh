@@ -645,6 +645,7 @@ function Invoke-SelfTest {
         finally { $l.Stop() }
     }
     Invoke-ExtrasSelfTest
+    Invoke-ShipSelfTest
     Invoke-StoreSelfTest
     $total = $script:StPass + $script:StFail
     $c = if ($script:StFail) { 'Red' } else { 'Green' }

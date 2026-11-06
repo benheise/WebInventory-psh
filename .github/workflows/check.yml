@@ -27,9 +27,10 @@ jobs:
           trap { Write-Host ("::error title=C# compile step::{0}" -f (($_ | Out-String) -replace '\r?\n', ' ')); exit 1 }
           $script = [IO.File]::ReadAllText((Join-Path $env:GITHUB_WORKSPACE 'dist\Invoke-WebInventory.ps1'))
           $refs = @{ EngineSource = @('System.dll', 'System.Core.dll', 'System.Security.dll', 'System.Runtime.Serialization.dll', 'System.Xml.dll')
-                     ExtrasSource = @('System.dll', 'System.Core.dll'); StoreSource = @('System.dll', 'System.Core.dll') }
+                     ExtrasSource = @('System.dll', 'System.Core.dll'); StoreSource = @('System.dll', 'System.Core.dll')
+                     ShipSource = @('System.dll', 'System.Core.dll', 'System.IO.Compression.dll') }
           $failed = 0
-          foreach ($b in 'EngineSource', 'ExtrasSource', 'StoreSource') {
+          foreach ($b in 'EngineSource', 'ExtrasSource', 'StoreSource', 'ShipSource') {
               if ($script -notmatch "(?s)\`$$b = @'\r?\n(.*?)\r?\n'@") { Write-Host "::error title=$b::block not found"; $failed++; continue }
               $src = $Matches[1]; $lines = $src -split "\r?\n"
               $cp = New-Object System.CodeDom.Compiler.CompilerParameters
@@ -121,6 +122,14 @@ jobs:
           Write-Host ("::{0} title=Test-WebInventoryStore::{1} (exit {2})" -f $(if ($rc) { 'error' } else { 'notice' }), (@($out | Where-Object { $_.Trim() }) | Select-Object -Last 1), $rc)
           if ($rc) { Write-Host ("::warning title=Test-WebInventoryStore output (last lines)::{0}" -f ((@($out | Where-Object { $_.Trim() }) | Select-Object -Last 12) -join ' | ' -replace '::', ': :' -replace '[\r\n%]', ' ')) }
           exit $rc
+      - name: Tideline sensor (certreq key in LocalMachine\My, step-ca enroll and renew, shipping to a mock)
+        if: success() || failure()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          trap { Write-Host ("::error title=Tideline (Windows) step::{0}" -f (($_ | Out-String) -replace '\r?\n', ' ')); exit 1 }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:GITHUB_WORKSPACE 'tests\v26\windows.ps1') -Work (Join-Path $env:RUNNER_TEMP 'tl')
+          exit $LASTEXITCODE
       - name: Keep the logs
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -129,6 +138,8 @@ jobs:
           path: |
             ${{ runner.temp }}/WebInventory_*.log
             ${{ runner.temp }}/Test-WebInventoryStore_*.log
+            ${{ runner.temp }}/tl/*.txt
+            ${{ runner.temp }}/tl/*.log
           if-no-files-found: ignore
 
   linux:
@@ -141,6 +152,8 @@ jobs:
         run: |
           python3 build.py
           git diff --exit-code --stat -- dist/ || { echo "::error title=Build::dist/ differs from what build.py makes from src/ (run python3 build.py and commit)"; exit 1; }
+          python3 tools/schemas/gen.py
+          git diff --exit-code --stat -- schemas/ || { echo "::error title=Schemas::schemas/ differs from what tools/schemas/gen.py makes from src/ (run it and commit)"; exit 1; }
       - name: Self-test and rule examples
         working-directory: ${{ runner.temp }}
         run: |
@@ -188,6 +201,32 @@ jobs:
           done
           echo "::$([ $same = $total ] && echo notice || echo error) title=CNAME (UDP, PowerShell 7)::$same of $total names give the same chain as dig"
           [ $same = $total ] || rc=1
+          exit $rc
+      - name: Tideline shipping end to end (mock ingest, step-ca enrollment), JSONL contract
+        if: success() || failure()
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet cryptography jsonschema
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          bash lab/make-certs.sh "$RUNNER_TEMP/certs" > /dev/null
+          python3 lab/lab.py "$RUNNER_TEMP/certs" > "$RUNNER_TEMP/lab.log" 2>&1 &
+          sleep 2
+          rc=0
+          bash tests/v26/ship.sh "$RUNNER_TEMP/ship" pwsh > ship.txt 2>&1 || rc=1
+          cat ship.txt
+          grep '^FAIL' ship.txt | head -9 | sed 's/^/::error title=Tideline shipping::/'
+          echo "::$([ $rc = 0 ] && echo notice || echo error) title=Tideline shipping (PowerShell 7)::$(tail -1 ship.txt)"
+          # step-ca and step, pinned
+          mkdir -p "$RUNNER_TEMP/step" && cd "$RUNNER_TEMP/step"
+          curl -sSLO https://github.com/smallstep/certificates/releases/download/v0.30.2/step-ca_linux_0.30.2_amd64.tar.gz
+          curl -sSLO https://github.com/smallstep/cli/releases/download/v0.30.2/step_linux_0.30.2_amd64.tar.gz
+          printf '%s  %s\n' 126615795bafe3f2d3f890e2d628fa6e2857315fb48d0671d34b23047cc37d73 step-ca_linux_0.30.2_amd64.tar.gz abf5ffe9a39c01c7b4e777d50a96f30f33f5bd8eeafa2dfeef22b8a4abeee14a step_linux_0.30.2_amd64.tar.gz | sha256sum -c --quiet
+          for f in *.tar.gz; do tar -xzf "$f"; done
+          cp "$(find . -name step-ca -type f | head -1)" "$(find . -path '*/bin/step' -type f | head -1)" .
+          cd "$GITHUB_WORKSPACE"
+          bash tests/v26/register.sh "$RUNNER_TEMP/reg" "$RUNNER_TEMP/step" pwsh > reg.txt 2>&1 || rc=1
+          cat reg.txt
+          grep '^FAIL' reg.txt | head -9 | sed 's/^/::error title=Tideline enrollment::/'
+          echo "::$([ $rc = 0 ] && echo notice || echo error) title=Tideline enrollment (PowerShell 7, step-ca)::$(tail -1 reg.txt)"
           exit $rc
       - name: Checksums match
         working-directory: dist

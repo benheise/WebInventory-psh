@@ -43,6 +43,19 @@ if ($TestRules) { Invoke-TestRules; Close-Logs; exit $script:ExitCode }
 if ($NoJa4s -and -not $TlsFingerprint) { Stop-Fatal '-NoJa4s goes with -TlsFingerprint.' }
 if ($DnsServer -and -not $Cname) { Stop-Fatal '-DnsServer goes with -Cname.' }
 if ($CloudFile -and $NoCloud) { Stop-Fatal 'Give -CloudFile or -NoCloud, not both.' }
+# Tideline shipping and the per-run vulnerability join (v2.6)
+if (-not $ShipTo -and ($ShipCertThumbprint -or $ShipCertPath -or $ShipCertPasswordFile -or $ShipCaFile -or $Explicit.Contains('ShipRetries'))) { Stop-Fatal 'Shipping options were given without -ShipTo.' }
+if ($ShipCertPasswordFile -and -not $ShipCertPath) { Stop-Fatal '-ShipCertPasswordFile goes with -ShipCertPath.' }
+if ($Engagement -and -not (Test-EngagementId $Engagement)) { Stop-Fatal "-Engagement '$Engagement': letters, digits, '.', '_' and '-', up to 64, starting with a letter or digit." }
+$script:NvdFeeds = $null; $script:KevPath = ''; $script:EpssPath = ''
+if (($KevFile -or $EpssFile) -and -not @($NvdFeed | Where-Object { $_ }).Count) { Stop-Fatal '-KevFile and -EpssFile go with -NvdFeed.' }
+if (@($NvdFeed | Where-Object { $_ }).Count) {
+    try { $script:NvdFeeds = [string[]]@(foreach ($f in @($NvdFeed | Where-Object { $_ })) { foreach ($x in ($f -split ',')) { if ($x.Trim()) { (Resolve-Path -LiteralPath $x.Trim() -ErrorAction Stop).ProviderPath } } }) }
+    catch { Stop-Fatal "-NvdFeed: $($_.Exception.Message)" }
+    foreach ($f in @($KevFile, $EpssFile)) { if ($f -and -not (Test-Path -LiteralPath $f -PathType Leaf)) { Stop-Fatal "file not found: $f" } }
+    if ($KevFile) { $script:KevPath = (Resolve-Path -LiteralPath $KevFile).ProviderPath }
+    if ($EpssFile) { $script:EpssPath = (Resolve-Path -LiteralPath $EpssFile).ProviderPath }
+}
 $snmpCred = $null
 if (-not $Snmp -and ($SnmpCommunity -or $SnmpCredential -or $SnmpPrivPassword -or $SnmpVersion -or $SnmpPrivProtocol)) { Stop-Fatal 'SNMP options were given without -Snmp.' }
 if ($Snmp) {
@@ -245,6 +258,13 @@ if ($Resume) {
     if ((Split-Path -Leaf $rp) -notmatch '^WebInventory_(.+)_progress\.txt$') { Stop-Fatal "Resume file must be a WebInventory_<RunId>_progress.txt file" }
     $script:RunId = $Matches[1]
     $OutputDir = Split-Path -Parent $rp
+    if ($Engagement) {
+        $orj = Join-Path $OutputDir ("WebInventory_{0}_run.json" -f $script:RunId)
+        if (Test-Path -LiteralPath $orj) {
+            $oe = $null; try { $oe = [string](([IO.File]::ReadAllText($orj) | ConvertFrom-Json).engagement) } catch { }
+            if ($oe -and $oe -ne $Engagement) { Stop-Fatal ("-Engagement {0}: run {1} was started for engagement {2}" -f $Engagement, $script:RunId, $oe) }
+        }
+    }
     foreach ($l in [IO.File]::ReadAllLines($rp)) { if ($l) { [void]$doneKeys.Add($l.Trim()) } }
     $before = $Jobs.Count
     $Jobs = New-Object System.Collections.Generic.List[string] (, [string[]]@($Jobs | Where-Object { $p = $_.Split("`t"); -not $doneKeys.Contains(('{0}|{1}|{2}' -f $p[0], $p[1], $p[2])) }))
@@ -291,6 +311,7 @@ if ($Store -and -not $NoStore) {
     catch { Stop-Fatal ("-Store: {0}" -f $_.Exception.Message) }
     Write-RunLog ("Store: {0} (runs are added after they complete)" -f $script:StorePath)
 }
+if ($ShipTo) { Initialize-Shipping }
 if (-not (Test-Path -LiteralPath $OutputDir)) { try { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null } catch { Stop-Fatal "Cannot create -OutputDir '$OutputDir': $($_.Exception.Message)" } }
 $OutputDir = (Resolve-Path -LiteralPath $OutputDir).ProviderPath
 try { Open-Outputs $OutputDir $script:RunId } catch { Stop-Fatal "Cannot open output files in '$OutputDir': $($_.Exception.Message)" }
@@ -452,6 +473,7 @@ finally {
             $shots = Invoke-Screenshots -CsvFile $script:CsvPath
             if ($script:ShotIndexPath -and (Test-Path -LiteralPath $script:ShotIndexPath)) {
                 $outputs.Add($script:ShotIndexPath)
+                if ($script:ShotJsonlPath -and (Test-Path -LiteralPath $script:ShotJsonlPath)) { $outputs.Add($script:ShotJsonlPath) }
                 foreach ($f in $shots.Values) { $outputs.Add((Join-Path $OutputDir $f)) }
             }
         }
@@ -479,12 +501,24 @@ finally {
                 $script:DeltaPath = Join-Path $OutputDir ("WebInventory_{0}_delta.csv" -f $script:RunId)
                 $dc = Compare-Baseline -BaselinePath $bl -CurrentCsv $script:CsvPath -DeltaPath $script:DeltaPath
                 $deltaMsg = "Delta vs {0}: {1} new, {2} removed, {3} changed -> {4}" -f (Split-Path -Leaf $bl), $dc.New, $dc.Removed, $dc.Changed, $script:DeltaPath
-                Write-RunLog $deltaMsg; $outputs.Add($script:DeltaPath)
+                Write-RunLog $deltaMsg; $outputs.Add($script:DeltaPath); $outputs.Add([IO.Path]::ChangeExtension($script:DeltaPath, '.jsonl'))
             }
         }
         catch { Write-ErrLog 'IO' 'delta' ("baseline comparison failed: {0}" -f $_.Exception.Message) }
     }
-    try { $outputs.Add((Write-RunInfo -Complete (-not $interrupted -and -not $script:TimeLimitHit) -Interrupted $interrupted -TimeLimit $script:TimeLimitHit -Rows $counts.rows)) }
+    $outputs.Add($script:ErrJsonPath)
+    if ($script:NvdFeeds -and -not $interrupted -and -not $script:TimeLimitHit) {
+        try { foreach ($f in (Invoke-RunVulnerabilities -CsvFile $script:CsvPath)) { $outputs.Add($f) } }
+        catch {
+            $ex = $_.Exception; while ($ex -is [System.Management.Automation.MethodInvocationException] -and $ex.InnerException) { $ex = $ex.InnerException }
+            Write-ErrLog 'VULNS' '-' ("vulnerability join failed: {0}" -f $ex.Message)
+        }
+    }
+    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
+    # Rows from earlier sessions of a resumed run count as answers. The code is recorded in run.json (Tideline's exit_code).
+    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
+    $runExit = if ($interrupted -or $script:TimeLimitHit) { 3 } elseif (-not $answered) { 4 } elseif ($script:ErrTotal -gt 0) { 2 } else { 0 }
+    try { $outputs.Add((Write-RunInfo -Complete (-not $interrupted -and -not $script:TimeLimitHit) -Interrupted $interrupted -TimeLimit $script:TimeLimitHit -Rows $counts.rows -ExitCode $runExit)) }
     catch { Write-ErrLog 'IO' 'run.json' ("run.json failed: {0}" -f $_.Exception.Message) }
     $errSummary = if ($script:ErrTotal) { ($script:ErrCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value }) -join ' ' } else { 'none' }
     $summary = "{0} in {1:hh\:mm\:ss}: {2}/{3} checks; web={4} open={5} closed={6} filtered={7} worker-errors={8}; rows={9}; requests={10}; rule-regex-timeouts={11}; logged errors: {12}" -f $(if ($interrupted) { 'INTERRUPTED' } elseif ($script:TimeLimitHit) { 'TIME LIMIT' } else { 'Done' }), $elapsed, $doneCount, $total, $counts.web, $counts.open, $counts.closed, $counts.filtered, $counts.error, $counts.rows, $counts.requests, [WebInv.Matcher]::Timeouts, $errSummary
@@ -501,9 +535,6 @@ finally {
     Write-Host ("Results: {0}{1}" -f $script:CsvPath, $(if ($script:HtmlPath) { " | $($script:HtmlPath)" } else { '' })) -ForegroundColor Cyan
     Write-Host ("Logs:    {0} | {1}" -f $RunLogPath, $ErrLogPath) -ForegroundColor DarkGray
     if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Resume:  re-run the same command with -Resume '{0}'" -f $script:ProgressPath) -ForegroundColor Yellow }
-    # 4: the run completed, but no service answered (network down, every port closed or filtered, every name unresolved).
-    # Rows from earlier sessions of a resumed run count as answers.
-    $answered = $counts.rows -gt 0 -or ($Resume -and (Test-CsvHasRows $script:CsvPath))
     if (-not $interrupted -and -not $script:TimeLimitHit -and -not $answered) {
         $na = "NOTHING ANSWERED: {0} checks, no open service (exit 4)" -f $doneCount
         Write-RunLog $na 'WARN'; Write-Host $na -ForegroundColor Yellow
@@ -519,6 +550,11 @@ finally {
     if ($Store -and -not $NoStore) {
         if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Store: run not complete, not added. Resume it (-Resume) and it is added when it completes.") -ForegroundColor Yellow }
         elseif (-not (Invoke-StoreIngest -RunId $script:RunId -Dir $OutputDir)) { if ($script:ExitCode -lt 2) { $script:ExitCode = 2 } }
+    }
+    # ---------- Tideline (after the store: the run's files are final and in the manifest) ----------
+    if ($ShipTo) {
+        if ($interrupted -or $script:TimeLimitHit) { Write-Host ("Tideline: run not complete, not shipped. Resume it (-Resume); it is shipped when it completes.") -ForegroundColor Yellow }
+        elseif (-not (Invoke-Shipping)) { if ($script:ExitCode -lt 2) { $script:ExitCode = 2 } }
     }
 }
 exit $script:ExitCode

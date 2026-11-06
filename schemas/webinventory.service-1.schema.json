@@ -1,0 +1,374 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/benheise/WebInventory-psh/schemas/webinventory.service-1",
+  "title": "WebInventory service (results JSONL line)",
+  "description": "One line of WebInventory_<RunId>.jsonl: the CSV's 83 columns with JSON types, plus Detections (each detection's product, version, confidence, CPE, rule source and evidence). Columns added in a later 2.x release are a minor version and appear as extra properties; runs of earlier releases lack the newer columns.",
+  "type": "object",
+  "required": [
+    "RunId",
+    "ScannedAt",
+    "Host",
+    "IP",
+    "Port",
+    "State",
+    "IsWeb",
+    "Scheme",
+    "Url"
+  ],
+  "properties": {
+    "RunId": {
+      "type": "string"
+    },
+    "ScanTag": {
+      "type": "string"
+    },
+    "ScannedAt": {
+      "type": "string"
+    },
+    "Host": {
+      "type": "string"
+    },
+    "IP": {
+      "type": "string"
+    },
+    "Port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "ReverseDns": {
+      "type": "string"
+    },
+    "Vhost": {
+      "type": "boolean"
+    },
+    "VhostOf": {
+      "type": "string"
+    },
+    "State": {
+      "type": "string"
+    },
+    "IsWeb": {
+      "type": "boolean"
+    },
+    "Service": {
+      "type": "string"
+    },
+    "Scheme": {
+      "type": "string"
+    },
+    "Url": {
+      "type": "string"
+    },
+    "FinalUrl": {
+      "type": "string"
+    },
+    "StatusCode": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "Title": {
+      "type": "string"
+    },
+    "Server": {
+      "type": "string"
+    },
+    "PoweredBy": {
+      "type": "string"
+    },
+    "Generator": {
+      "type": "string"
+    },
+    "ContentType": {
+      "type": "string"
+    },
+    "BodyLength": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "BodySha256": {
+      "type": "string"
+    },
+    "ResponseMs": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "RedirectChain": {
+      "type": "string"
+    },
+    "Auth": {
+      "type": "string"
+    },
+    "Cookies": {
+      "type": "string"
+    },
+    "CookieFlagIssues": {
+      "type": "string"
+    },
+    "MissingSecHeaders": {
+      "type": "string"
+    },
+    "HstsMaxAge": {
+      "type": "string"
+    },
+    "AltSvc": {
+      "type": "string"
+    },
+    "Products": {
+      "type": "string"
+    },
+    "Technologies": {
+      "type": "string"
+    },
+    "Categories": {
+      "type": "string"
+    },
+    "CPEs": {
+      "type": "string"
+    },
+    "OsHint": {
+      "type": "string"
+    },
+    "Hardware": {
+      "type": "string"
+    },
+    "FaviconPath": {
+      "type": "string"
+    },
+    "FaviconMmh3": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "FaviconMd5": {
+      "type": "string"
+    },
+    "Robots": {
+      "type": "string"
+    },
+    "SecurityTxt": {
+      "type": "string"
+    },
+    "AllowedMethods": {
+      "type": "string"
+    },
+    "RiskyMethods": {
+      "type": "string"
+    },
+    "IdentifiedPaths": {
+      "type": "string"
+    },
+    "TlsVersion": {
+      "type": "string"
+    },
+    "TlsCipher": {
+      "type": "string"
+    },
+    "TlsKeyExchange": {
+      "type": "string"
+    },
+    "TlsSupported": {
+      "type": "string"
+    },
+    "TlsCiphersByVersion": {
+      "type": "string"
+    },
+    "TlsWeakCipher": {
+      "type": "string"
+    },
+    "Alpn": {
+      "type": "string"
+    },
+    "Http2": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "CertSubject": {
+      "type": "string"
+    },
+    "CertIssuer": {
+      "type": "string"
+    },
+    "CertSANs": {
+      "type": "string"
+    },
+    "CertNotBefore": {
+      "type": "string"
+    },
+    "CertNotAfter": {
+      "type": "string"
+    },
+    "CertDaysLeft": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "CertSelfSigned": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "CertSigAlg": {
+      "type": "string"
+    },
+    "CertKeyAlg": {
+      "type": "string"
+    },
+    "CertKeySize": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ]
+    },
+    "CertSerial": {
+      "type": "string"
+    },
+    "CertSha1": {
+      "type": "string"
+    },
+    "CertSha256": {
+      "type": "string"
+    },
+    "CertPolicyErrors": {
+      "type": "string"
+    },
+    "CertChainStatus": {
+      "type": "string"
+    },
+    "CertSource": {
+      "type": "string"
+    },
+    "Flags": {
+      "type": "string"
+    },
+    "Advisories": {
+      "type": "string"
+    },
+    "Banner": {
+      "type": "string"
+    },
+    "Notes": {
+      "type": "string"
+    },
+    "DeviceName": {
+      "type": "string"
+    },
+    "Domain": {
+      "type": "string"
+    },
+    "ProtocolInfo": {
+      "type": "string"
+    },
+    "Jarm": {
+      "type": "string"
+    },
+    "Ja4s": {
+      "type": "string"
+    },
+    "VersionPaths": {
+      "type": "string"
+    },
+    "Cname": {
+      "type": "string"
+    },
+    "Cloud": {
+      "type": "string"
+    },
+    "CloudRegion": {
+      "type": "string"
+    },
+    "CloudService": {
+      "type": "string"
+    },
+    "Detections": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "Kind",
+              "Name"
+            ],
+            "additionalProperties": true,
+            "properties": {
+              "Kind": {
+                "type": "string"
+              },
+              "Name": {
+                "type": "string"
+              },
+              "Version": {
+                "type": "string"
+              },
+              "Category": {
+                "type": "string"
+              },
+              "Confidence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "Cpe": {
+                "type": "string"
+              },
+              "Source": {
+                "type": "string"
+              },
+              "Evidence": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "additionalProperties": true
+}
