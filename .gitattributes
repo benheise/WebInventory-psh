@@ -1,0 +1,3 @@
+# Built release files are shipped byte-exact (UTF-8 BOM + CRLF for Windows PowerShell 5.1);
+# no line-ending conversion, so dist/SHA256SUMS.txt and Authenticode signatures stay valid on any checkout.
+dist/** -text

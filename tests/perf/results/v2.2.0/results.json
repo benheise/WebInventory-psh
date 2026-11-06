@@ -1,0 +1,489 @@
+{
+ "label": "v2.2.0",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "lab": {
+   "args": [
+    "-TargetFile",
+    "/home/claude/webinv/tests/perf/lab-targets.txt",
+    "-ProbeSans",
+    "-IdentifyPaths",
+    "-Options",
+    "-ReverseDns",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 2.064,
+      "targets_s": 0.307,
+      "scan_s": 38.91
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 41.03,
+     "cpu_s": 16.934,
+     "user_s": 15.433,
+     "sys_s": 1.502,
+     "maxrss_mb": 520.2,
+     "exit": 2
+    },
+    {
+     "phases": {
+      "startup_s": 2.613,
+      "targets_s": 0.209,
+      "scan_s": 39.309
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 41.542,
+     "cpu_s": 17.249,
+     "user_s": 15.962,
+     "sys_s": 1.287,
+     "maxrss_mb": 535.3,
+     "exit": 2
+    },
+    {
+     "phases": {
+      "startup_s": 1.953,
+      "targets_s": 0.22,
+      "scan_s": 38.657
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 40.618,
+     "cpu_s": 15.811,
+     "user_s": 14.616,
+     "sys_s": 1.195,
+     "maxrss_mb": 552.1,
+     "exit": 2
+    }
+   ],
+   "summary": {
+    "wall_s": 41.03,
+    "wall_s_min": 40.618,
+    "wall_s_max": 41.542,
+    "cpu_s": 16.934,
+    "cpu_s_min": 15.811,
+    "cpu_s_max": 17.249,
+    "maxrss_mb": 535.3,
+    "requests": 457,
+    "rows": 26,
+    "web": 20,
+    "phases": {
+     "startup_s": 2.064,
+     "targets_s": 0.22,
+     "scan_s": 38.91
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/lab/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/lab/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/lab/run1 (found 0/0)\n",
+     "report": ""
+    }
+   ]
+  },
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 2.019,
+      "targets_s": 0.167,
+      "scan_s": 13.357
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 15.265,
+     "cpu_s": 24.482,
+     "user_s": 22.537,
+     "sys_s": 1.946,
+     "maxrss_mb": 634.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.304,
+      "targets_s": 0.157,
+      "scan_s": 13.093
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 15.225,
+     "cpu_s": 24.141,
+     "user_s": 22.172,
+     "sys_s": 1.968,
+     "maxrss_mb": 654.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.036,
+      "targets_s": 0.137,
+      "scan_s": 11.353
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 13.195,
+     "cpu_s": 21.436,
+     "user_s": 19.859,
+     "sys_s": 1.577,
+     "maxrss_mb": 647.0,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 15.225,
+    "wall_s_min": 13.195,
+    "wall_s_max": 15.265,
+    "cpu_s": 24.141,
+    "cpu_s_min": 21.436,
+    "cpu_s_max": 24.482,
+    "maxrss_mb": 647.0,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 2.036,
+     "targets_s": 0.157,
+     "scan_s": 13.093
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/farm-ref/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/farm-ref/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/farm-ref/run1 (found 0/0)\n",
+     "report": ""
+    }
+   ]
+  },
+  "closed": {
+   "args": [
+    "-Target",
+    "127.0.30.1-20",
+    "-Port",
+    "20000-20199",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 2.012,
+      "targets_s": 0.196,
+      "scan_s": 13.253
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 15.224,
+     "cpu_s": 25.748,
+     "user_s": 24.23,
+     "sys_s": 1.518,
+     "maxrss_mb": 596.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.067,
+      "targets_s": 0.171,
+      "scan_s": 11.91
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 13.884,
+     "cpu_s": 23.528,
+     "user_s": 22.092,
+     "sys_s": 1.436,
+     "maxrss_mb": 577.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.93,
+      "targets_s": 0.147,
+      "scan_s": 10.906
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.953,
+     "cpu_s": 22.007,
+     "user_s": 20.585,
+     "sys_s": 1.422,
+     "maxrss_mb": 567.6,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 13.884,
+    "wall_s_min": 12.953,
+    "wall_s_max": 15.224,
+    "cpu_s": 23.528,
+    "cpu_s_min": 22.007,
+    "cpu_s_max": 25.748,
+    "maxrss_mb": 577.4,
+    "requests": 0,
+    "rows": 0,
+    "web": 0,
+    "phases": {
+     "startup_s": 2.012,
+     "targets_s": 0.171,
+     "scan_s": 11.91
+    }
+   }
+  },
+  "tarpit": {
+   "args": [
+    "-Target",
+    "127.0.11.1-20",
+    "-Port",
+    "19090,19091",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.992,
+      "targets_s": 0.141,
+      "scan_s": 7.007
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 8.855,
+     "cpu_s": 11.411,
+     "user_s": 10.438,
+     "sys_s": 0.973,
+     "maxrss_mb": 531.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.369,
+      "targets_s": 0.162,
+      "scan_s": 7.688
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 9.517,
+     "cpu_s": 11.875,
+     "user_s": 10.942,
+     "sys_s": 0.932,
+     "maxrss_mb": 526.5,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.021,
+      "targets_s": 0.139,
+      "scan_s": 6.905
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 8.651,
+     "cpu_s": 10.728,
+     "user_s": 9.84,
+     "sys_s": 0.888,
+     "maxrss_mb": 503.0,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 8.855,
+    "wall_s_min": 8.651,
+    "wall_s_max": 9.517,
+    "cpu_s": 11.411,
+    "cpu_s_min": 10.728,
+    "cpu_s_max": 11.875,
+    "maxrss_mb": 526.5,
+    "requests": 280,
+    "rows": 40,
+    "web": 0,
+    "phases": {
+     "startup_s": 2.021,
+     "targets_s": 0.141,
+     "scan_s": 7.007
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/tarpit/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/tarpit/run1 (found 0/0)\n",
+     "report": ""
+    },
+    {
+     "identical": false,
+     "summary": "expected exactly one CSV and one JSONL in tests/perf/results/v2.0.2/tarpit/run1 (found 0/0)\n",
+     "report": ""
+    }
+   ]
+  },
+  "startup": {
+   "args": [
+    "-Target",
+    "127.0.0.1:80",
+    "-ListTargets"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.937,
+      "targets_s": 0.143,
+      "list_s": 0.01
+     },
+     "wall_s": 3.938,
+     "cpu_s": 5.808,
+     "user_s": 5.265,
+     "sys_s": 0.543,
+     "maxrss_mb": 424.6,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.953,
+      "targets_s": 0.158,
+      "list_s": 0.013
+     },
+     "wall_s": 4.201,
+     "cpu_s": 5.957,
+     "user_s": 5.358,
+     "sys_s": 0.598,
+     "maxrss_mb": 424.5,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.105,
+      "targets_s": 0.136,
+      "list_s": 0.009
+     },
+     "wall_s": 4.076,
+     "cpu_s": 5.764,
+     "user_s": 5.154,
+     "sys_s": 0.61,
+     "maxrss_mb": 424.6,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 4.076,
+    "wall_s_min": 3.938,
+    "wall_s_max": 4.201,
+    "cpu_s": 5.808,
+    "cpu_s_min": 5.764,
+    "cpu_s_max": 5.957,
+    "maxrss_mb": 424.6,
+    "phases": {
+     "startup_s": 1.953,
+     "targets_s": 0.143,
+     "list_s": 0.01
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,408 @@
+{
+ "label": "cand-sched",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "closed": {
+   "args": [
+    "-Target",
+    "127.0.30.1-20",
+    "-Port",
+    "20000-20199",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.814,
+      "targets_s": 0.158,
+      "scan_s": 153.371
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 155.158,
+     "cpu_s": 229.153,
+     "user_s": 220.396,
+     "sys_s": 8.757,
+     "maxrss_mb": 3499.1,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.778,
+      "targets_s": 0.165,
+      "scan_s": 154.799
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 156.504,
+     "cpu_s": 229.936,
+     "user_s": 221.42,
+     "sys_s": 8.516,
+     "maxrss_mb": 3092.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.048,
+      "targets_s": 0.147,
+      "scan_s": 156.097
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 157.675,
+     "cpu_s": 232.604,
+     "user_s": 223.624,
+     "sys_s": 8.981,
+     "maxrss_mb": 3515.8,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 156.504,
+    "wall_s_min": 155.158,
+    "wall_s_max": 157.675,
+    "cpu_s": 229.936,
+    "cpu_s_min": 229.153,
+    "cpu_s_max": 232.604,
+    "maxrss_mb": 3499.1,
+    "requests": 0,
+    "rows": 0,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.814,
+     "targets_s": 0.158,
+     "scan_s": 154.799
+    }
+   }
+  },
+  "filtered": {
+   "args": [
+    "-Target",
+    "127.0.31.1-10",
+    "-Port",
+    "20000-20031",
+    "-TimeoutMs",
+    "500"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.784,
+      "targets_s": 0.138,
+      "scan_s": 18.914
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 20.562,
+     "cpu_s": 30.03,
+     "user_s": 28.448,
+     "sys_s": 1.582,
+     "maxrss_mb": 917.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.688,
+      "targets_s": 0.148,
+      "scan_s": 16.439
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.944,
+     "cpu_s": 26.906,
+     "user_s": 25.428,
+     "sys_s": 1.478,
+     "maxrss_mb": 944.7,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.699,
+      "targets_s": 0.146,
+      "scan_s": 16.211
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.817,
+     "cpu_s": 26.123,
+     "user_s": 24.866,
+     "sys_s": 1.257,
+     "maxrss_mb": 794.3,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 17.944,
+    "wall_s_min": 17.817,
+    "wall_s_max": 20.562,
+    "cpu_s": 26.906,
+    "cpu_s_min": 26.123,
+    "cpu_s_max": 30.03,
+    "maxrss_mb": 917.4,
+    "requests": 0,
+    "rows": 0,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.699,
+     "targets_s": 0.146,
+     "scan_s": 16.439
+    }
+   }
+  },
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.76,
+      "targets_s": 0.158,
+      "scan_s": 29.343
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 30.962,
+     "cpu_s": 50.348,
+     "user_s": 48.017,
+     "sys_s": 2.331,
+     "maxrss_mb": 1015.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.647,
+      "targets_s": 0.152,
+      "scan_s": 31.403
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 32.949,
+     "cpu_s": 53.814,
+     "user_s": 51.427,
+     "sys_s": 2.387,
+     "maxrss_mb": 1090.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.494,
+      "targets_s": 0.193,
+      "scan_s": 31.167
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 33.023,
+     "cpu_s": 53.099,
+     "user_s": 50.479,
+     "sys_s": 2.619,
+     "maxrss_mb": 1014.2,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 32.949,
+    "wall_s_min": 30.962,
+    "wall_s_max": 33.023,
+    "cpu_s": 53.099,
+    "cpu_s_min": 50.348,
+    "cpu_s_max": 53.814,
+    "maxrss_mb": 1015.4,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.76,
+     "targets_s": 0.158,
+     "scan_s": 31.167
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  },
+  "tarpit": {
+   "args": [
+    "-Target",
+    "127.0.11.1-20",
+    "-Port",
+    "19090,19091",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.731,
+      "targets_s": 0.145,
+      "scan_s": 8.056
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 9.69,
+     "cpu_s": 12.945,
+     "user_s": 12.023,
+     "sys_s": 0.922,
+     "maxrss_mb": 487.5,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.859,
+      "targets_s": 0.146,
+      "scan_s": 8.077
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 9.635,
+     "cpu_s": 12.619,
+     "user_s": 11.705,
+     "sys_s": 0.914,
+     "maxrss_mb": 490.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.686,
+      "targets_s": 0.147,
+      "scan_s": 7.801
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 9.345,
+     "cpu_s": 12.181,
+     "user_s": 11.215,
+     "sys_s": 0.967,
+     "maxrss_mb": 486.9,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 9.635,
+    "wall_s_min": 9.345,
+    "wall_s_max": 9.69,
+    "cpu_s": 12.619,
+    "cpu_s_min": 12.181,
+    "cpu_s_max": 12.945,
+    "maxrss_mb": 487.5,
+    "requests": 280,
+    "rows": 40,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.731,
+     "targets_s": 0.146,
+     "scan_s": 8.056
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

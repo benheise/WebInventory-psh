@@ -1,0 +1,69 @@
+{
+ "label": "cand-jobs",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "expand": {
+   "args": [
+    "-Target",
+    "10.10.0.0/18",
+    "-ListTargets",
+    "-Force"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.703,
+      "targets_s": 2.867,
+      "list_s": 4.307
+     },
+     "wall_s": 10.508,
+     "cpu_s": 13.428,
+     "user_s": 12.279,
+     "sys_s": 1.149,
+     "maxrss_mb": 410.1,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.867,
+      "targets_s": 2.914,
+      "list_s": 4.47
+     },
+     "wall_s": 10.731,
+     "cpu_s": 13.474,
+     "user_s": 12.307,
+     "sys_s": 1.167,
+     "maxrss_mb": 406.7,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.805,
+      "targets_s": 2.991,
+      "list_s": 4.712
+     },
+     "wall_s": 11.109,
+     "cpu_s": 13.851,
+     "user_s": 12.596,
+     "sys_s": 1.254,
+     "maxrss_mb": 407.6,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 10.731,
+    "wall_s_min": 10.508,
+    "wall_s_max": 11.109,
+    "cpu_s": 13.474,
+    "cpu_s_min": 13.428,
+    "cpu_s_max": 13.851,
+    "maxrss_mb": 407.6,
+    "phases": {
+     "startup_s": 1.805,
+     "targets_s": 2.914,
+     "list_s": 4.47
+    }
+   }
+  }
+ }
+}

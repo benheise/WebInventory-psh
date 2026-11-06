@@ -1,0 +1,941 @@
+{
+ "label": "v2.0.2",
+ "script": "/home/claude/webinv/baseline/Invoke-WebInventory-v2.0.2.ps1",
+ "scenarios": {
+  "farm-ref": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "10000",
+    "-Threads",
+    "4"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.612,
+      "targets_s": 0.147,
+      "scan_s": 37.807
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 39.129,
+     "cpu_s": 59.557,
+     "user_s": 57.33,
+     "sys_s": 2.227,
+     "maxrss_mb": 569.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.469,
+      "targets_s": 0.128,
+      "scan_s": 38.332
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 39.636,
+     "cpu_s": 59.38,
+     "user_s": 57.078,
+     "sys_s": 2.303,
+     "maxrss_mb": 593.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.576,
+      "targets_s": 0.137,
+      "scan_s": 39.36
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 40.665,
+     "cpu_s": 61.366,
+     "user_s": 58.953,
+     "sys_s": 2.413,
+     "maxrss_mb": 550.3,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 39.636,
+    "wall_s_min": 39.129,
+    "wall_s_max": 40.665,
+    "cpu_s": 59.557,
+    "cpu_s_min": 59.38,
+    "cpu_s_max": 61.366,
+    "maxrss_mb": 569.4,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.576,
+     "targets_s": 0.137,
+     "scan_s": 38.332
+    }
+   }
+  },
+  "farmrtt-ref": {
+   "args": [
+    "-Target",
+    "127.0.20.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "10000",
+    "-Threads",
+    "8"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.655,
+      "targets_s": 0.135,
+      "scan_s": 39.283
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 19,
+     "wall_s": 40.724,
+     "cpu_s": 65.644,
+     "user_s": 63.234,
+     "sys_s": 2.411,
+     "maxrss_mb": 622.7,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.474,
+      "targets_s": 0.132,
+      "scan_s": 39.194
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 15,
+     "wall_s": 40.457,
+     "cpu_s": 65.282,
+     "user_s": 62.988,
+     "sys_s": 2.294,
+     "maxrss_mb": 608.3,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.544,
+      "targets_s": 0.151,
+      "scan_s": 39.425
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 5,
+     "wall_s": 40.748,
+     "cpu_s": 65.791,
+     "user_s": 63.486,
+     "sys_s": 2.306,
+     "maxrss_mb": 630.1,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 40.724,
+    "wall_s_min": 40.457,
+    "wall_s_max": 40.748,
+    "cpu_s": 65.644,
+    "cpu_s_min": 65.282,
+    "cpu_s_max": 65.791,
+    "maxrss_mb": 622.7,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.544,
+     "targets_s": 0.135,
+     "scan_s": 39.283
+    }
+   }
+  },
+  "lab": {
+   "args": [
+    "-TargetFile",
+    "/home/claude/webinv/tests/perf/lab-targets.txt",
+    "-ProbeSans",
+    "-IdentifyPaths",
+    "-Options",
+    "-ReverseDns",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.487,
+      "targets_s": 0.198,
+      "scan_s": 38.951
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 40.299,
+     "cpu_s": 16.959,
+     "user_s": 16.007,
+     "sys_s": 0.951,
+     "maxrss_mb": 387.1,
+     "exit": 2
+    },
+    {
+     "phases": {
+      "startup_s": 1.523,
+      "targets_s": 0.205,
+      "scan_s": 38.954
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 40.341,
+     "cpu_s": 17.64,
+     "user_s": 16.632,
+     "sys_s": 1.008,
+     "maxrss_mb": 393.5,
+     "exit": 2
+    },
+    {
+     "phases": {
+      "startup_s": 1.53,
+      "targets_s": 0.19,
+      "scan_s": 40.287
+     },
+     "requests": 457,
+     "rows": 26,
+     "web": 20,
+     "open": 24,
+     "closed": 1,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 41.722,
+     "cpu_s": 16.997,
+     "user_s": 16.041,
+     "sys_s": 0.956,
+     "maxrss_mb": 385.6,
+     "exit": 2
+    }
+   ],
+   "summary": {
+    "wall_s": 40.341,
+    "wall_s_min": 40.299,
+    "wall_s_max": 41.722,
+    "cpu_s": 16.997,
+    "cpu_s_min": 16.959,
+    "cpu_s_max": 17.64,
+    "maxrss_mb": 387.1,
+    "requests": 457,
+    "rows": 26,
+    "web": 20,
+    "phases": {
+     "startup_s": 1.523,
+     "targets_s": 0.198,
+     "scan_s": 38.954
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 26 rows reference, 26 rows candidate, 0 differences",
+     "report": "golden: 26 rows reference, 26 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 26 rows reference, 26 rows candidate, 0 differences",
+     "report": "golden: 26 rows reference, 26 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 26 rows reference, 26 rows candidate, 0 differences",
+     "report": "golden: 26 rows reference, 26 rows candidate, 0 differences\n"
+    }
+   ]
+  },
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.52,
+      "targets_s": 0.137,
+      "scan_s": 38.724
+     },
+     "requests": 1350,
+     "rows": 200,
+     "web": 190,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 86,
+     "wall_s": 40.053,
+     "cpu_s": 67.589,
+     "user_s": 64.746,
+     "sys_s": 2.843,
+     "maxrss_mb": 1041.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.54,
+      "targets_s": 0.133,
+      "scan_s": 37.64
+     },
+     "requests": 1335,
+     "rows": 200,
+     "web": 187,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 90,
+     "wall_s": 38.962,
+     "cpu_s": 65.626,
+     "user_s": 62.93,
+     "sys_s": 2.697,
+     "maxrss_mb": 1114.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.576,
+      "targets_s": 0.167,
+      "scan_s": 38.313
+     },
+     "requests": 1340,
+     "rows": 200,
+     "web": 188,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 101,
+     "wall_s": 39.676,
+     "cpu_s": 67.09,
+     "user_s": 64.251,
+     "sys_s": 2.838,
+     "maxrss_mb": 1186.1,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 39.676,
+    "wall_s_min": 38.962,
+    "wall_s_max": 40.053,
+    "cpu_s": 67.09,
+    "cpu_s_min": 65.626,
+    "cpu_s_max": 67.589,
+    "maxrss_mb": 1114.9,
+    "requests": 1340,
+    "rows": 200,
+    "web": 188,
+    "phases": {
+     "startup_s": 1.54,
+     "targets_s": 0.137,
+     "scan_s": 38.313
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 450 differences",
+     "report": "7.0.10.10:19443/login?from=%2F' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Server: 'Jetty(10.0.13)' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False RedirectChain: '302->https://127.0.10.10:19443/login?from=%2F' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Cookies: 'JSESSIONID.000a' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Products: 'Java; Jenkins 2.410.2; Eclipse Jetty 10.0.13' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.410.2:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.13:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.10.10|127.0.10.10|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.10.11|127.0.10.11|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.10.11|127.0.10.11|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.10.11|127.0.10.11|19443|False Url: 'https://127.0.10.11:19443/' -> 'tls://127.0.10.11:19443'\n  CSV 127.0.10.11|127.0.10.11|19443|False FinalUrl: 'https://127.0.10.11:19443/login?from=%2F' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False Server: 'Jetty(10.0.14)' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False RedirectChain: '302->https://127.0.10.11:19443/login?from=%2F' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False Cookies: 'JSESSIONID.000b' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.11|127.0.10.11|19443|False Products: 'Java; Jenkins 2.411.3; Eclipse Jetty 10.0.14' -> ''\n  ... 390 more\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 585 differences",
+     "report": "7.0.10.12:19443/login?from=%2F' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Server: 'Jetty(10.0.15)' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False RedirectChain: '302->https://127.0.10.12:19443/login?from=%2F' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Cookies: 'JSESSIONID.000c' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Products: 'Java; Jenkins 2.412.1; Eclipse Jetty 10.0.15' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.412.1:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.15:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.10.13|127.0.10.13|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.10.13|127.0.10.13|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.10.13|127.0.10.13|19443|False Url: 'https://127.0.10.13:19443/' -> 'tls://127.0.10.13:19443'\n  CSV 127.0.10.13|127.0.10.13|19443|False FinalUrl: 'https://127.0.10.13:19443/login?from=%2F' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Server: 'Jetty(10.0.16)' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False RedirectChain: '302->https://127.0.10.13:19443/login?from=%2F' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Cookies: 'JSESSIONID.000d' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Products: 'Java; Jenkins 2.413.2; Eclipse Jetty 10.0.16' -> ''\n  ... 525 more\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 540 differences",
+     "report": "7.0.10.12:19443/login?from=%2F' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Server: 'Jetty(10.0.15)' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False RedirectChain: '302->https://127.0.10.12:19443/login?from=%2F' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Cookies: 'JSESSIONID.000c' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Products: 'Java; Jenkins 2.412.1; Eclipse Jetty 10.0.15' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.412.1:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.15:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.10.12|127.0.10.12|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.10.13|127.0.10.13|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.10.13|127.0.10.13|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.10.13|127.0.10.13|19443|False Url: 'https://127.0.10.13:19443/' -> 'tls://127.0.10.13:19443'\n  CSV 127.0.10.13|127.0.10.13|19443|False FinalUrl: 'https://127.0.10.13:19443/login?from=%2F' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Server: 'Jetty(10.0.16)' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False RedirectChain: '302->https://127.0.10.13:19443/login?from=%2F' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Cookies: 'JSESSIONID.000d' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.13|127.0.10.13|19443|False Products: 'Java; Jenkins 2.413.2; Eclipse Jetty 10.0.16' -> ''\n  ... 480 more\n"
+    }
+   ]
+  },
+  "farm-rtt": {
+   "args": [
+    "-Target",
+    "127.0.20.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.669,
+      "targets_s": 0.145,
+      "scan_s": 39.926
+     },
+     "requests": 1320,
+     "rows": 200,
+     "web": 184,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 100,
+     "wall_s": 41.29,
+     "cpu_s": 68.027,
+     "user_s": 65.243,
+     "sys_s": 2.785,
+     "maxrss_mb": 1064.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.554,
+      "targets_s": 0.148,
+      "scan_s": 40.586
+     },
+     "requests": 1335,
+     "rows": 200,
+     "web": 187,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 101,
+     "wall_s": 41.878,
+     "cpu_s": 69.297,
+     "user_s": 66.398,
+     "sys_s": 2.9,
+     "maxrss_mb": 1071.7,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.505,
+      "targets_s": 0.151,
+      "scan_s": 42.048
+     },
+     "requests": 1350,
+     "rows": 200,
+     "web": 190,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 104,
+     "wall_s": 43.37,
+     "cpu_s": 70.585,
+     "user_s": 67.7,
+     "sys_s": 2.884,
+     "maxrss_mb": 1180.9,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 41.878,
+    "wall_s_min": 41.29,
+    "wall_s_max": 43.37,
+    "cpu_s": 69.297,
+    "cpu_s_min": 68.027,
+    "cpu_s_max": 70.585,
+    "maxrss_mb": 1071.7,
+    "requests": 1335,
+    "rows": 200,
+    "web": 187,
+    "phases": {
+     "startup_s": 1.554,
+     "targets_s": 0.148,
+     "scan_s": 40.586
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 720 differences",
+     "report": "7.0.20.10:19443/login?from=%2F' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Server: 'Jetty(10.0.13)' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False RedirectChain: '302->https://127.0.20.10:19443/login?from=%2F' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Cookies: 'JSESSIONID.000a' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Products: 'Java; Jenkins 2.410.2; Eclipse Jetty 10.0.13' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.410.2:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.13:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.20.11|127.0.20.11|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.20.11|127.0.20.11|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.20.11|127.0.20.11|19443|False Url: 'https://127.0.20.11:19443/' -> 'tls://127.0.20.11:19443'\n  CSV 127.0.20.11|127.0.20.11|19443|False FinalUrl: 'https://127.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Server: 'Jetty(10.0.14)' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False RedirectChain: '302->https://127.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Cookies: 'JSESSIONID.000b' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Products: 'Java; Jenkins 2.411.3; Eclipse Jetty 10.0.14' -> ''\n  ... 660 more\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 585 differences",
+     "report": "7.0.20.10:19443/login?from=%2F' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Server: 'Jetty(10.0.13)' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False RedirectChain: '302->https://127.0.20.10:19443/login?from=%2F' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Cookies: 'JSESSIONID.000a' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Products: 'Java; Jenkins 2.410.2; Eclipse Jetty 10.0.13' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.410.2:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.13:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.20.10|127.0.20.10|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.20.11|127.0.20.11|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.20.11|127.0.20.11|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.20.11|127.0.20.11|19443|False Url: 'https://127.0.20.11:19443/' -> 'tls://127.0.20.11:19443'\n  CSV 127.0.20.11|127.0.20.11|19443|False FinalUrl: 'https://127.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Server: 'Jetty(10.0.14)' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False RedirectChain: '302->https://127.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Cookies: 'JSESSIONID.000b' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Products: 'Java; Jenkins 2.411.3; Eclipse Jetty 10.0.14' -> ''\n  ... 525 more\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 450 differences",
+     "report": "7.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Server: 'Jetty(10.0.14)' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False RedirectChain: '302->https://127.0.20.11:19443/login?from=%2F' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Cookies: 'JSESSIONID.000b' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Products: 'Java; Jenkins 2.411.3; Eclipse Jetty 10.0.14' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.411.3:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.14:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.20.11|127.0.20.11|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.20.12|127.0.20.12|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.20.12|127.0.20.12|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.20.12|127.0.20.12|19443|False Url: 'https://127.0.20.12:19443/' -> 'tls://127.0.20.12:19443'\n  CSV 127.0.20.12|127.0.20.12|19443|False FinalUrl: 'https://127.0.20.12:19443/login?from=%2F' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False Server: 'Jetty(10.0.15)' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False RedirectChain: '302->https://127.0.20.12:19443/login?from=%2F' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False Cookies: 'JSESSIONID.000c' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.12|127.0.20.12|19443|False Products: 'Java; Jenkins 2.412.1; Eclipse Jetty 10.0.15' -> ''\n  ... 390 more\n"
+    }
+   ]
+  },
+  "tarpit": {
+   "args": [
+    "-Target",
+    "127.0.11.1-20",
+    "-Port",
+    "19090,19091",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.598,
+      "targets_s": 0.139,
+      "scan_s": 11.394
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.806,
+     "cpu_s": 13.99,
+     "user_s": 12.971,
+     "sys_s": 1.019,
+     "maxrss_mb": 440.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.626,
+      "targets_s": 0.138,
+      "scan_s": 11.628
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.973,
+     "cpu_s": 14.291,
+     "user_s": 13.346,
+     "sys_s": 0.945,
+     "maxrss_mb": 446.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.521,
+      "targets_s": 0.14,
+      "scan_s": 11.588
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.939,
+     "cpu_s": 13.374,
+     "user_s": 12.553,
+     "sys_s": 0.822,
+     "maxrss_mb": 447.3,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 12.939,
+    "wall_s_min": 12.806,
+    "wall_s_max": 12.973,
+    "cpu_s": 13.99,
+    "cpu_s_min": 13.374,
+    "cpu_s_max": 14.291,
+    "maxrss_mb": 446.2,
+    "requests": 280,
+    "rows": 40,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.598,
+     "targets_s": 0.139,
+     "scan_s": 11.588
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    }
+   ]
+  },
+  "closed": {
+   "args": [
+    "-Target",
+    "127.0.30.1-20",
+    "-Port",
+    "20000-20199",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.822,
+      "targets_s": 0.223,
+      "scan_s": 139.987
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 141.349,
+     "cpu_s": 199.035,
+     "user_s": 191.428,
+     "sys_s": 7.606,
+     "maxrss_mb": 2808.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.627,
+      "targets_s": 0.219,
+      "scan_s": 137.078
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 138.683,
+     "cpu_s": 202.181,
+     "user_s": 194.629,
+     "sys_s": 7.552,
+     "maxrss_mb": 2794.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.616,
+      "targets_s": 0.206,
+      "scan_s": 137.805
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 4000,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 139.412,
+     "cpu_s": 203.707,
+     "user_s": 196.004,
+     "sys_s": 7.703,
+     "maxrss_mb": 3127.9,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 139.412,
+    "wall_s_min": 138.683,
+    "wall_s_max": 141.349,
+    "cpu_s": 202.181,
+    "cpu_s_min": 199.035,
+    "cpu_s_max": 203.707,
+    "maxrss_mb": 2808.9,
+    "requests": 0,
+    "rows": 0,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.627,
+     "targets_s": 0.219,
+     "scan_s": 137.805
+    }
+   }
+  },
+  "filtered": {
+   "args": [
+    "-Target",
+    "127.0.31.1-10",
+    "-Port",
+    "20000-20031",
+    "-TimeoutMs",
+    "500"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.951,
+      "targets_s": 0.162,
+      "scan_s": 16.141
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.549,
+     "cpu_s": 25.834,
+     "user_s": 24.267,
+     "sys_s": 1.566,
+     "maxrss_mb": 851.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.586,
+      "targets_s": 0.142,
+      "scan_s": 15.986
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.356,
+     "cpu_s": 25.288,
+     "user_s": 23.932,
+     "sys_s": 1.356,
+     "maxrss_mb": 787.3,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.768,
+      "targets_s": 0.127,
+      "scan_s": 15.645
+     },
+     "requests": 0,
+     "rows": 0,
+     "web": 0,
+     "open": 0,
+     "closed": 0,
+     "filtered": 320,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.087,
+     "cpu_s": 24.837,
+     "user_s": 23.525,
+     "sys_s": 1.312,
+     "maxrss_mb": 807.3,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 17.356,
+    "wall_s_min": 17.087,
+    "wall_s_max": 17.549,
+    "cpu_s": 25.288,
+    "cpu_s_min": 24.837,
+    "cpu_s_max": 25.834,
+    "maxrss_mb": 807.3,
+    "requests": 0,
+    "rows": 0,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.768,
+     "targets_s": 0.142,
+     "scan_s": 15.986
+    }
+   }
+  },
+  "startup": {
+   "args": [
+    "-Target",
+    "127.0.0.1:80",
+    "-ListTargets"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.669,
+      "targets_s": 0.163,
+      "list_s": 0.012
+     },
+     "wall_s": 3.309,
+     "cpu_s": 4.517,
+     "user_s": 3.994,
+     "sys_s": 0.523,
+     "maxrss_mb": 325.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.58,
+      "targets_s": 0.127,
+      "list_s": 0.008
+     },
+     "wall_s": 3.009,
+     "cpu_s": 4.164,
+     "user_s": 3.733,
+     "sys_s": 0.431,
+     "maxrss_mb": 326.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.606,
+      "targets_s": 0.137,
+      "list_s": 0.014
+     },
+     "wall_s": 3.061,
+     "cpu_s": 4.248,
+     "user_s": 3.825,
+     "sys_s": 0.422,
+     "maxrss_mb": 326.6,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 3.061,
+    "wall_s_min": 3.009,
+    "wall_s_max": 3.309,
+    "cpu_s": 4.248,
+    "cpu_s_min": 4.164,
+    "cpu_s_max": 4.517,
+    "maxrss_mb": 326.4,
+    "phases": {
+     "startup_s": 1.606,
+     "targets_s": 0.137,
+     "list_s": 0.012
+    }
+   }
+  },
+  "expand": {
+   "args": [
+    "-Target",
+    "10.10.0.0/18",
+    "-ListTargets",
+    "-Force"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.534,
+      "targets_s": 3.237,
+      "list_s": 5.541
+     },
+     "wall_s": 11.601,
+     "cpu_s": 14.372,
+     "user_s": 13.192,
+     "sys_s": 1.18,
+     "maxrss_mb": 356.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.654,
+      "targets_s": 2.933,
+      "list_s": 5.389
+     },
+     "wall_s": 11.334,
+     "cpu_s": 14.178,
+     "user_s": 12.842,
+     "sys_s": 1.336,
+     "maxrss_mb": 353.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.59,
+      "targets_s": 3.093,
+      "list_s": 5.42
+     },
+     "wall_s": 11.614,
+     "cpu_s": 14.36,
+     "user_s": 13.145,
+     "sys_s": 1.215,
+     "maxrss_mb": 399.4,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 11.601,
+    "wall_s_min": 11.334,
+    "wall_s_max": 11.614,
+    "cpu_s": 14.36,
+    "cpu_s_min": 14.178,
+    "cpu_s_max": 14.372,
+    "maxrss_mb": 356.4,
+    "phases": {
+     "startup_s": 1.59,
+     "targets_s": 3.093,
+     "list_s": 5.42
+    }
+   }
+  }
+ }
+}

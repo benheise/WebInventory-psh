@@ -1,0 +1,115 @@
+{
+ "label": "cand-warmup",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.824,
+      "targets_s": 0.151,
+      "scan_s": 15.686
+     },
+     "requests": 1402,
+     "rows": 200,
+     "web": 199,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 17.231,
+     "cpu_s": 30.466,
+     "user_s": 29.022,
+     "sys_s": 1.444,
+     "maxrss_mb": 559.5,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.894,
+      "targets_s": 0.139,
+      "scan_s": 17.771
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 19.279,
+     "cpu_s": 34.311,
+     "user_s": 32.79,
+     "sys_s": 1.521,
+     "maxrss_mb": 584.8,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.06,
+      "targets_s": 0.147,
+      "scan_s": 19.463
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 1,
+     "wall_s": 21.207,
+     "cpu_s": 37.783,
+     "user_s": 36.153,
+     "sys_s": 1.63,
+     "maxrss_mb": 570.9,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 19.279,
+    "wall_s_min": 17.231,
+    "wall_s_max": 21.207,
+    "cpu_s": 34.311,
+    "cpu_s_min": 30.466,
+    "cpu_s_max": 37.783,
+    "maxrss_mb": 570.9,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.894,
+     "targets_s": 0.147,
+     "scan_s": 17.771
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 51 differences",
+     "report": "0.10.27|19081|False Advisories: 'PHP2Shell [CVE-2026-109618, CVE-2026-109619] vulnerable: PHP 8.2.10 is below the fixed release for its branch' -> ''\n  JSONL 127.0.10.27|127.0.10.27|19081|False Advisories: \"PHP2Shell [CVE-2026-109618, CVE-2026-109619] vulnerable: PHP 8.2.10 is below the fixed release for its branch\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False BodyLength: 34153 -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False BodySha256: \"473fe59493df7d22836cfc58abbab661e14e7b36973b6c334c38dc8fe37c8265\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False CPEs: \"cpe:2.3:a:oracle:mysql:*:*:*:*:*:*:*:*;cpe:2.3:a:wordpress:wordpress:6.2.0:*:*:*:*:*:*:*;cpe:2.3:a:apache:http_server:2.4.51:*:*:*:*:*:*:*;cpe:2.3:a:php:php:8.2.10:*:*:*:*:*:*:*;cpe:2.3:a:jquery:jque -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Categories: \"Database;CMS;Web server;Language;JavaScript libraries;WordPress themes;OS\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False ContentType: \"text/html; charset=UTF-8\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False CookieFlagIssues: \"wordpress_test_cookie:no-HttpOnly\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Cookies: \"wordpress_test_cookie\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Detections: [{\"Kind\": \"service\", \"Name\": \"MySQL\", \"Version\": \"\", \"Category\": \"Database\", \"Confidence\": 100, \"Cpe\": \"cpe:2.3:a:oracle:mysql:*:*:*:*:*:*:*:*\", \"Source\": \"implied:WordPress\", \"Evidence\": \"\"}, {\"Kind\" -> []\n  JSONL 127.0.10.27|127.0.10.27|19081|False FinalUrl: \"http://127.0.10.27:19081/\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Flags: \"PlainHttp;PHP2Shell:vulnerable\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Generator: \"WordPress 6.2.0\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Http2: \"\" -> false\n  JSONL 127.0.10.27|127.0.10.27|19081|False IsWeb: true -> false\n  JSONL 127.0.10.27|127.0.10.27|19081|False MissingSecHeaders: \"content-security-policy;x-frame-options;x-content-type-options\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False OsHint: \"Ubuntu\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False PoweredBy: \"PHP/8.2.10\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Products: \"MySQL; WordPress 6.2.0; Apache HTTP Server 2.4.51; PHP 8.2.10; jQuery 3.7.1; Twenty Twenty-Four\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Robots: \"disallow=1;sitemap=True\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Scheme: \"http\" -> \"unknown\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Server: \"Apache/2.4.51 (Ubuntu)\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Service: \"http\" -> \"unknown\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False StatusCode: 200 -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Technologies: \"MySQL;WordPress;Apache HTTP Server;PHP;jQuery;Twenty Twenty-Four\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Title: \"Team Blog 27 \\u2013 Just another WordPress site\" -> \"\"\n  JSONL 127.0.10.27|127.0.10.27|19081|False Url: \"http://127.0.10.27:19081/\" -> \"unknown://127.0.10.27:19081\"\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

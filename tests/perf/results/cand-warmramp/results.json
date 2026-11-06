@@ -1,0 +1,224 @@
+{
+ "label": "cand-warmramp",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.791,
+      "targets_s": 0.17,
+      "scan_s": 16.907
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 18.432,
+     "cpu_s": 32.721,
+     "user_s": 31.127,
+     "sys_s": 1.594,
+     "maxrss_mb": 548.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.81,
+      "targets_s": 0.15,
+      "scan_s": 19.518
+     },
+     "requests": 1395,
+     "rows": 200,
+     "web": 199,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 21.047,
+     "cpu_s": 37.233,
+     "user_s": 35.541,
+     "sys_s": 1.692,
+     "maxrss_mb": 560.3,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.715,
+      "targets_s": 0.161,
+      "scan_s": 19.033
+     },
+     "requests": 1380,
+     "rows": 200,
+     "web": 196,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 20.589,
+     "cpu_s": 36.907,
+     "user_s": 35.452,
+     "sys_s": 1.455,
+     "maxrss_mb": 592.2,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 20.589,
+    "wall_s_min": 18.432,
+    "wall_s_max": 21.047,
+    "cpu_s": 36.907,
+    "cpu_s_min": 32.721,
+    "cpu_s_max": 37.233,
+    "maxrss_mb": 560.3,
+    "requests": 1395,
+    "rows": 200,
+    "web": 199,
+    "phases": {
+     "startup_s": 1.791,
+     "targets_s": 0.161,
+     "scan_s": 19.033
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 45 differences",
+     "report": "ty-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False Products: 'Java; Jenkins 2.401.3; Eclipse Jetty 10.0.14' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.401.3:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.14:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.10.41|127.0.10.41|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  JSONL 127.0.10.41|127.0.10.41|19443|False Auth: \"Form\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False BodyLength: 2539 -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False BodySha256: \"86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False CPEs: \"cpe:2.3:a:jenkins:jenkins:2.401.3:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.14:*:*:*:*:*:*:*\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Categories: \"Language;CI/CD;App server\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False ContentType: \"text/html;charset=utf-8\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Cookies: \"JSESSIONID.0029\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Detections: [{\"Kind\": \"service\", \"Name\": \"Java\", \"Version\": \"\", \"Category\": \"Language\", \"Confidence\": 100, \"Cpe\": \"\", \"Source\": \"implied:Jenkins\", \"Evidence\": \"\"}, {\"Kind\": \"service\", \"Name\": \"Jenkins\", \"Version\" -> []\n  JSONL 127.0.10.41|127.0.10.41|19443|False FaviconMd5: \"af01d212d86dd0f8dcdc4a64804c58b9\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False FaviconMmh3: -134942578 -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False FaviconPath: \"/favicon.ico\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False FinalUrl: \"https://127.0.10.41:19443/login?from=%2F\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False IsWeb: true -> false\n  JSONL 127.0.10.41|127.0.10.41|19443|False MissingSecHeaders: \"content-security-policy;x-frame-options;strict-transport-security\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Products: \"Java; Jenkins 2.401.3; Eclipse Jetty 10.0.14\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False RedirectChain: \"302->https://127.0.10.41:19443/login?from=%2F\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Scheme: \"https\" -> \"tls\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Server: \"Jetty(10.0.14)\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Service: \"https\" -> \"tls\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False StatusCode: 200 -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Technologies: \"Java;Jenkins;Eclipse Jetty\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Title: \"Sign in [Jenkins]\" -> \"\"\n  JSONL 127.0.10.41|127.0.10.41|19443|False Url: \"https://127.0.10.41:19443/\" -> \"tls://127.0.10.41:19443\"\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 180 differences",
+     "report": "7.0.10.48:19443/login?from=%2F' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Server: 'Jetty(10.0.16)' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False RedirectChain: '302->https://127.0.10.48:19443/login?from=%2F' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Cookies: 'JSESSIONID.0030' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Products: 'Java; Jenkins 2.408.1; Eclipse Jetty 10.0.16' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.408.1:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.16:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.10.48|127.0.10.48|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.10.49|127.0.10.49|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.10.49|127.0.10.49|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.10.49|127.0.10.49|19443|False Url: 'https://127.0.10.49:19443/' -> 'tls://127.0.10.49:19443'\n  CSV 127.0.10.49|127.0.10.49|19443|False FinalUrl: 'https://127.0.10.49:19443/login?from=%2F' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False StatusCode: '200' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False Server: 'Jetty(10.0.17)' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False RedirectChain: '302->https://127.0.10.49:19443/login?from=%2F' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False Auth: 'Form' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False Cookies: 'JSESSIONID.0031' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.10.49|127.0.10.49|19443|False Products: 'Java; Jenkins 2.409.2; Eclipse Jetty 10.0.17' -> ''\n  ... 120 more\n"
+    }
+   ]
+  },
+  "farm-rtt": {
+   "args": [
+    "-Target",
+    "127.0.20.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.805,
+      "targets_s": 0.144,
+      "scan_s": 20.051
+     },
+     "requests": 1385,
+     "rows": 200,
+     "web": 197,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 21.722,
+     "cpu_s": 37.361,
+     "user_s": 35.51,
+     "sys_s": 1.851,
+     "maxrss_mb": 570.1,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.959,
+      "targets_s": 0.168,
+      "scan_s": 20.222
+     },
+     "requests": 1380,
+     "rows": 200,
+     "web": 196,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 21.811,
+     "cpu_s": 37.736,
+     "user_s": 35.946,
+     "sys_s": 1.79,
+     "maxrss_mb": 577.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.769,
+      "targets_s": 0.153,
+      "scan_s": 18.362
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 20.024,
+     "cpu_s": 34.177,
+     "user_s": 32.491,
+     "sys_s": 1.687,
+     "maxrss_mb": 577.7,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 21.722,
+    "wall_s_min": 20.024,
+    "wall_s_max": 21.811,
+    "cpu_s": 37.361,
+    "cpu_s_min": 34.177,
+    "cpu_s_max": 37.736,
+    "maxrss_mb": 577.2,
+    "requests": 1385,
+    "rows": 200,
+    "web": 197,
+    "phases": {
+     "startup_s": 1.805,
+     "targets_s": 0.153,
+     "scan_s": 20.051
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 135 differences",
+     "report": "27.0.20.42:19443/login?from=%2F' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Server: 'Jetty(10.0.15)' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False RedirectChain: '302->https://127.0.20.42:19443/login?from=%2F' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Cookies: 'JSESSIONID.002a' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Products: 'Java; Jenkins 2.402.1; Eclipse Jetty 10.0.15' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.402.1:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.15:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.20.42|127.0.20.42|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.20.44|127.0.20.44|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.20.44|127.0.20.44|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.20.44|127.0.20.44|19443|False Url: 'https://127.0.20.44:19443/' -> 'tls://127.0.20.44:19443'\n  CSV 127.0.20.44|127.0.20.44|19443|False FinalUrl: 'https://127.0.20.44:19443/login?from=%2F' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False Server: 'Jetty(10.0.17)' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False RedirectChain: '302->https://127.0.20.44:19443/login?from=%2F' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False Cookies: 'JSESSIONID.002c' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.44|127.0.20.44|19443|False Products: 'Java; Jenkins 2.404.3; Eclipse Jetty 10.0.17' -> ''\n  ... 75 more\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 180 differences",
+     "report": "7.0.20.35:19443/login?from=%2F' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Server: 'Jetty(10.0.13)' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False RedirectChain: '302->https://127.0.20.35:19443/login?from=%2F' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Cookies: 'JSESSIONID.0023' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Products: 'Java; Jenkins 2.435.3; Eclipse Jetty 10.0.13' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Technologies: 'Java;Jenkins;Eclipse Jetty' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False Categories: 'Language;CI/CD;App server' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False CPEs: 'cpe:2.3:a:jenkins:jenkins:2.435.3:*:*:*:*:*:*:*;cpe:2.3:a:eclipse:jetty:10.0.13:*:*:*:*:*:*:*' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False FaviconMmh3: \"'-134942578\" -> ''\n  CSV 127.0.20.35|127.0.20.35|19443|False FaviconMd5: 'af01d212d86dd0f8dcdc4a64804c58b9' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False IsWeb: 'True' -> 'False'\n  CSV 127.0.20.37|127.0.20.37|19443|False Service: 'https' -> 'tls'\n  CSV 127.0.20.37|127.0.20.37|19443|False Scheme: 'https' -> 'tls'\n  CSV 127.0.20.37|127.0.20.37|19443|False Url: 'https://127.0.20.37:19443/' -> 'tls://127.0.20.37:19443'\n  CSV 127.0.20.37|127.0.20.37|19443|False FinalUrl: 'https://127.0.20.37:19443/login?from=%2F' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False StatusCode: '200' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False Title: 'Sign in [Jenkins]' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False Server: 'Jetty(10.0.15)' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False ContentType: 'text/html;charset=utf-8' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False BodyLength: '2539' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False BodySha256: '86a087252c76fabb164dcf4ecdfb15fed30e0681a11c5f9e345b4cbf5d83a9d4' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False RedirectChain: '302->https://127.0.20.37:19443/login?from=%2F' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False Auth: 'Form' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False Cookies: 'JSESSIONID.0025' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False MissingSecHeaders: 'content-security-policy;x-frame-options;strict-transport-security' -> ''\n  CSV 127.0.20.37|127.0.20.37|19443|False Products: 'Java; Jenkins 2.437.2; Eclipse Jetty 10.0.15' -> ''\n  ... 120 more\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

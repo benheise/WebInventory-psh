@@ -1,0 +1,115 @@
+{
+ "label": "cand-ramp",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.675,
+      "targets_s": 0.14,
+      "scan_s": 11.515
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 13.082,
+     "cpu_s": 22.155,
+     "user_s": 20.917,
+     "sys_s": 1.238,
+     "maxrss_mb": 554.1,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.033,
+      "targets_s": 0.153,
+      "scan_s": 11.853
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 13.627,
+     "cpu_s": 22.906,
+     "user_s": 21.665,
+     "sys_s": 1.24,
+     "maxrss_mb": 554.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.813,
+      "targets_s": 0.177,
+      "scan_s": 10.556
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.299,
+     "cpu_s": 20.444,
+     "user_s": 19.172,
+     "sys_s": 1.272,
+     "maxrss_mb": 536.8,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 13.082,
+    "wall_s_min": 12.299,
+    "wall_s_max": 13.627,
+    "cpu_s": 22.155,
+    "cpu_s_min": 20.444,
+    "cpu_s_max": 22.906,
+    "maxrss_mb": 554.1,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.813,
+     "targets_s": 0.153,
+     "scan_s": 11.515
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 1 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 1 differences\n  JSONL 127.0.10.43|127.0.10.43|19080|False Detections: [{\"Kind\": \"service\", \"Name\": \"jQuery\", \"Version\": \"3.6.3\", \"Category\": \"JavaScript libraries\", \"Confidence\": 95, \"Cpe\": \"cpe:2.3:a:jquery:jquery:3.6.3:*:*:*:*:*:*:*\", \"Source\": \"builtin+wappalyzer\", \" -> [{\"Kind\": \"service\", \"Name\": \"jQuery\", \"Version\": \"3.6.3\", \"Category\": \"JavaScript libraries\", \"Confidence\": 95, \"Cpe\": \"cpe:2.3:a:jquery:jquery:3.6.3:*:*:*:*:*:*:*\", \"Source\": \"builtin+wappalyzer\", \"\n"
+    }
+   ]
+  }
+ }
+}

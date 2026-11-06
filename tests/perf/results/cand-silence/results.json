@@ -1,0 +1,115 @@
+{
+ "label": "cand-silence",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "tarpit": {
+   "args": [
+    "-Target",
+    "127.0.11.1-20",
+    "-Port",
+    "19090,19091",
+    "-TimeoutMs",
+    "1000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.787,
+      "targets_s": 0.191,
+      "scan_s": 10.76
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.391,
+     "cpu_s": 19.202,
+     "user_s": 18.281,
+     "sys_s": 0.921,
+     "maxrss_mb": 457.9,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.884,
+      "targets_s": 0.148,
+      "scan_s": 10.975
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.867,
+     "cpu_s": 19.929,
+     "user_s": 18.987,
+     "sys_s": 0.943,
+     "maxrss_mb": 453.6,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.766,
+      "targets_s": 0.161,
+      "scan_s": 10.725
+     },
+     "requests": 280,
+     "rows": 40,
+     "web": 0,
+     "open": 40,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 12.471,
+     "cpu_s": 19.083,
+     "user_s": 18.187,
+     "sys_s": 0.895,
+     "maxrss_mb": 438.4,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 12.471,
+    "wall_s_min": 12.391,
+    "wall_s_max": 12.867,
+    "cpu_s": 19.202,
+    "cpu_s_min": 19.083,
+    "cpu_s_max": 19.929,
+    "maxrss_mb": 453.6,
+    "requests": 280,
+    "rows": 40,
+    "web": 0,
+    "phases": {
+     "startup_s": 1.787,
+     "targets_s": 0.161,
+     "scan_s": 10.76
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 40 rows reference, 40 rows candidate, 0 differences",
+     "report": "golden: 40 rows reference, 40 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

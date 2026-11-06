@@ -1,0 +1,699 @@
+# Invoke-WebInventory.ps1 v2.3.1
+
+Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
+
+With `-Store`, every complete run also goes into an inventory store with first/last seen, versions and a change log per
+service, kept in Windows' built-in ESENT database engine and backed by an append-only, hash-chained archive of every run
+(see "Inventory store"). The store's inventory can be joined offline with NVD, CISA KEV and FIRST EPSS files to list
+the known vulnerabilities of what was found (see "What v2.3 adds").
+
+It does not exploit, brute-force, guess credentials or enumerate paths. The optional `-IdentifyPaths` set is a fixed list
+of 16 public landing/version pages. The only credentials it ever uses are an SNMP community or SNMPv3 user you supply
+with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM message.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `Invoke-WebInventory.ps1` | The tool (single file; embeds the engine, 512 curated rules and the reviewed CPE supplement) |
+| `WebInventory.rules.recog.json` | 3,098 Rapid7 Recog rules converted to .NET regex (BSD-2), including SNMP sysDescr/sysObjectID, SMB NativeOS/NativeLM and JARM fingerprints. Auto-loaded when it sits next to the script |
+| `WebInventory.rules.wappalyzer.json` | 7,824 webappanalyzer (Wappalyzer fork) rules covering 5,926 technologies: JS libraries, CMS, frameworks, analytics, CDNs, e-commerce (GPL-3.0 data). Auto-loaded |
+| `WebInventory.example.psd1` | Example settings file for scheduled runs (`-ConfigFile`) |
+| `THIRD-PARTY-NOTICES.txt` | Licences, upstream commits and how to regenerate each pack |
+| `LICENSE-GPL-3.0.txt` | Full GPL-3.0 text, which must travel with the Wappalyzer pack |
+| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3 and v2.3.1 A/B runs showing the scan path unchanged |
+| `Test-WebInventoryStore.ps1` | One-off validation of the inventory store on the scanner host (ESENT vs portable engine, hard kills, verify, rebuild) |
+| `SHA256SUMS.txt` | Hashes of the files above |
+
+All three rule sets load together: 11,434 rules, about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
+
+### The Wappalyzer pack
+- **Generated from** enthec/webappanalyzer commit `d91f7e510e93` (2026-10-19), passive HTTP patterns only:
+  - headers, cookies, meta tags, `<script src>`
+  - HTML/inline-script/text markers, URL, certificate issuer, robots.txt
+
+  Wappalyzer's `js` (JavaScript variable) and `dom` (CSS selector) checks need a browser and are skipped, so libraries detectable only that way won't appear. All 7,824 converted patterns compile under .NET.
+- **Semantics kept from Wappalyzer:**
+  - JavaScript regex dialect, translated (identity escapes such as `\_`, `[^]`).
+  - `^`/`$` anchor to the whole value, not each line.
+  - Version capture (946 rules), CPE (1,294 rules: 867 upstream, 427 from the v2.3.1 CPE supplement), `implies`/`excludes`/`requires`, and `requiresCategory`. That last one matters: 100 rules, mostly shipping carriers matched on page text, count only when something in the required category (e-commerce) is also detected, which stops a page that merely mentions "DHL" from being flagged.
+  - Implied technologies inherit kind, category and CPE (IIS → Windows Server goes to `OsHint`).
+- **Licence:** GPL-3.0. Using it inside your organisation creates no obligations. If you pass the pack outside the organisation, keep `LICENSE-GPL-3.0.txt` and the notice with it; the upstream commit is recorded inside the pack for source traceability. The script itself only reads the pack as data at runtime.
+- **Refresh:** `git clone https://github.com/enthec/webappanalyzer`, run `.\Invoke-WebInventory.ps1 -ImportRules .\webappanalyzer\src -ImportOutput .\WebInventory.rules.wappalyzer.json`, then `-TestRules`. The same pattern works for Recog with `-ImportRules .\recog\xml`. Rules that won't compile or that fail their own published example are dropped and listed in the error log.
+
+## Quick start
+
+```powershell
+.\Invoke-WebInventory.ps1 -SelfTest                                   # 128 offline checks on Windows (121 without ESENT)
+.\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                    # expand + scope-check only; sends nothing
+.\Invoke-WebInventory.ps1 10.0.0.5
+.\Invoke-WebInventory.ps1 10.0.0.0/24 web01:8443 '10.0.1.1-50' -Port web -Exclude 10.0.0.1 -Scope 10.0.0.0/16
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -PortFile .\ports.txt -ScopeFile .\authorized.txt -Pace Polite -BaselineCsv auto
+.\Invoke-WebInventory.ps1 -TargetFile .\hostports.txt -IdentifyPaths -ProbeSans -ReverseDns -Tag Weekly-DMZ
+.\Invoke-WebInventory.ps1 -ConfigFile .\WebInventory.example.psd1    # scheduled-task style
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore   # ...and keep history (see "Inventory store")
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore
+.\Invoke-WebInventory.ps1 -HostFile .\dmz.txt -Proxy http://jump01:3128 -ProxyCredential (Get-Credential)
+```
+
+Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share it):
+
+- Single hosts and lists: an IP or hostname, `[IPv6]:port`, URLs, `host:80,443,8000-8100`, `host:web`.
+- Ranges: `10.0.0.0/24`, `10.0.0.1-10.0.0.50`, `10.0.0.1-50`, nmap octets `'192.168.0-3,7.1-254'`.
+- Port keywords: `web` (26 common web ports), `web-extended` (114), `mgmt` (BMC and appliance consoles), `all`.
+- Protocol URLs for services on other ports: `smb://fs01:4445`, `rdp://[fe80::5]:3390`, `snmp://10.0.0.9:1161` (with the
+  matching `-Smb`, `-Rdp`, `-Snmp`).
+
+PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.3.1 adds: CPE coverage
+
+`-StoreQuery Vulnerabilities` can only see services that fingerprinting gave a CPE, ideally with a version. v2.3.1
+widens that without changing how anything is detected:
+
+- **More rules carry a CPE.** 715 more rule outputs now name their product in NVD's terms (149 built-in, 139 Recog,
+  427 Wappalyzer). Products with a CPE: 906 -> 1,327 of 7,743; products whose rules also capture a version:
+  421 -> 598.
+- **Every name was checked against NVD and reviewed by hand.** Candidates came from the NVD CPE Dictionary (product
+  names, titles, vendor web sites) and the vendor:product pairs NVD's CVE records actually use. Left without a CPE on
+  purpose:
+  - plugins whose only candidate was the platform (a WordPress plugin is not WordPress core);
+  - third-party services a page embeds (analytics, chat, payment, CDN): the scanned host does not run them;
+  - generic names (`FTP server`, `HTTP`) and hardware families without a model;
+  - general-purpose operating systems (Windows releases from NTLM builds, Linux kernels, distributions): the patch level
+    cannot be seen remotely, so every CVE of the release would be listed;
+  - rules whose "version" is not the product's version: the rsync protocol version, the Oracle ILOM web-server version,
+    a major number only (`Undertow/1`, OXID `Version 6`), or a version written into the rule as a guess (an IOS login
+    realm mapped to `11`).
+- **Wrong upstream CPEs corrected.** The Wappalyzer data mapped Mattermost to a Jenkins plugin (`jenkins:mattermost`) and
+  AWS Certificate Manager to AWStats, and gave Sitecore, Okta and Salesforce a product of `*`. 12 rule outputs were
+  corrected or cleared.
+- **Former NVD names count.** NVD files one product under several names over time: Pulse Connect Secure became
+  `ivanti:connect_secure`, concrete5 became `concretecms:concrete_cms`, NGINX moved to `f5:nginx`, NetScaler has software
+  and firmware entries. The vulnerability join now compares each service's CPE under every name of its product (183
+  groups: retired names from the NVD dictionary plus reviewed renames). A row found through another name says so in
+  `Match`, e.g. `range (as concretecms:concrete_cms)`. Retired names that encode a version or a model (`ios_xe_2.1`,
+  `vpn_3015_concentrator`) are not treated as aliases.
+- **No KEV flood from operating systems.** A service that hides its version still gets its KEV-listed CVEs, except on a
+  general-purpose operating system (Ubuntu, Debian, RHEL, Windows, macOS, the Linux kernel...; 36 names): there every KEV
+  entry of the release would be listed for every host. Those rows are counted in the summary and the provenance file
+  instead. Appliance systems (FortiOS, PAN-OS, IOS, Junos, ESXi) are not on that list. On the lab store this removed 453
+  of 560 KEV rows, all from an `(Ubuntu)` or `(Debian)` token in a `Server` header.
+- **How it is wired.** One reviewed table, `cpe-supplement` (embedded in the script, version 2026.11.06, built from the
+  NVD CPE Dictionary of 2026-11-04), has four parts: `fill` (product name -> CPE), `replace` (known-wrong CPE -> right
+  one), `aliases` and `platforms`. The built-in rules carry their CPEs directly. `-ImportRules` applies `fill` and
+  `replace` to Recog and Wappalyzer data (only where a rule has no CPE, or still has exactly the wrong one) and notes it
+  in the pack's `source`, so a pack regenerated from upstream keeps them. The shipped packs were regenerated from the
+  same upstream commits and are identical to v2.3.0's apart from CPEs. The Vulnerabilities query loads `aliases` and
+  `platforms` and records the table version in its provenance file. `tools/cpe/` (development suite) rebuilds the table
+  from a newer NVD dictionary; only names nobody has reviewed yet come up for review.
+- **Effect on scan results:** only the `CPEs` column and the CPE of each JSONL detection change, for services these
+  products run (the evidence text of a detection can list the same items in a different order). Verified with an A/B
+  lab scan (see "How this was validated").
+
+## What v2.3 adds
+
+All new probes are opt-in, so a scan without the new switches sends exactly what v2.2 sent. The probe code is a third
+C# block compiled only when one of them is used. New output columns are appended after `Notes` (existing CSV
+consumers keep their column positions): `DeviceName`, `Domain`, `ProtocolInfo`, `Jarm`, `Ja4s`.
+
+### Known vulnerabilities, offline: `-StoreQuery Vulnerabilities`
+Joins the CPEs of the current inventory with files you download yourself; nothing is fetched and nothing is sent to a
+target.
+
+```powershell
+# NVD CVE JSON 2.0 feeds (nvdcve-2.0-YYYY.json.gz for every year + nvdcve-2.0-modified.json.gz), CISA KEV, FIRST EPSS
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Vulnerabilities -NvdFeed D:\feeds\nvd `
+    -KevFile D:\feeds\known_exploited_vulnerabilities.json -EpssFile D:\feeds\epss_scores-current.csv.gz
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Vulnerabilities -NvdFeed D:\feeds\nvd -KevFile ... -Filter 'Kev=Yes'
+```
+
+- **Output:** `WebInventory_store_vulnerabilities_<stamp>.csv`, one row per service and CVE: `Host`, `IP`, `Port`, `Url`,
+  `Status`, `Products`, `Cpe`, `Cve`, `Kev`, `KevDateAdded`, `KevDueDate`, `KevRansomware`, `Epss`, `EpssPercentile`,
+  `CvssScore`, `CvssSeverity`, `CvssVersion`, `Published`, `Match`, `EntityId`, `Description`. Sorted KEV first, then
+  EPSS, then CVSS. A `.provenance.json` sidecar records each feed's file name, SHA-256 and record count, the KEV
+  catalog version and the EPSS model version and score date, so a report can be tied to exactly the data behind it.
+- **Matching:** CPE 2.3 vendor and product must match; versions are compared numerically, including the NVD update
+  field (`openssh:9.3:p1` matches a service reporting `9.3p1`) and `versionStart*/versionEnd*` ranges; pre-release words
+  (`rc`, `beta`) sort before the release and vendor letters (`1.0.2k`, `p1`) after it; `2.4` equals `2.4.0`. When the
+  feed lists a CVE several times (yearly feed plus the modified feed), the most recently modified record decides.
+  Rejected CVEs are skipped.
+- **`Match` says how sure the row is:** `version` or `range` (the service's version is affected), `all-versions` (the
+  NVD entry names the product without a version limit), `... (platform not verified)` (the NVD configuration also
+  needs a platform, for example PHP *on Windows*, that the service's other CPEs do not show), and `product-only` (the
+  service hides its version). `product-only` rows are listed only for CVEs on the KEV list; the summary line counts the
+  rest.
+- **What it cannot see:** distribution packages with backported fixes report the upstream version, so a patched
+  Debian/RHEL package can still match; a service only matches when fingerprinting produced a CPE with a version.
+- Measured on this build's test data: 447,034 NVD records (all years 2002-2026 plus the modified feed, 253 MB
+  compressed) in about 60 s; KEV 1,766 entries; EPSS 398,142 rows.
+
+### Scanning through a jump host: `-Proxy`
+`-Proxy http://jump01:3128` sends every TCP connection of the scan (connect test, HTTP, TLS probes, JARM, SMB, RDP,
+screenshots) through an HTTP CONNECT proxy; `-ProxyCredential` adds Basic authentication. Port state comes from the
+proxy's answer: 200 = open, 502/503 = closed (or filtered when Squid reports a timeout/unreachable errno), 504 or no
+answer = filtered. The proxy must answer CONNECT only after it has reached the target, as Squid, tinyproxy and Apache
+`mod_proxy_connect` do. Names still resolve on the scanning host, so give IP addresses when the jump host sees a
+different DNS. Before scanning, the script checks the proxy is reachable and that it does not demand authentication
+that was not supplied. A CONNECT the proxy refuses (for example Squid's default rule that allows only port 443) is
+logged as a `PROXY` error and that check stays unfinished for `-Resume`; the run summary counts them. `-Snmp` (UDP)
+cannot go through a CONNECT proxy and is refused with `-Proxy`. Lab test: a proxied scan of the regression lab gave
+field-for-field the same results as the direct scan (26 rows, 0 differences), with and without proxy authentication.
+
+### TLS fingerprints: `-TlsFingerprint`
+- **JARM** (salesforce/jarm, BSD 3-Clause): 10 extra ClientHellos per TLS service, the fuzzy hash in `Jarm`. Same
+  packets, parsing and hash as `jarm.py`; on six lab TLS services the values matched `jarm.py` exactly. As in `jarm.py`,
+  a timeout in any of the 10 probes yields 62 zeros; the script retries the set once before recording that.
+- **JA4S** (FoxIO JA4+, FoxIO License 1.1): computed from the ServerHello the existing TLS scan already receives (no
+  extra traffic), in `Ja4s`. **Licence:** FoxIO permits use inside your own organisation that does not monetise it;
+  using JA4+ to provide value to paying customers needs a FoxIO OEM licence, and FoxIO states the JA4+ methods are
+  patent pending (`THIRD-PARTY-NOTICES.txt`). `-NoJa4s` keeps JARM and leaves JA4S out.
+  It describes the server's reply to WebInventory's first accepted ClientHello (the TLS 1.3
+  one where supported), so compare it with other WebInventory scans rather than with JA4S from passive sensors, whose
+  clients send different ClientHellos. Checked against FoxIO's `ja4.py` on captured handshakes.
+- JARM and JA4S also feed the rules (`tls.jarm` from the Recog JARM database). In the store they are gated by
+  `-TlsFingerprint` (and JA4S separately by `-NoJa4s`): a run without it keeps the previous values, and the first run
+  with it records `Enriched`, not `Changed`.
+
+### SMB, RDP and SNMP: `-Smb`, `-Rdp`, `-Snmp`
+Each adds one check per target host (TCP 445, TCP 3389, UDP 161); `smb://`, `rdp://`, `snmp://` URLs point at other
+ports. Rows have `Service`/`Scheme` `smb`, `rdp` or `snmp` and are printed even without `-ShowNonWeb`.
+- **SMB:** an SMB2/3 NEGOTIATE (dialects 2.0.2 to 3.1.1) for the dialect and signing mode, one SESSION_SETUP carrying
+  an NTLM NEGOTIATE to read the server's CHALLENGE (NetBIOS and DNS computer and domain names, forest, Windows build),
+  and a separate SMBv1 NEGOTIATE ("NT LM 0.12") to see whether SMBv1 is still enabled (SMBv1 servers also give
+  NativeOS/NativeLM). No login, no null session, no share listing. `DeviceName` and `Domain` come from the CHALLENGE,
+  `ProtocolInfo` holds `dialect`, `signing`, `smbv1` and `osBuild`. Flags: `SMBv1`, `SMBSigningNotRequired`.
+- **RDP:** the X.224 connection request offering TLS and CredSSP shows which security the server picks; TLS gives the
+  RDP certificate (all certificate columns and flags apply, `CertSource` = `rdp`); a CredSSP TSRequest with an NTLM
+  NEGOTIATE returns the CHALLENGE (names, domain, build). Two more connection requests check whether NLA is enforced
+  (the server answers HYBRID_REQUIRED_BY_SERVER to a TLS-only request) and whether standard RDP security is still
+  accepted. Flags: `RdpNlaNotRequired`, `RdpStandardSecurity`. The TLS handshake goes through Schannel, so a server that
+  only speaks TLS 1.0 yields no certificate on a host where TLS 1.0 is disabled.
+- **SNMP:** a GET of sysDescr (in `Banner`), sysObjectID, sysName (`DeviceName`) and sysLocation. v1/v2c only with the
+  `-SnmpCommunity` you give; SNMPv3 with `-SnmpCredential` (user + authentication password; MD5, SHA or SHA-256 with
+  `-SnmpAuthProtocol`) and optionally `-SnmpPrivPassword` (AES-128 or DES with `-SnmpPrivProtocol`). With no
+  credentials at all, `-Snmp` sends only the unauthenticated SNMPv3 engine discovery and records the engine ID.
+  WebInventory never tries a default community. Silence is `filtered` (no row), an ICMP port-unreachable is `closed`.
+  Community strings and passwords are written to neither the logs nor `run.json` (the parameter dump shows
+  `<redacted>`). Flag: `SnmpV1V2c` (cleartext community).
+- **Identification:** the Windows build from NTLM maps to the Windows release (`OsHint`), with 31 builds from
+  Windows 2000 to Windows 11 25H2 / Server 2025 (one build number is shared by a client and a server release, so both
+  names are given). sysDescr and sysObjectID go through the built-in rules (Cisco IOS/IOS XE, Junos, Windows, Linux)
+  and the 630 Recog SNMP fingerprints; SMB NativeOS/NativeLM through Recog.
+- Tested against impacket's SMB server (SMB1 and SMB2), a lab RDP listener (NLA, TLS-only, legacy and RDP-only modes)
+  and a pysnmp agent (v1, v2c, v3 with SHA/AES, SHA-256, MD5/DES, noAuthNoPriv, wrong password); the SMB packets decode
+  cleanly in Wireshark's dissector.
+
+### Screenshots: `-Screenshot`
+After the scan, each web service is opened in the Microsoft Edge already on the host (`-BrowserPath` for another
+Chromium browser), headless, one fresh temporary profile per page, `-ScreenshotThreads` at a time (default 4),
+`-ScreenshotSize` (default 1366x768), `-ScreenshotTimeoutSec` per page (default 30). The page is driven over the
+browser's DevTools protocol on 127.0.0.1 (navigate, wait for the load event, capture).
+- **The browser only reaches what was scanned.** It runs behind a loopback proxy that forwards only to the origins this
+  run scanned on that IP, always to the IP the scanner used, and answers 403 to everything else: CDNs, web fonts,
+  analytics, other hosts, and the browser's own background traffic. With `-Proxy` the allowed connections go through
+  the jump host too. Before the first page, a canary request checks that the browser really uses that proxy (an
+  enterprise policy can force its own proxy or disable headless mode or remote debugging); if not, no screenshots are
+  taken and the error log says why.
+- **Output:** PNGs in `WebInventory_<RunId>_screenshots\`, an index `WebInventory_<RunId>_screenshots.csv` (`Url`,
+  `File`, `Sha256`, `Status`, `PageTitle`, `PageRequests`, `BlockedOrigins` the page asked for, `Ms`), all in the
+  manifest, and the image in the HTML report's row details. Pages that need a login prompt (HTTP Basic) are recorded
+  as failed with the browser's reason. Screenshots stay in `-OutputDir`; they are not copied into the store.
+
+### Inventory store additions
+- **Manual merge and split.** `-StoreMerge <idA>,<idB> -Reason '...'` folds a service into the one it continues (a
+  missed address-move pairing: one service ended, the other began). It is refused when the two were ever seen in the
+  same run. The earlier entity keeps its id; the later one's history is attached as a `Rekeyed` event with rule
+  `manual-merge`, and the earlier one's absences from that point on are dropped. `-StoreSplit <id> [-SplitAt <RunId>]
+  -Reason '...'` undoes the latest (or the given run's) pairing, automatic or manual: from that run on the history
+  becomes a separate service again, and the original goes back to its old address with its missing/retired history
+  recomputed from the archived check lists. A split is refused when something has since been seen at the old address.
+  Ids are the `EntityId` column of Inventory and History queries.
+- **Corrections are ledger entries, never rewrites.** Each one is `archive\corrections\<seq>-<op>\correction.json`
+  (who, when, why) plus its derived changes, chained into the ledger like a run and applied at its position whenever
+  the database is rebuilt or verified. `Merged` and `Split` events carry the reason in `Note`.
+- **Older runs:** `-ImportRun <older run> -Backfill` inserts runs older than the newest one. The run is archived and a
+  `rebase` ledger entry records the new order (runs by start time; corrections stay right after the run they followed)
+  with every position's digests; the working database is replayed in that order. Nothing already in the ledger
+  changes, and `-VerifyStore` replays both the original order and the rebase. A correction whose services no longer
+  exist in the new order is recorded as void. Cost: a full replay (about the time of `-RebuildStore`).
+- **Archive growth:** `-SnapshotEvery N` (kept in `STORE.json`) keeps the full `state.jsonl.gz` for the first run and
+  every N-th run; the others keep their change log. `-AsOf` on a run without a snapshot replays the history in memory
+  up to that run (same rows, measured in the self-test and the scenario test). State digests are still computed and
+  recorded for every run, so verification is unchanged.
+- **Anchoring the ledger:** `-AnchorEventLog` writes each new ledger head to the Windows Application log (source
+  `WebInventory`, event 4100; register the source once, as administrator, with `-RegisterEventSource`).
+  `-AnchorCertificate <thumbprint>` signs each new ledger line with a certificate from `CurrentUser\My` or
+  `LocalMachine\My` (detached CMS/PKCS#7, SHA-256, `archive\anchors\<seq>.p7s`). Both settings are kept in `STORE.json`,
+  so scheduled scans keep anchoring without the switches (`-AnchorEventLog:$false` / `-AnchorCertificate ''` turn them
+  off). `-VerifyStore` checks every signature against its ledger line, reports entries since signing began that have
+  none, and compares the event-log entries with the ledger (an entry for a seq the ledger no longer has, or with a
+  different head, fails verification).
+- **Enriched events:** when a newly enabled probe fills fields that were empty and the previous version was made
+  without that probe (for example the first run with `-TlsFingerprint` or `-Options`), the event is `Enriched` instead
+  of `Changed`, so turning a probe on does not look like every service changed.
+- Query output files get a `_2`, `_3`... suffix instead of overwriting a file from the same second. Inventory queries
+  filter while reading instead of loading every row first.
+
+## Inventory store (v2.2): history across runs, nothing to install
+
+`-Store <folder>` turns single scans into an inventory with history: when each service was first and last seen, every
+version of its fingerprint, and a change log (added, changed, missing, retired, reappeared, moved). It is built for
+one scanner host and uses only what Windows already has.
+
+```powershell
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -ScopeFile .\authorized.txt -Store D:\WebInventoryStore   # scan, then add the run
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -ImportRun D:\Scans\2026-*                           # add earlier v2.x runs, oldest first
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Inventory                               # current inventory -> CSV + HTML
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Changes -WithinDays 7 -ChangeType Added,Retired
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Inventory -Filter 'Technologies=Jenkins','CertDaysLeft<30'
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery History -Filter 'Host=web01.corp.local'
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Inventory -AsOf '2026-06-30'           # as it stood then
+.\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -VerifyStore                                        # audit the whole store
+```
+
+### How it is built
+- **Working database: ESENT.** The Extensible Storage Engine (`esent.dll`) ships with every Windows version and is
+  what Windows itself uses for Active Directory, Windows Update and Search. The script calls it directly (P/Invoke from
+  the inline C#; no ManagedEsent DLL, nothing installed). It gives transactions, crash recovery from its own logs and
+  keyed lookups: each sighting costs one lookup and one small last-seen update, and new versions and change events
+  are written only for services that changed. One process opens a store at a time; a
+  second one waits up to 30 s for the `LOCK` and then reports the store as busy.
+- **Long-term record: the archive.** Every ingested run is copied into `archive\runs\yyyy\MM\<RunId>\` (results JSONL,
+  CSV and HTML report, the list of checks made, `run.json`, logs, manifest, all gzip-compressed where large) and
+  recorded in `archive\ledger.jsonl`. Each ledger line holds the SHA-256 of every archived file and of the line before
+  it, so editing, removing or reordering anything breaks the chain. The derived `changes.jsonl.gz` (that run's events)
+  and `state.jsonl.gz` (the whole inventory after that run) are plain JSON, readable without this tool.
+- **The database is disposable.** It is a deterministic function of the archive. Deleting `db\` makes the next open
+  rebuild it; `-RebuildStore` does that on purpose (and switches engine with `-StoreEngine`), checking every run's
+  change and state digest against the ledger. `-VerifyStore` checks the chain, every archived file, rebuilds the whole
+  history in memory and compares it run by run, then compares the live database.
+- **The scan is untouched.** The store has its own C# engine, compiled only when the store is used, after the scan
+  has finished; the scan engine is the v2.1.0 code unchanged. Ingest starts once the run's files are final (results,
+  logs, manifest). An ingest failure never affects the scan output: the run stays in `-OutputDir` and can be added
+  later with `-ImportRun`.
+- **Portable engine.** `-StoreEngine File` keeps the same data in one file (in memory while open, saved atomically). It
+  is what PowerShell 7 on Linux/macOS uses, and the reference the ESENT engine is checked against: `-SelfTest` on
+  Windows requires both engines to produce byte-identical digests.
+
+### What counts as a change
+- **Identity.** A service is `Host` + `IP` + `Port` (+ virtual-host flag). A DNS name keeps its history when its
+  address changes, and so does a service scanned by address when it moves, if the move is unambiguous: the same
+  reverse-DNS name, or the same certificate, title, server and products, held by exactly one service that disappeared
+  and one that appeared in the same run, and by no other service seen in that run. These show up as `Rekeyed` with the
+  rule used and the old and new address.
+- **Versions.** 65 fingerprint fields define a version (products, CPEs, title, server, headers, TLS, certificate,
+  flags, banner...). Per-sighting detail never creates one: response time, body hash and length (dynamic pages), the
+  scan clock, `CertDaysLeft`, notes. Two values are compared in a normalised form: banner clock/date text (SMTP and FTP
+  greetings carry the time) and the day count in `CertExpiring:<n>d`.
+- **Probes that were switched off.** A run with `-NoTlsScan`, `-NoFavicon`, `-NoExtras`, or without `-Options`,
+  `-IdentifyPaths`, `-ReverseDns`, `-TlsFingerprint`, keeps the previous values of the fields only that probe collects instead of
+  recording them as removed. Changes made while the probe set differs from the previous version's are marked in
+  `ProfileChange`.
+- **Incomplete observations.** A row the scanner marked `incomplete:` (local socket exhaustion) updates last-seen but
+  never creates a version.
+- **Absence is scoped.** A service is `Missing` only when the run actually checked its host and port (the run's
+  `_progress.txt`); a run of a different subnet, an `-Exclude`d host or a check that errored says nothing about it.
+  SAN virtual hosts only go missing in runs made with `-ProbeSans`. After `-RetireAfter` consecutive in-scope runs
+  without it (default 3) a service is `Retired`; if it comes back it is `Reappeared` with whatever changed.
+- **Run order.** Runs are applied in start order; a run older than the newest one in the store is refused unless
+  imported with `-Backfill` (see "What v2.3 adds"). Incomplete
+  runs (interrupted, `-MaxRuntimeMinutes`) are not added; resume them and they are added when they complete, or import
+  one as partial with `-ImportRun ... -Force`.
+
+### Queries
+`-StoreQuery Inventory | Changes | History | Runs | Vulnerabilities` writes `WebInventory_store_<query>_<stamp>.csv` to `-OutputDir`
+(Inventory also gets the HTML report) and with `-PassThru` returns the rows as objects.
+- `-Status Active,Missing,Retired,All` (Inventory default `Active,Missing`), `-ChangeType Added,Changed,Enriched,Missing,Retired,Reappeared,Rekeyed,Merged,Split`.
+- `-Since`, `-Until`, `-WithinDays`: the window for events (Changes/History), last-seen (Inventory) or start time (Runs).
+- `-AsOf <date>`: the inventory exactly as the archive recorded it after the last run started by then.
+- `-Filter 'Field<op>Value'`, all clauses must match; several as an array or joined with ` -and `. `=` matches the whole
+  value or one `;` item (`Technologies=nginx`), and a flag name matches its detail (`Flags=CertExpiring`); `~` contains;
+  `!=`, `!~`; `<`, `<=`, `>`, `>=` compare numbers, then dates, then text. `Any~text` searches every column.
+  `CertDaysLeft` is recomputed at query time (or relative to `-AsOf`).
+
+Inventory columns: `Status`, `Host`, `IP`, `Port`, `Vhost`, the 65 fingerprint fields, `FirstSeen`, `LastSeen`,
+`LastChange`, `Versions`, `MissingSince`, `MissingRuns`, `RetiredAt`, `FirstRun`, `LastRun`, `EntityId`, and the
+last sighting's `ScannedAt`, `VhostOf`, `BodyLength`, `BodySha256`, `ResponseMs`, `CertDaysLeft`, `Notes`, `ScanTag`.
+Changes/History: one row per changed field (`Field`, `Old`, `New`), plus `Rule`/`OldKey` for moves and `Note` for
+corrections. Runs lists corrections too (`RunId` `correction-<seq>`).
+
+### Operating it
+- **Back up the archive, not the database.** Copy `archive\` and `STORE.json` (append-only, so `robocopy /E /XO`
+  works); `-VerifyStore` works on a copy, even without `db\` and on another machine. The ESENT database is tied to
+  this Windows installation (a newer Windows upgrades it in place, an older one cannot open it); rebuild instead of
+  copying it.
+- **Evidence.** Each ingest prints and logs the new ledger head hash. Recording it outside the store lets anyone later
+  prove the archive up to that run is unchanged; `-AnchorEventLog` and `-AnchorCertificate` do that automatically.
+- **Local disk only.** ESENT needs a local NTFS volume; put the store on the scanner host, not a share.
+- **Validation on your host.** `Test-WebInventoryStore.ps1` runs the self-test, ingests synthetic runs into ESENT and
+  File stores and compares every digest, hard-kills ESENT ingests at four points and checks the repair, then verifies
+  and rebuilds across engines. Run it once on the scanner host and after Windows feature updates.
+
+## What v2.1 changes (performance, measured)
+
+Same probes, same rules, same output, and in the benchmark lab every field matched the reference scan. The work was
+benchmark-driven: a suite measured v2.0.2, a checklist of 19 candidate optimisations was worked through (14 measured,
+most of them A/B tested one at a time), and only the ones that were faster with identical results were kept. `PERFORMANCE.md` has the checklist and all numbers.
+
+| Benchmark (2 vCPU, PowerShell 7.4) | v2.0.2 | v2.1.0 |
+|---|---:|---:|
+| 200 web services on 50 hosts | 39.7 s, 67 s CPU, results differ from reference in every run | 12.4 s, 20 s CPU, identical |
+| Same at 20 ms RTT | 41.9 s | 13.0 s |
+| 4,000 closed ports | 139 s, 202 s CPU, 2.8 GB RAM | 12.1 s, 20 s CPU, 0.46 GB |
+| 40 silent listeners (tarpit / SYN-proxy firewall) | 12.9 s | 8.1 s |
+| 320 filtered ports | 17.4 s | 12.8 s |
+| Target expansion, /18 x 26 ports (425,984 checks) | 3.1 s | 0.7 s |
+
+What changed:
+- **Rule engine:** an Aho-Corasick prefilter over each value. Every rule regex is reduced to the literal text a match
+  must contain (an OR of AND-sets, so alternations work too), and the regex runs only when that text is present. 9,485
+  of 10,668 rules get a prefilter; the rest always run, as before. Equivalence is checked on all 2,335 rule examples.
+- **Dispatcher:** long-lived workers pull checks from a C# scheduler (same per-host cap, round-robin across hosts) and
+  hand results back through a signalled queue. v2.0.2 created a PowerShell instance per check (about 32 ms each) and
+  polled every 20 ms, which kept half a core busy even while waiting. Worker functions are registered once in an
+  `InitialSessionState`; defining them in every runspace made PowerShell background-compile them once per runspace.
+- **Connect:** non-blocking connect plus `Socket.Select` on the worker's own thread. With `BeginConnect`, completions
+  queue behind a busy .NET thread pool; in testing that turned 1,992 of 4,000 closed ports into false "filtered".
+- **TLS warm-up:** the certificate chain engine is initialised once (about 110 ms) before workers start. Without it,
+  dozens of first handshakes initialising it at once stalled for seconds and HTTPS services were lost under load.
+- **Silent listeners:** when plain HTTP and the Schannel handshake both get zero bytes before the timeout, the five raw
+  TLS version probes are sent concurrently instead of one after another (about 3 timeouts per silent port instead of 7).
+  Every probe is still sent.
+- **C# instead of interpreted loops:** HTTP response parsing and observation building, CSV/JSONL row writing (same
+  quoting, formula guard and JSON types), target expansion and `-ListTargets` formatting.
+- **DNS:** a sliding window of 32 lookups, each on its own timeout. One slow name no longer holds up its batch.
+- **Local socket exhaustion:** if the scanner runs out of ephemeral ports or socket buffers, connects back off and
+  retry instead of reporting the port filtered. Anything still skipped is logged, the row's `Notes` says
+  `incomplete: ...`, and the summary warns. Faster scans open connections faster, so this matters more now.
+
+Rejected after testing: a worker ramp-up (no measurable gain) and RTT-derived timeouts (a 1.5 s application was lost
+at 1000 ms and 500 ms timeouts). Not adopted: parallel TLS probes on responsive ports (5 connections at once to one
+port would break the `-MaxPerHost` contract), compiled regexes, keep-alive, and console-output changes.
+
+**Caveat:** measured under PowerShell 7.4 on Linux; Windows PowerShell 5.1 was not available. The removed costs are
+interpreter and dispatch overheads, which are typically larger on 5.1, but run `tests/perf` or a lab VLAN comparison
+on Windows before quoting these numbers.
+
+## What v2.0 changes
+
+### Bugs fixed from v1.0 (found in review, reproduced where possible)
+1. **Cookie flags were wrong.** `"$nm:no-Secure"` is parsed as a drive-qualified variable, so every entry collapsed to `-Secure` and lost the cookie name. Confirmed under PowerShell.
+2. **No size check before expanding a CIDR.** The whole list was built before `-MaxTargets` was checked, so a typo'd `/8` built 16.7M entries. Sizes are now computed from the ranges first.
+3. **`Set-Cookie` from redirect hops was overwritten** by later hops. All hops are now kept.
+4. **SAN parsing depended on the OS language.** It used `X509Extension.Format()`, which is locale-dependent. Now a DER parser (DNS, IPv4/IPv6, email, URI).
+5. **FIPS hosts could not match favicons.** MD5 came back as `FIPS-blocked`. A managed MD5 is now used, for content matching only; SHA-256 uses the platform CNG provider with a managed fallback.
+6. **Results were written only at the end,** so Ctrl+C or a crash lost the run. Rows now stream to CSV/JSONL with a progress file and `-Resume`.
+7. **One host could get 128 parallel connections** (host-major job order). Now there is a `-MaxPerHost` cap and round-robin dispatch.
+8. **Ambiguous TLS protocol selection.** On Windows PowerShell 5.1 (legacy AppContext), `SslProtocols.None` behaviour is unclear. The protocol set is now explicit: TLS 1.0-1.2, plus 1.3 on Server 2022 / Windows 11 with .NET 4.8.
+9. **`Write-Progress` ran every 25 ms,** which is slow on 5.1. It is now throttled to 500 ms, with an ETA.
+
+### Error handling and safety
+- **Fail-closed input.** Any malformed target, exclusion or scope entry stops the run before a packet is sent. `-SkipInvalidInput` overrides this for targets only; exclusions and scope are never partially applied.
+- **Authorised scope.** With `-Scope`/`-ScopeFile`, any target outside scope stops the run (`-DropOutOfScope` to skip them instead). Off-host redirects (`-FollowOffHost`) and SAN vhosts are held to scope and exclusions too.
+- **Typos.** A misspelled parameter (`-Treads 4`) is refused rather than becoming a target.
+- **Preflight logging.** The run log records: .NET release, FIPS policy, Schannel client protocol registry state, execution policy, Authenticode status of the script, SHA-256 of every rule pack, and all effective parameters (marking defaults). The run refuses to start on .NET older than 4.7.2 or if the mmh3 self-check fails.
+- **Retries and watchdog.** `-Retries` re-tries silent ports, which reduces false "filtered" results. A per-check watchdog stops hung workers. `-MaxRuntimeMinutes` stops dispatching cleanly and leaves a resumable progress file.
+- **ReDoS guard.** Every rule regex runs with a 200 ms timeout, and timeouts are counted in the summary. One Recog rule with catastrophic backtracking was caught this way and is dropped at import.
+- **Hostile-content handling.** Scanned hosts control titles and headers. CSV cells starting with `= + - @` are prefixed with `'` to block Excel formula injection (`-NoCsvSanitize` turns this off). Control characters and ANSI escapes are stripped before console output. The HTML report never uses `innerHTML` for data, and the embedded JSON is escaped.
+- **Exit codes and audit evidence.** `0` clean, `1` fatal/refused, `2` completed with logged errors, `3` interrupted or time limit hit. Each run also writes a `_manifest.txt` with SHA-256 of every output and both logs.
+
+### Detection quality
+- **Raw TLS ClientHello probes**, independent of the scanning host's Schannel policy:
+  - version matrix (SSL3 to TLS 1.3) and the cipher chosen per version
+  - ALPN, giving HTTP/2 detection (impossible through .NET Framework's `SslStream`)
+  - weak-cipher acceptance: RC4, 3DES, DES, NULL, EXPORT, anon
+  - the leaf certificate even when Schannel cannot connect
+  
+  Legacy TLS 1.0-only BMCs and printers now show up with certificate and identity instead of vanishing (`SchannelIncompatible` flag).
+- **NULL-probe banner wait on non-HTTP ports.** This identifies SSH, FTP, SMTP, POP3, IMAP, MySQL/MariaDB, VNC, PostgreSQL, Redis and AMQP without sending HTTP to them first.
+- **Plaintext 400 handling.** Any plaintext 400 now also gets a TLS attempt, not just responses containing the nginx, Apache or Go mismatch strings.
+- **One random-path 404 probe** (nmap `FourOhFourRequest`), which surfaces Tomcat, IIS, nginx and Apache versions from error pages. Also: `robots.txt`, `security.txt`, and an optional `OPTIONS` request.
+- **Hostname-based extras.**
+  - Optional SAN virtual-host probing, same IP only, de-duplicated across jobs.
+  - Optional reverse DNS (cached).
+  - With `-AllAddresses`, a hostname's every A/AAAA record is scanned.
+- **Rule engine in C#.** Fields indexed:
+  - headers, cookies, title, body, meta, script src, location, auth
+  - favicon mmh3/MD5, certificate subject/issuer (Go DN format, as Recog uses), SAN, ALPN
+  - banners, identify-path responses
+
+  Rules support AND/NOT conditions, port scoping, version capture, CPE 2.3 output, implies/excludes/requires, and merging across sources (by CPE, by name, and by CPE product + version).
+
+### New fingerprint coverage (475 embedded rules)
+- **Microsoft stack:** IIS/HTTP.sys/WinRM, Exchange (OWA version header and cookies), SharePoint, AD FS, RD Web, Windows Admin Center, SSRS/PBIRS, ASP.NET/MVC/Core, and AD CS Web Enrollment (`ADCSWebEnrollment` flag, relevant to ESC8).
+- **Edge and VPN:** FortiGate/FortiOS, Palo Alto GlobalProtect, Cisco ASA, Ivanti Connect Secure, Citrix Gateway/StoreFront/ADC, F5 BIG-IP (LTM/APM/ASM/TMUI), SonicWall, Check Point, Sophos, WatchGuard, pfSense/OPNsense.
+- **Out-of-band management and infrastructure:** iDRAC, iLO, XClarity, Supermicro, CIMC, ESXi/vCenter/Horizon, Proxmox, Nutanix, NetApp, Synology, QNAP, Veeam, APC, Niagara/Metasys/SIMATIC.
+- **DevOps and monitoring:** Jenkins, GitLab, Gitea, Atlassian (versions via meta tags and applinks), SonarQube, Nexus, Artifactory, Kubernetes/Docker/registry, Grafana, Kibana/Elasticsearch, Prometheus, Splunk, Graylog, Zabbix, PRTG, SolarWinds, Nessus/Tenable.sc/Nexpose.
+- **CDN/WAF/LB:** Cloudflare, Akamai, CloudFront, Azure Front Door/App Gateway, Imperva, Fastly, AWS ELB.
+- **File transfer:** MOVEit, GoAnywhere, Serv-U, CrushFTP.
+- **Printers, cameras and phones:** HP, Xerox, Canon, Brother, Konica, Ricoh, Lexmark, Kyocera; Hikvision, Axis; Polycom.
+- **Hygiene flags:**
+  - `DefaultPage`, `DirectoryListing`, `PhpInfoExposed`, `DefaultCert`, `DevServer`, `APIDocs`, `ShadowIT`, `MgmtInterface`
+  - TLS and certificate: `WeakTLS`, `WeakCipher`, `CertExpired`/`CertExpiring`, `SelfSigned`, `WeakSig`, `WeakKey`, `CertNameMismatch`, `CertUntrusted`
+  - HTTP: `CleartextAuth`, `PlainHttp`, `RiskyMethods`
+
+### Quality of life
+- `-Pace Polite|Normal|Fast` presets.
+- `-ConfigFile` (data-only `.psd1`; command line wins; unknown keys refused).
+- `-ListTargets` dry run, `-Resume`, `-MaxRuntimeMinutes`.
+- `-BaselineCsv auto` writes a field-level delta: NEW / REMOVED / CHANGED.
+- Offline HTML report: filter, sort, drill-down, light/dark, phone width.
+- `-PassThru` objects for the pipeline.
+- `-Quiet`, `-NoProgress`, `-ShowNonWeb`, `-Tag`.
+- Rule tooling: `-SelfTest`, `-TestRules`, `-ImportRules` (Recog / webappanalyzer), `-ExportRules`.
+
+## Outputs (in `-OutputDir`; logs always in the current directory)
+`WebInventory_<RunId>.csv` (78 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
+
+Columns that matter most for a CMDB import:
+- **Identity:** `Host`, `IP`, `Port`, `Service`, `Url`/`FinalUrl`, `Title`, `Server`
+- **Fingerprint:** `Products` (name + version), `CPEs` (CPE 2.3), `Categories`, `OsHint`, `Hardware`
+- **TLS and certificate:** `TlsSupported`, `CertSubject`/`CertSANs`/`CertNotAfter`/`CertSha256`
+- **Review:** `Flags`
+
+CPEs built from banners are hints: distros backport fixes without changing version strings.
+
+## Custom rules
+`-ExportRules .\mine.json` writes the embedded pack. Edit it, rename to `WebInventory.rules.<name>.json` and keep it next to the script (auto-loaded) or pass `-RulesFile`. A minimal rule:
+```json
+{"id":"acme:portal","f":"title","r":"^ACME Portal v([\\d.]+)","n":"ACME Portal","c":"Web application","v":"{1}","p":"cpe:2.3:a:acme:portal:{v}","k":90,"ex":"ACME Portal v4.2","exv":"4.2"}
+```
+`f` fields:
+- `header:<name>`, `title`, `body`, `meta:<name>`, `scriptsrc`, `cookiename`, `cookie:<name>`, `setcookie`, `auth`, `location`, `status`, `url`
+- `favicon.mmh3`, `favicon.md5`, `cert.subject`, `cert.issuer`, `cert.san`, `alpn`
+- `banner`, `banner.ssh|ftp|smtp|pop3|imap|mysql`, `robots`, `path:<path>.<field>`
+
+Other keys: `o` (`i` ignore case, `s` dot-all), `and` (list of `{f,r,not}`), `ports`, `out` (several outputs with `t`: service/os/hw), `im`/`xs`/`rq`, `flag`. Run `-TestRules` after editing; every rule with `ex` is checked.
+
+## Operational notes
+- **Signing and placement.** Sign the script (`Set-AuthenticodeSignature`), run it under AllSigned/RemoteSigned, and keep it plus the rule packs in a write-protected folder. The run log records the signature status and pack hashes, so tampering shows up.
+- **Evidence.** Run with `-ScopeFile` that mirrors your written authorisation, and keep run log, error log and manifest together as the record of each run. With `-Store` this happens automatically: the archive keeps them per run and the ledger chains their hashes; `-VerifyStore` proves them intact, and the ledger head printed after each ingest can be recorded somewhere outside the store.
+- **Inventory review.** `-StoreQuery Inventory` is the current inventory with first/last seen; `-StoreQuery Changes -WithinDays 30` lists additions and removals for review; `-AsOf` answers "what did we have on date X" from the archive.
+- **Scheduled tasks.** Use `-ConfigFile` with `-Quiet -NoProgress`. Alert on exit code 1 or 3; review 2.
+- **Air-gapped enclaves.** If HTTPS handshakes are slow there, Windows is trying to fetch intermediate certificates (AIA). The raw TLS probe is unaffected; consider the "Turn off Automatic Root Certificates Update" policy on the scanner host.
+- **Network sign-off.** Register the scanner host with the SOC. The User-Agent ends in `(authorized asset inventory)`; set your own with `-UserAgent`.
+
+## How this was validated
+- **Engine compile:** C# 5 against the official .NET Framework 4.7.2 reference assemblies, with only the assemblies Windows PowerShell 5.1 references: 0 errors, 0 warnings.
+- **Static analysis:** PSScriptAnalyzer with the Windows PowerShell 5.1 compatibility profiles (Windows 10 1809 and Server 2016): syntax, commands, types clean. The only remaining findings are deliberate empty `catch` blocks.
+- **Hash and parser vectors:** mmh3, Shodan favicon hash, MD5 and SHA-256 match Python's `mmh3`/`hashlib` vectors. The Go-format DN parser reproduces a Recog test vector exactly.
+- **Runtime:** executed under PowerShell 7.4 (Linux) against a local lab, as 106 self-test assertions plus 25 scenario tests. Lab coverage:
+  - IIS-like, nginx-like with SAN vhosts, plaintext-to-TLS 400 mismatch, TLS 1.0-only, weak 3DES and anon-DH endpoints
+  - Basic-auth Tomcat Manager, Kubernetes API, WordPress with hostile title/header values
+  - A Node/Express single-page app and a WooCommerce store, for client-side detection and the `requiresCategory` gate
+  - Five PHP2Shell hosts (header-only, no PHP runtime): vulnerable mod_php 8.3.6, patched 8.4.27, EOL 7.4.33, Ubuntu build 8.1.2-1ubuntu2.20, version hidden
+  - SSH/FTP/MySQL banners, tarpit, closed port
+  - Ctrl+C + `-Resume`, baseline delta, config file, scope fail-closed, `-PassThru`
+- **Performance suite (v2.1):** 8 macro scenarios x 3 runs with field-by-field comparison against a low-concurrency v2.0.2 reference, a leave-one-out A/B study of each change, micro-benchmarks, and a prefilter equivalence check over every rule example. Details in `PERFORMANCE.md`.
+- **Recog import:** 2,336 published examples checked after conversion; the one rule that failed its own example (catastrophic backtracking) was dropped, and the remaining 2,335 pass.
+- **Wappalyzer import:** all 7,824 patterns compile. On the lab pages the pack identified jQuery 3.5.1, Bootstrap 5.2.3, React 18.2.0, Lodash, Moment.js, Google Analytics/Tag Manager, Express → Node.js and WooCommerce 8.2.1, and it correctly suppressed "DHL" on the non-store page. The upstream data has no published examples, so per-rule accuracy beyond these pages is Wappalyzer's own.
+- **Not yet run on Windows PowerShell 5.1 itself.** Run `-SelfTest`, then a lab VLAN pass against known IIS, nginx, iDRAC/iLO and printer hosts, before production. Schannel behaviour (cipher order, TLS 1.0 policy) differs from the Linux/OpenSSL stack used in testing.
+- **Inventory store** (Linux workspace, portable engine; ESENT itself needs Windows, see below):
+  - Both C# blocks (scan engine, store engine) compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0 warnings. The scan engine is the v2.1.0 source with only the version constant changed.
+  - 14 store self-test checks (19 on Windows), and a 40-check command-line scenario: five synthetic runs with every expected event and no other (title change with the expiry-day count ignored, three kinds of address move, an ambiguous move left unpaired, carry-over through a `-NoTlsScan` run, no false absence for SAN vhosts without `-ProbeSans`, retirement, reappearance with the diff), every query mode and filter form, refused imports (duplicate, older, incomplete), tampered archive file, edited ledger line, torn ledger tail, interrupted ingest, deleted database, rebuild, lock wait.
+  - `kill -9` at four points of a 50,000-service ingest: every reopen finished the run with digests byte-identical to an uninterrupted ingest.
+  - Ingest time (PowerShell 7, 2 vCPU, portable engine): 50,000 services 18 s for the first run, 17 s for the next; 200,000 services 70 s and 56 s. Archive about 13 MB per 50,000-service run.
+  - Two consecutive lab scans with `-Store`: the second produced zero change events.
+  - **Not run here:** the ESENT engine itself (this workspace has no Windows). `-SelfTest` on Windows adds ESENT conformance, ESENT-vs-portable digest equality and ESENT crash repair; `Test-WebInventoryStore.ps1` adds hard kills (`Stop-Process -Force`) of real ESENT ingests and cross-engine rebuilds. Run it on the scanner host before relying on the store.
+
+- **v2.3 additions** (same Linux workspace):
+  - All three C# blocks (scan engine, store, opt-in probes) compile as C# 5 against the .NET Framework 4.7.2 reference
+    assemblies with 0 errors and 0 warnings; the probe and store blocks against only `mscorlib`, `System` and
+    `System.Core`. PSScriptAnalyzer (5.1 profiles): the only new findings are the `System.Security.Cryptography.Pkcs`
+    types used for ledger signing, which the script loads explicitly (`Add-Type -AssemblyName System.Security`).
+  - Self-test 121/121 (128 with ESENT on Windows); the 25 lab regression scenarios; the v2.2 store scenario (40 checks)
+    unchanged; a v2.3 store scenario of 34 checks (merge refusal and success, split with absences recomputed from the
+    archive, verify/rebuild with corrections, backfill equal to in-order import for inventory and every change event,
+    corrections keeping their place in a backfill, a correction voided by a backfill, rebuild in rebased order, snapshot
+    thinning with `-AsOf` replay equal to a full store, ledger signatures including a swapped and a missing signature,
+    unique query file names); a gating test (`Enriched` on the first `-TlsFingerprint` run, values kept without it,
+    `-NoJa4s`).
+  - Stores written by v2.2.0 open, verify and ingest under v2.3.0 with identical digests.
+  - JARM equal to `jarm.py` on 6 lab TLS services; JA4S equal to FoxIO `ja4.py` on captured handshakes (2 ports
+    directly, 2 more from tshark-decoded ServerHellos and the JA4S formula).
+  - Proxy: direct and proxied scans of the lab identical field by field (26 rows), with and without Basic
+    authentication; missing authentication stops the run before the scan; ports the proxy refuses are logged and left
+    for `-Resume`; credentials appear only as `<redacted>` in the log.
+  - SMB against impacket (SMB2 and SMB1 servers); RDP against a lab listener in four modes (NLA, TLS without NLA,
+    legacy, standard security only); SNMP against a pysnmp agent (v1, v2c, wrong community, closed port, v3 SHA/AES,
+    SHA-256, MD5/DES, noAuthNoPriv, discovery only, wrong password). Secrets were absent from every log and `run.json`.
+  - Screenshots with headless Chromium (the same DevTools path Edge uses) over HTTP and HTTPS, directly and through
+    the CONNECT proxy; every third-party resource on the test page (fonts, CDN script, tracker, other port, other IP)
+    and the browser's own background requests were refused by the scope proxy.
+  - Vulnerabilities on real feeds (NVD 2002-2026 + modified, KEV catalog 2026.10.30, EPSS v2026.06.15) for a synthetic
+    inventory: e.g. Apache httpd 2.4.49 -> CVE-2021-41773/42013 (`version`, KEV), Confluence 7.13.0 -> CVE-2022-26134
+    (KEV) but not CVE-2021-26084 (fixed in 7.13.0) or CVE-2023-22515 (Data Center 8.x only), OpenSSH 9.3p1 ->
+    CVE-2023-38408 (`version`), PHP 8.1.2 -> CVE-2024-4577 marked `platform not verified` (Windows-only), Jenkins
+    without a version -> only its KEV entries.
+  - Interleaved A/B against v2.2.0 without the new switches: identical results in 12/12 comparisons
+    (`PERFORMANCE.md`).
+  - **Not run here:** Windows PowerShell 5.1 itself, ESENT, Edge, the Windows event log, Schannel for RDP. Run
+    `-SelfTest` and `Test-WebInventoryStore.ps1` (now also backfill on ESENT and event-log anchoring) on the scanner
+    host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
+    canary reports it).
+
+- **v2.3.1 additions** (same Linux workspace):
+  - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
+    warnings. Self-test 125/125 (132 with ESENT on Windows); the 25 lab regression scenarios pass.
+  - Every CPE in the supplement exists in the NVD CPE Dictionary (the generator refuses to write one that does not).
+  - The regenerated Recog and Wappalyzer packs have the same 3,098 and 7,824 rules as v2.3.0's and differ only in CPEs
+    (139 filled; 431 filled, 8 corrected, 4 cleared).
+  - All 139 Recog rules that got a CPE and have a published example were evaluated on that example: each detection
+    carries its CPE, with the captured version in it where the rule captures one.
+  - A/B against v2.3.0 (lab and 200-service farm, two runs each): every CSV column identical except `CPEs` on the two
+    FortiGate lab rows; in the JSONL only the order of evidence items changed where rules now share a CPE.
+  - Vulnerabilities on real feeds: the lab store went from 1,347 rows (518 KEV) to 936 rows (107 KEV): 42 FortiOS KEV
+    rows added, 453 KEV rows of Ubuntu/Debian `Server` tokens no longer listed (counted). A synthetic inventory found
+    what the new CPEs and aliases should find: Serv-U 15.2.3 -> CVE-2021-35211 (KEV), TeamCity 2023.05.3 ->
+    CVE-2023-42793 (KEV), Ivanti/Pulse 9.1R8 -> CVE-2021-22893 (KEV) and three CVEs filed under
+    `pulsesecure:pulse_connect_secure`, Contact Form 7 5.3.1 -> CVE-2020-35489, PAN-OS without a version -> its 17 KEV
+    entries; concrete5 8.5.4 0 -> 133 rows (`as concretecms:concrete_cms`), `nginx:nginx` 1.16.1 0 -> 7, Mattermost 46 ->
+    79, Citrix Gateway 13 -> 18 KEV entries (e.g. CVE-2019-19781 `as citrix:netscaler_gateway_firmware`).
+  - Query time unchanged (48.7 s vs 50.0 s on the lab store, `PERFORMANCE.md`).
+
+## Version advisories (PHP2Shell)
+The scanner can mark services that are **likely exposed by version** to a named vulnerability, using only the version the server itself advertises. It never sends anything to test exploitability. The first entry is **PHP2Shell**: CVE-2026-109618 and CVE-2026-109619, CVSS v4 9.2, exploitation attempts reported in the wild.
+
+| Flag | Meaning |
+|---|---|
+| `PHP2Shell:vulnerable` | Advertised PHP is below its branch's fixed release (8.5.12 / 8.4.27 / 8.3.36 / 8.2.35, released 2026-10-21) |
+| `PHP2Shell:eol-branch` | PHP 8.1 or older: no upstream release; only vendor/backported builds are fixed |
+| `+mod_php` | The PHP token appears in an Apache `Server` header, which means mod_php, the configuration PHP rates highest-risk |
+| `+vendor-build` | Version carries a distro/package suffix (e.g. `8.1.2-1ubuntu2.20`); the fix may be backported, so check the package changelog |
+| `PHP2Shell:version-hidden` | PHP was detected (cookie, framework) but `expose_php` hides the version; verify on the host |
+
+The `Advisories` column holds the reasoning for each finding, including "fixed" results, so coverage is auditable. The HTML report counts exposures on its own card, and the `-BaselineCsv` delta tracks the column, so patching shows up as CHANGED.
+
+**Limits:**
+- A hidden or rewritten header gives no version.
+- Distro packages can backport fixes without changing the upstream version.
+- The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
+
+Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.3.1
+- **CPE coverage:** 715 more rule outputs carry an NVD CPE (built-in rules edited; Recog and Wappalyzer packs
+  regenerated from the same commits with the reviewed `cpe-supplement`, which `-ImportRules` now applies); 12 wrong
+  upstream CPEs corrected or cleared.
+- **Vulnerability join:** compares each CPE under all NVD names of its product (183 alias groups); version-unknown KEV
+  rows are no longer listed for general-purpose operating systems (counted instead); percent-encoded CPE names
+  (`tcp%2fip`) are decoded; the provenance file records the table version and both counts.
+- **Docs:** README column count (78) and a duplicated JA4S licence sentence fixed.
+- **Self-test:** 125 checks (132 on Windows): CPE key parsing, the supplement's fill/replace rules (including no CPE for a
+  fixed version), built-in rules consistent with the supplement, alias matching, alias-platform exclusion and the OS KEV
+  rule in the NVD correlation test.
+
+## Changes in 2.3.0
+- **Known vulnerabilities offline:** `-StoreQuery Vulnerabilities` with `-NvdFeed`, `-KevFile`, `-EpssFile`
+  (version-aware CPE matching, KEV and EPSS columns, provenance sidecar).
+- **Jump hosts:** `-Proxy` / `-ProxyCredential` (HTTP CONNECT) for every TCP connection of the scan.
+- **TLS fingerprints:** `-TlsFingerprint` adds `Jarm` (validated against `jarm.py`) and `Ja4s` (validated against FoxIO's
+  `ja4.py`).
+- **Beyond web:** `-Smb`, `-Rdp`, `-Snmp` (with `-SnmpCommunity` or `-SnmpCredential`; never a guessed community) and
+  `smb://`, `rdp://`, `snmp://` targets; new columns `DeviceName`, `Domain`, `ProtocolInfo`; flags `SMBv1`,
+  `SMBSigningNotRequired`, `RdpNlaNotRequired`, `RdpStandardSecurity`, `SnmpV1V2c`; 37 new built-in rules (Windows
+  builds from NTLM, SNMP sysDescr); the Recog pack regenerated from the same commit with the SNMP, SMB and JARM
+  databases (2,369 -> 3,098 rules; the existing rules are unchanged).
+- **Screenshots:** `-Screenshot` with the host's Edge, headless, confined to the scanned origins by a loopback proxy;
+  index CSV, manifest entries, images in the HTML report.
+- **Store:** `-StoreMerge` / `-StoreSplit` corrections as ledger entries, `-Backfill` for older runs (rebase entry),
+  `-SnapshotEvery`, `-AnchorEventLog` / `-RegisterEventSource`, `-AnchorCertificate`, `Enriched` events, unique query
+  file names, Inventory queries filter while reading. Stores made by v2.2 open, verify and ingest unchanged (same
+  digests; the five new fields are empty in old versions and do not enter their hashes).
+- **Scan path:** the v2.2 engine with two additions only: the connect routine can tunnel through a proxy (one branch
+  when `-Proxy` is not set) and the TLS probe keeps the ServerHello's extension list for JA4S. A scan without the new
+  switches sends the same traffic as v2.2 (A/B in `PERFORMANCE.md`).
+- **Self-test:** 121 checks (128 on Windows): JARM/JA4S/NTLM/SNMPv3-key vectors, protocol URLs, the screenshot scope
+  proxy, NVD/KEV/EPSS correlation on a hand-made feed, corrections on every engine, an interrupted correction,
+  backfill and snapshot thinning.
+
+## Changes in 2.2.0
+- **Inventory store** (`-Store`, `-ImportRun`, `-StoreQuery`, `-VerifyStore`, `-RebuildStore`; see "Inventory store"):
+  history across runs in Windows' built-in ESENT engine, rebuilt on demand from an append-only archive of every run
+  with a hash-chained ledger. Portable file engine for PowerShell 7 elsewhere.
+- **Scan unchanged:** the scan engine is v2.1.0's source (version constant aside); the store compiles separately, on
+  first use, after the scan. Interleaved A/B against v2.1.0: identical output field by field in every comparison,
+  timings within run-to-run noise, about 0.1 s more startup (`PERFORMANCE.md`).
+- **`_run.json`** per run: start/finish, probe switches, sessions of a resumed run, completeness. The store relies on
+  it; older output is imported with a synthesised one.
+- **Self-test:** 106 checks (111 on Windows): store engine compile, SHA-256 accumulator, key-value engine contract on every engine, a
+  synthetic three-run history with exact expected counts, ESENT-vs-portable digest equality, crash repair at three
+  points per engine, tamper detection, rebuild, queries.
+- **`Test-WebInventoryStore.ps1`:** validates the store on the scanner host (ESENT vs portable digests, hard kills,
+  verify, cross-engine rebuild).
+
+## Changes in 2.1.0
+- **Performance:** see "What v2.1 changes" and `PERFORMANCE.md`. Web-heavy scans about 3.2x faster with 70% less CPU;
+  closed-port sweeps about 11.6x faster with a sixth of the memory.
+- **Accuracy under load:** the v2.0.2 farm benchmark lost HTTPS services and detections in every run (rule regex
+  timeouts and stalled TLS handshakes on a saturated 2-core host); v2.1.0 matched the reference in every run.
+- **Robustness:** connects no longer depend on the .NET thread pool; local port/buffer exhaustion is retried, logged and
+  marked `incomplete` instead of looking like a filtered port; a worker that crashes mid-check is replaced and the check
+  is logged as failed.
+- **Self-test:** 92 checks, adding the prefilter, C# parser and writer, scheduler, job builder, DNS window, connect
+  states and silent-listener detection (loopback listeners only, no network).
+
+## Changes in 2.0.2
+- **PHP2Shell version advisory:**
+  - flags and an `Advisories` column
+  - HTML "Advisory exposures" card
+  - included in the baseline delta
+- **Wappalyzer false-positive guard:** a bare-word header pattern must start at a word boundary (145 patterns). Upstream "Bun" matched `PHP/8.1.2-1ubuntu2` as the Bun runtime.
+- **HTML report hygiene:** control characters from hostile headers are stripped from report data.
+- **Self-test:** 78 checks (advisory version logic, suffix parsing, mod_php inference).
+
+## Changes in 2.0.1
+- **Wappalyzer pack shipped** (7,824 rules), with the GPL-3.0 text and upstream commit.
+- **Engine:**
+  - `rc` (requires category) gating
+  - `a` option for whole-value anchors
+  - JavaScript-to-.NET regex translation (`FromJs`)
+  - implied technologies inherit kind/category/CPE
+- **Converter fixes:** regex-escaped Wappalyzer cookie names (`connect\.sid`) now match. Both importers record the upstream git commit in the pack.
+- **Self-test:** 72 checks (JS dialect, anchors, category gate).
+
+## Original backlog status
+| Item | Status |
+|---|---|
+| Virtual hosts from certificate SANs | Done: `-ProbeSans` (same IP only, de-duplicated) |
+| Reverse DNS | Done: `-ReverseDns` (cached, with timeout) |
+| ALPN / HTTP/2 | Done: raw ClientHello probe (`Alpn`, `Http2` columns) |
+| TLS version enumeration | Done, and wider than planned: raw ClientHellos for SSL3 to TLS 1.3, independent of Schannel, plus weak-cipher acceptance |
+| Resume / checkpoint | Done: progress file + `-Resume` |
+| HTML report | Done |
+| Recog import (replace the 60 embedded rules) | Done: `-ImportRules`, shipped pack, plus 475 embedded rules |
+| Wappalyzer pack | Done (2.0.1) |
+| HTTP CONNECT proxy | Done (2.3.0): `-Proxy` |
+| JARM | Done (2.3.0): `-TlsFingerprint`, with JA4S |
+| What not to add | Respected: no brute-forcing, default-credential checks, non-detection Nuclei templates or aggressive WhatWeb levels |
+
+## Further recommendations (not implemented)
+1. **Screenshots in the store.** Screenshots stay in `-OutputDir`; archiving them (and diffing them across runs) would
+   make the store several times larger, so it was left out.
+2. **RDP certificates from TLS 1.0-only servers on hardened scanner hosts.** The RDP probe uses Schannel; a raw
+   ClientHello after the X.224 exchange (as the HTTPS probe already does) would read the certificate regardless of the
+   host's TLS policy.
+3. **Version capture.** v2.3.1 gave the remaining NVD-listed products a CPE; 729 of the 1,327 products with a CPE are
+   still detected without a version, so they only get KEV-listed rows. Adding version capture to those rules (from the
+   page, asset paths or headers that expose it) is the next way to widen vulnerability matching.

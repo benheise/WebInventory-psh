@@ -1,0 +1,224 @@
+{
+ "label": "cand-prefilter",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.74,
+      "targets_s": 0.154,
+      "scan_s": 16.429
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 130,
+     "wall_s": 17.902,
+     "cpu_s": 31.338,
+     "user_s": 30.031,
+     "sys_s": 1.307,
+     "maxrss_mb": 551.0,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.754,
+      "targets_s": 0.156,
+      "scan_s": 15.705
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 126,
+     "wall_s": 17.238,
+     "cpu_s": 30.127,
+     "user_s": 28.809,
+     "sys_s": 1.318,
+     "maxrss_mb": 544.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.618,
+      "targets_s": 0.144,
+      "scan_s": 15.726
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 133,
+     "wall_s": 17.291,
+     "cpu_s": 30.394,
+     "user_s": 29.094,
+     "sys_s": 1.299,
+     "maxrss_mb": 545.5,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 17.291,
+    "wall_s_min": 17.238,
+    "wall_s_max": 17.902,
+    "cpu_s": 30.394,
+    "cpu_s_min": 30.127,
+    "cpu_s_max": 31.338,
+    "maxrss_mb": 545.5,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.74,
+     "targets_s": 0.154,
+     "scan_s": 15.726
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 17 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 17 differences\n  CSV 127.0.10.13|127.0.10.13|19081|False Robots: 'disallow=1;sitemap=True' -> ''\n  CSV 127.0.10.33|127.0.10.33|19080|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.33|127.0.10.33|19080|False FaviconMmh3: \"'-1557198936\" -> ''\n  CSV 127.0.10.33|127.0.10.33|19080|False FaviconMd5: 'a771a7b693a474ec21b2d7cdd25c7939' -> ''\n  CSV 127.0.10.37|127.0.10.37|19080|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.37|127.0.10.37|19080|False FaviconMmh3: \"'-1557198936\" -> ''\n  CSV 127.0.10.37|127.0.10.37|19080|False FaviconMd5: 'a771a7b693a474ec21b2d7cdd25c7939' -> ''\n  CSV 127.0.10.38|127.0.10.38|19080|False Robots: 'disallow=1;sitemap=False' -> ''\n  JSONL 127.0.10.13|127.0.10.13|19081|False Robots: \"disallow=1;sitemap=True\" -> \"\"\n  JSONL 127.0.10.33|127.0.10.33|19080|False FaviconMd5: \"a771a7b693a474ec21b2d7cdd25c7939\" -> \"\"\n  JSONL 127.0.10.33|127.0.10.33|19080|False FaviconMmh3: -1557198936 -> \"\"\n  JSONL 127.0.10.33|127.0.10.33|19080|False FaviconPath: \"/favicon.ico\" -> \"\"\n  JSONL 127.0.10.36|127.0.10.36|19080|False Detections: [{\"Kind\": \"service\", \"Name\": \"jQuery\", \"Version\": \"3.6.1\", \"Category\": \"JavaScript libraries\", \"Confidence\": 95, \"Cpe\": \"cpe:2.3:a:jquery:jquery:3.6.1:*:*:*:*:*:*:*\", \"Source\": \"builtin+wappalyzer\", \" -> [{\"Kind\": \"service\", \"Name\": \"jQuery\", \"Version\": \"3.6.1\", \"Category\": \"JavaScript libraries\", \"Confidence\": 95, \"Cpe\": \"cpe:2.3:a:jquery:jquery:3.6.1:*:*:*:*:*:*:*\", \"Source\": \"builtin+wappalyzer\", \"\n  JSONL 127.0.10.37|127.0.10.37|19080|False FaviconMd5: \"a771a7b693a474ec21b2d7cdd25c7939\" -> \"\"\n  JSONL 127.0.10.37|127.0.10.37|19080|False FaviconMmh3: -1557198936 -> \"\"\n  JSONL 127.0.10.37|127.0.10.37|19080|False FaviconPath: \"/favicon.ico\" -> \"\"\n  JSONL 127.0.10.38|127.0.10.38|19080|False Robots: \"disallow=1;sitemap=False\" -> \"\"\n"
+    }
+   ]
+  },
+  "farm-rtt": {
+   "args": [
+    "-Target",
+    "127.0.20.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.72,
+      "targets_s": 0.162,
+      "scan_s": 16.644
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 118,
+     "wall_s": 18.171,
+     "cpu_s": 31.027,
+     "user_s": 29.651,
+     "sys_s": 1.376,
+     "maxrss_mb": 550.5,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.705,
+      "targets_s": 0.147,
+      "scan_s": 17.167
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 121,
+     "wall_s": 18.649,
+     "cpu_s": 31.991,
+     "user_s": 30.808,
+     "sys_s": 1.184,
+     "maxrss_mb": 564.3,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 2.081,
+      "targets_s": 0.153,
+      "scan_s": 17.992
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 165,
+     "wall_s": 19.603,
+     "cpu_s": 33.657,
+     "user_s": 32.15,
+     "sys_s": 1.507,
+     "maxrss_mb": 564.9,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 18.649,
+    "wall_s_min": 18.171,
+    "wall_s_max": 19.603,
+    "cpu_s": 31.991,
+    "cpu_s_min": 31.027,
+    "cpu_s_max": 33.657,
+    "maxrss_mb": 564.3,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.72,
+     "targets_s": 0.153,
+     "scan_s": 17.167
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 6 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 6 differences\n  CSV 127.0.20.47|127.0.20.47|19080|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.20.47|127.0.20.47|19080|False FaviconMmh3: \"'-1557198936\" -> ''\n  CSV 127.0.20.47|127.0.20.47|19080|False FaviconMd5: 'a771a7b693a474ec21b2d7cdd25c7939' -> ''\n  JSONL 127.0.20.47|127.0.20.47|19080|False FaviconMd5: \"a771a7b693a474ec21b2d7cdd25c7939\" -> \"\"\n  JSONL 127.0.20.47|127.0.20.47|19080|False FaviconMmh3: -1557198936 -> \"\"\n  JSONL 127.0.20.47|127.0.20.47|19080|False FaviconPath: \"/favicon.ico\" -> \"\"\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

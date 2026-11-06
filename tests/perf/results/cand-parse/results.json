@@ -1,0 +1,115 @@
+{
+ "label": "cand-parse",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.873,
+      "targets_s": 0.141,
+      "scan_s": 12.976
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 14.589,
+     "cpu_s": 24.728,
+     "user_s": 23.306,
+     "sys_s": 1.422,
+     "maxrss_mb": 639.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.721,
+      "targets_s": 0.172,
+      "scan_s": 12.556
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 14.096,
+     "cpu_s": 23.817,
+     "user_s": 22.5,
+     "sys_s": 1.317,
+     "maxrss_mb": 619.8,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.906,
+      "targets_s": 0.167,
+      "scan_s": 12.398
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 14.006,
+     "cpu_s": 23.581,
+     "user_s": 22.239,
+     "sys_s": 1.341,
+     "maxrss_mb": 604.1,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 14.096,
+    "wall_s_min": 14.006,
+    "wall_s_max": 14.589,
+    "cpu_s": 23.817,
+    "cpu_s_min": 23.581,
+    "cpu_s_max": 24.728,
+    "maxrss_mb": 619.8,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.873,
+     "targets_s": 0.167,
+     "scan_s": 12.556
+    }
+   },
+   "golden": [
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 2 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 2 differences\n  CSV 127.0.10.46|127.0.10.46|19080|False Robots: 'disallow=1;sitemap=False' -> ''\n  JSONL 127.0.10.46|127.0.10.46|19080|False Robots: \"disallow=1;sitemap=False\" -> \"\"\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}

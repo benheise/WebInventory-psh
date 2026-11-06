@@ -1,0 +1,115 @@
+{
+ "label": "cand-writer",
+ "script": "/home/claude/webinv/dist/Invoke-WebInventory.ps1",
+ "scenarios": {
+  "farm": {
+   "args": [
+    "-Target",
+    "127.0.10.1-50",
+    "-Port",
+    "19080,19081,19082,19443",
+    "-TimeoutMs",
+    "2000"
+   ],
+   "runs": [
+    {
+     "phases": {
+      "startup_s": 1.738,
+      "targets_s": 0.141,
+      "scan_s": 12.472
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 13.995,
+     "cpu_s": 23.886,
+     "user_s": 22.636,
+     "sys_s": 1.25,
+     "maxrss_mb": 525.4,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.799,
+      "targets_s": 0.152,
+      "scan_s": 12.398
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 14.009,
+     "cpu_s": 23.839,
+     "user_s": 22.558,
+     "sys_s": 1.281,
+     "maxrss_mb": 539.2,
+     "exit": 0
+    },
+    {
+     "phases": {
+      "startup_s": 1.774,
+      "targets_s": 0.142,
+      "scan_s": 12.255
+     },
+     "requests": 1400,
+     "rows": 200,
+     "web": 200,
+     "open": 200,
+     "closed": 0,
+     "filtered": 0,
+     "worker_errors": 0,
+     "regex_timeouts": 0,
+     "wall_s": 14.035,
+     "cpu_s": 23.831,
+     "user_s": 22.551,
+     "sys_s": 1.28,
+     "maxrss_mb": 534.6,
+     "exit": 0
+    }
+   ],
+   "summary": {
+    "wall_s": 14.009,
+    "wall_s_min": 13.995,
+    "wall_s_max": 14.035,
+    "cpu_s": 23.839,
+    "cpu_s_min": 23.831,
+    "cpu_s_max": 23.886,
+    "maxrss_mb": 534.6,
+    "requests": 1400,
+    "rows": 200,
+    "web": 200,
+    "phases": {
+     "startup_s": 1.774,
+     "targets_s": 0.142,
+     "scan_s": 12.398
+    }
+   },
+   "golden": [
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    },
+    {
+     "identical": false,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 6 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 6 differences\n  CSV 127.0.10.42|127.0.10.42|19080|False FaviconPath: '/favicon.ico' -> ''\n  CSV 127.0.10.42|127.0.10.42|19080|False FaviconMmh3: \"'-1557198936\" -> ''\n  CSV 127.0.10.42|127.0.10.42|19080|False FaviconMd5: 'a771a7b693a474ec21b2d7cdd25c7939' -> ''\n  JSONL 127.0.10.42|127.0.10.42|19080|False FaviconMd5: \"a771a7b693a474ec21b2d7cdd25c7939\" -> \"\"\n  JSONL 127.0.10.42|127.0.10.42|19080|False FaviconMmh3: -1557198936 -> \"\"\n  JSONL 127.0.10.42|127.0.10.42|19080|False FaviconPath: \"/favicon.ico\" -> \"\"\n"
+    },
+    {
+     "identical": true,
+     "summary": "golden: 200 rows reference, 200 rows candidate, 0 differences",
+     "report": "golden: 200 rows reference, 200 rows candidate, 0 differences\n"
+    }
+   ]
+  }
+ }
+}
