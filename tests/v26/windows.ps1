@@ -83,9 +83,12 @@ try {
     $ca = New-Object Security.Cryptography.X509Certificates.X509Store('CA', 'LocalMachine'); $ca.Open('ReadOnly'); $interIn = @($ca.Certificates | Where-Object { $_.Subject -like '*Tideline CI CA Intermediate*' }).Count; $ca.Close()
     if ($rc -eq 0 -and $certs.Count -eq 1 -and $certs[0].HasPrivateKey -and $pinFp -eq $fp -and $interIn -ge 1) { Pass ("enrolled with certreq: {0} in LocalMachine\My, root pinned ({1}), intermediate in LocalMachine\CA" -f $certs[0].Thumbprint, $fp.Substring(0, 16)) }
     else { Fail ("enroll (exit $rc, $($certs.Count) certificates, pin $pinFp, intermediate $interIn)") (Join-Path $Work 'enroll.txt') }
+    if ($certs.Count -ne 1) { throw 'enrollment failed; the remaining checks need its certificate' }
     $c1 = $certs[0]
     $k1 = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c1)
     if ($k1 -is [Security.Cryptography.ECDsaCng] -and $k1.KeySize -eq 256 -and $k1.Key.IsMachineKey -and -not (Test-Exportable $c1) -and $k1.Key.ExportPolicy -eq 0) { Pass ("key: ECDSA P-256, machine key ({0}), export refused" -f $k1.Key.Provider) } else { Fail ("key properties: {0} {1} machine={2} exportable={3}" -f $k1.GetType().Name, $k1.KeySize, $k1.Key.IsMachineKey, (Test-Exportable $c1)) }
+    $rq = New-Object Security.Cryptography.X509Certificates.X509Store('REQUEST', 'LocalMachine'); $rq.Open('ReadOnly'); $left = @($rq.Certificates | Where-Object { $_.FriendlyName -like 'Tideline sensor request*' }).Count; $rq.Close()
+    if ($left -eq 0) { Pass 'no pending certreq request left in LocalMachine\REQUEST' } else { Fail "$left pending request(s) left in LocalMachine\REQUEST" }
     $acl = @(Get-KeyAcl $c1)
     if ($acl -contains 'NT AUTHORITY\NETWORK SERVICE') { Pass 'key readable by NT AUTHORITY\NETWORK SERVICE (-GrantKeyAccess)' } else { Fail ("key ACL: {0}" -f ($acl -join ', ')) }
 

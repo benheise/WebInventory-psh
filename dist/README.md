@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.5.0
+# Invoke-WebInventory.ps1 v2.6.0
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -12,6 +12,11 @@ including Azure Government, Google Cloud, Oracle Cloud, DigitalOcean, Akamai/Lin
 the `Cloud`, `CloudRegion` and `CloudService` columns. `-Cname` adds the CNAME chain of hostname targets, and
 `-Screenshot` captures are now checked: each is labelled ok, blank, suspect or failed, with a reason (see "What v2.5.0
 adds").
+
+Every result is also written as JSON Lines (the delta, the screenshot index, the errors, the store queries and a per-run
+vulnerability join included), and `-ShipTo` sends a finished run to Tideline, the results platform. The run goes as a
+signed envelope over mutual TLS. `Register-WebInventorySensor.ps1` enrolls the host with Tideline's CA (step-ca), and
+`Send-WebInventoryRun.ps1` sends runs later or carries them by hand (see "What v2.6.0 adds" and `SHIPPING.md`).
 
 It does not exploit, brute-force, guess credentials or enumerate paths. The optional `-IdentifyPaths` set is a fixed list
 of 16 public landing/version pages; the optional `-VersionPaths` sends one GET to a product's documented version URL,
@@ -29,8 +34,11 @@ with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM messa
 | `WebInventory.example.psd1` | Example settings file for scheduled runs (`-ConfigFile`) |
 | `THIRD-PARTY-NOTICES.txt` | Licences, upstream commits and how to regenerate each pack |
 | `LICENSE-GPL-3.0.txt` | Full GPL-3.0 text, which must travel with the Wappalyzer pack |
-| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1, v2.3.2, v2.4.0 and v2.5.0 A/B runs showing the scan path unchanged |
+| `PERFORMANCE.md` | The v2.1 performance checklist (what was measured, kept, rejected and why), and the v2.2, v2.3, v2.3.1, v2.3.2, v2.4.0, v2.5.0 and v2.6.0 A/B runs showing the scan path unchanged |
 | `Test-WebInventoryStore.ps1` | One-off validation of the inventory store on the scanner host (ESENT vs portable engine, hard kills, verify, rebuild) |
+| `Send-WebInventoryRun.ps1` | Sends finished runs to Tideline, resumes stopped deliveries, shows a run's state there, or writes a bundle to carry by hand (self-contained) |
+| `Register-WebInventorySensor.ps1` | Enrolls this host as a Tideline sensor with step-ca and renews its certificate; on Windows the key is a non-exportable machine key made by `certreq.exe` (self-contained) |
+| `SHIPPING.md` | JSON outputs, sensor setup, the shipping protocol, delivery state and exit codes |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
 All three rule sets load together: 11,551 rules (with the 114 version-only rules), about 0.6 s at startup. A literal prefilter skips every rule whose required text is absent from the value, so matching a 120 KB page takes about 8 ms (110 ms in v2.0.2). To run without a pack, delete or move its file, or use `-NoCompanionRules` to load only the embedded rules.
@@ -52,7 +60,7 @@ All three rule sets load together: 11,551 rules (with the 114 version-only rules
 ## Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                   # 146 offline checks on Windows (139 without ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                   # 156 offline checks on Windows (149 without ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                    # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 10.0.0.5
 .\Invoke-WebInventory.ps1 10.0.0.0/24 web01:8443 '10.0.1.1-50' -Port web -Exclude 10.0.0.1 -Scope 10.0.0.0/16
@@ -64,6 +72,8 @@ All three rule sets load together: 11,551 rules (with the 114 version-only rules
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore   # ...and keep history (see "Inventory store")
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore
 .\Invoke-WebInventory.ps1 -HostFile .\dmz.txt -Proxy http://jump01:3128 -ProxyCredential (Get-Credential)
+.\Register-WebInventorySensor.ps1 -Token '<one-time token from the Tideline admin>' -GrantKeyAccess 'CORP\svc-webinv'   # once, elevated
+.\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Store D:\WebInventoryStore -ShipTo https://tideline.corp.example:8443 -Engagement eng-2026-014
 ```
 
 Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share it):
@@ -75,6 +85,50 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.6.0 adds
+
+- **JSON for every output.** Each output that had only a CSV or text form now also has a JSON Lines file next to it:
+  - `_errors.jsonl`: the error log's entries and the run log's warnings, including the DNS, scope and input errors
+    logged before the output files exist;
+  - `_delta.jsonl` with `-BaselineCsv`;
+  - `_screenshots.jsonl` with `-Screenshot`;
+  - a `.jsonl` next to every `-StoreQuery` CSV.
+
+  These files use the CSV's column names and its cells as text, without the CSV's formula guard. Counts, ports, sizes
+  and durations are numbers, as in the results JSONL, whose format is unchanged. JSON Schemas for every record type
+  are in the repository's `schemas/` folder, generated from the script's column lists.
+- **`-NvdFeed` on a scan run.** With `-NvdFeed` (and `-KevFile`, `-EpssFile`), a scan joins its own services with the
+  NVD, KEV and EPSS files, offline, the same way as `-StoreQuery Vulnerabilities`. No store is needed. The result is
+  `_vulns.csv`, `_vulns.jsonl` and `_vulns.provenance.json`, written before the run's manifest.
+- **`run.json`** records `runUuid` (made once per run and kept across resumed sessions), `engagement` (`-Engagement`)
+  and `exitCode`.
+- **Shipping to Tideline: `-ShipTo https://tideline:8443`.** After a run is complete (and added to `-Store`, if
+  given), the script sends it:
+  - **What:** the JSONL files, `run.json`, the run's manifest, the logs and the screenshots, unchanged. The CSV and
+    HTML are not sent.
+  - **How:** the manifest names every part with its SHA-256 and is signed (ES256) with the sensor certificate's key.
+    The parts follow over HTTPS with mutual TLS; the server must chain to the pinned Tideline root, not the machine
+    trust store.
+  - **Checks first:** only complete runs whose files still match their own manifest are sent. The certificate, its
+    key and the root are checked before the scan starts, so a long scan never ends unable to deliver.
+  - **Failure:** a delivery that fails exits 2 and leaves `_ship-state.json`, from which `Send-WebInventoryRun.ps1`
+    sends only the missing parts later. That script also sweeps a whole folder, shows a run's state at Tideline, and
+    writes a signed bundle for hosts that cannot reach it.
+  - **Results unchanged:** a scan with `-ShipTo` gives the same rows as without it.
+
+  Options: `-ShipCertThumbprint` or `-ShipCertPath` (default: the newest valid sensor certificate in
+  `LocalMachine\My`), `-ShipCaFile` (default: the root enrollment saved), `-Engagement`, `-ShipRetries`.
+- **Enrollment and renewal: `Register-WebInventorySensor.ps1`.**
+  - **Enroll:** the Tideline administrator makes a one-time token (`step ca token wi-scan01 --san
+    urn:tideline:sensor:wi-scan01`). The script fetches the CA's root by the token's fingerprint, then has
+    `certreq.exe` create a non-exportable ECDSA P-256 machine key and installs the issued certificate in
+    `LocalMachine\My`.
+  - **Renew:** `-Renew` (daily, from a scheduled task) renews through step-ca's rekey endpoint with a new key, keeps
+    the sensor's name, removes the previous certificate and key, and keeps the key's readers (`-GrantKeyAccess`).
+  - **Off Windows:** the key and certificate go to a PFX readable by its owner only.
+
+  See `SHIPPING.md` for the protocol, the exit codes and the bundle format.
 
 ## What v2.5.0 adds
 
@@ -611,7 +665,7 @@ on Windows before quoting these numbers.
 - **Retries and watchdog.** `-Retries` re-tries silent ports, which reduces false "filtered" results. A per-check watchdog stops hung workers. `-MaxRuntimeMinutes` stops dispatching cleanly and leaves a resumable progress file.
 - **ReDoS guard.** Every rule regex runs with a 200 ms timeout, and timeouts are counted in the summary. One Recog rule with catastrophic backtracking was caught this way and is dropped at import.
 - **Hostile-content handling.** Scanned hosts control titles and headers. CSV cells starting with `= + - @` are prefixed with `'` to block Excel formula injection (`-NoCsvSanitize` turns this off). Control characters and ANSI escapes are stripped before console output. The HTML report never uses `innerHTML` for data, and the embedded JSON is escaped.
-- **Exit codes and audit evidence.** `0` clean, `1` fatal/refused, `2` completed with logged errors, `3` interrupted or time limit hit, `4` (v2.5) completed but nothing answered. Each run also writes a `_manifest.txt` with SHA-256 of every output and both logs.
+- **Exit codes and audit evidence.** `0` clean, `1` fatal/refused, `2` completed with logged errors (or, since v2.6, a failed Tideline delivery), `3` interrupted or time limit hit, `4` (v2.5) completed but nothing answered. Each run also writes a `_manifest.txt` with SHA-256 of every output and both logs.
 
 ### Detection quality
 - **Raw TLS ClientHello probes**, independent of the scanning host's Schannel policy:
@@ -659,7 +713,7 @@ on Windows before quoting these numbers.
 - Rule tooling: `-SelfTest`, `-TestRules`, `-ImportRules` (Recog / webappanalyzer), `-ExportRules`.
 
 ## Outputs (in `-OutputDir`; logs always in the current directory)
-`WebInventory_<RunId>.csv` (83 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness), `_delta.csv`, `_manifest.txt`, `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` (+ `.html`).
+`WebInventory_<RunId>.csv` (83 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness, run UUID, engagement, exit code), `_errors.jsonl`, `_delta.csv` + `.jsonl`, `_screenshots.csv` + `.jsonl`, `_vulns.csv` + `.jsonl` + `.provenance.json` (`-NvdFeed`), `_manifest.txt`, `_ship-state.json` (`-ShipTo`), `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` + `.jsonl` (+ `.html`). JSON types and schemas: `SHIPPING.md`.
 
 Columns that matter most for a CMDB import:
 - **Identity:** `Host`, `IP`, `Port`, `Service`, `Url`/`FinalUrl`, `Title`, `Server`
@@ -687,7 +741,7 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
 - **Signing and placement.** Sign the script (`Set-AuthenticodeSignature`), run it under AllSigned/RemoteSigned, and keep it plus the rule packs in a write-protected folder. The run log records the signature status and pack hashes, so tampering shows up.
 - **Evidence.** Run with `-ScopeFile` that mirrors your written authorisation, and keep run log, error log and manifest together as the record of each run. With `-Store` this happens automatically: the archive keeps them per run and the ledger chains their hashes; `-VerifyStore` proves them intact, and the ledger head printed after each ingest can be recorded somewhere outside the store.
 - **Inventory review.** `-StoreQuery Inventory` is the current inventory with first/last seen; `-StoreQuery Changes -WithinDays 30` lists additions and removals for review; `-AsOf` answers "what did we have on date X" from the archive.
-- **Scheduled tasks.** Use `-ConfigFile` with `-Quiet -NoProgress`. Alert on exit code 1, 3 or 4 (4: nothing answered); review 2.
+- **Scheduled tasks.** Use `-ConfigFile` with `-Quiet -NoProgress`. Alert on exit code 1, 3 or 4 (4: nothing answered); review 2. With `-ShipTo`, add a daily `Register-WebInventorySensor.ps1 -Renew` task and, if Tideline can be down for longer than a run's retries, a `Send-WebInventoryRun.ps1 <OutputDir> -ShipTo ...` task that sends what is still pending.
 - **Air-gapped enclaves.** If HTTPS handshakes are slow there, Windows is trying to fetch intermediate certificates (AIA). The raw TLS probe is unaffected; consider the "Turn off Automatic Root Certificates Update" policy on the scanner host.
 - **Network sign-off.** Register the scanner host with the SOC. The User-Agent ends in `(authorized asset inventory)`; set your own with `-UserAgent`.
 
@@ -879,6 +933,30 @@ The `Advisories` column holds the reasoning for each finding, including "fixed" 
 - The follow-on CVE-2026-115560 (session upload progress) has no fixed release yet, so it is not flagged by version. PHP's interim mitigation is `session.upload_progress.enabled=0`.
 
 Treat these flags as a prioritised work list for the owning teams, not as confirmed vulnerabilities. Advisories are a data table (`$Advisories` near the top of the script), so another product/CVE pair can be added with a version regex, the fixed releases and the oldest fixed branch.
+
+## Changes in 2.6.0
+- **JSONL outputs:** `_errors.jsonl` (every run), `_delta.jsonl`, `_screenshots.jsonl`, and a `.jsonl` for every
+  store query. Errors logged before the output files open are held and written when they do.
+- **`-NvdFeed` on scan runs:** `_vulns.csv`/`.jsonl`/`.provenance.json` from `WebInv.Vulns.Run` over the run's own
+  services.
+- **`run.json`:** `runUuid`, `engagement`, `exitCode`; the exit code is now worked out before `run.json` is
+  written. The store ignores the new fields.
+- **Tideline shipping:** `-ShipTo`, `-ShipCertThumbprint`, `-ShipCertPath`, `-ShipCertPasswordFile`, `-ShipCaFile`,
+  `-Engagement`, `-ShipRetries`; companion `Send-WebInventoryRun.ps1`; `SHIPPING.md`. The C# (`src/ship.cs`) is
+  compiled only when shipping and is embedded in the companion scripts as well.
+- **Sensor enrollment:** `Register-WebInventorySensor.ps1` (step-ca JWK token; `certreq.exe` on Windows, PFX
+  elsewhere; renewal through step-ca's rekey endpoint).
+- **Schemas:** `schemas/*.schema.json` (JSON Schema 2020-12), generated by `tools/schemas/gen.py`; CI checks they
+  match the source.
+- **Self-test:** 149 checks (156 on Windows): adds the shipping code (JSON round trip, sensor names, the ES256
+  signature, the pinned chain, run collection, chunking, gzip parts, refusals, option checks).
+- **Runtime warnings:** compiler warnings are no longer printed under PowerShell 7.5+, where .NET 9 marks some
+  certificate APIs obsolete. CI still compiles every block warning-free with Windows PowerShell 5.1's compiler.
+- **CI:**
+  - the shipping suite against the mock ingest;
+  - enrollment against step-ca 0.30.2 on PowerShell 7;
+  - on Windows PowerShell 5.1: certreq enrollment, a scan shipped over Schannel with the machine key, export,
+    renewal and shipping again.
 
 ## Changes in 2.5.0
 - **Cloud/CDN attribution:** `WebInventory.cloud.json` (`tools/cloud/build.py`, refreshed weekly), engine lookup

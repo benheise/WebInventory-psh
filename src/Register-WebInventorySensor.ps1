@@ -9,8 +9,9 @@
     and hands it over (it is valid for five minutes). The token names the CA, the root fingerprint and the sensor's
     names. This script fetches the root by that fingerprint, checks the CA's TLS certificate against it, creates
     the key, sends a certificate request with the token, and installs the certificate:
-      - Windows: certreq.exe creates a non-exportable ECDSA P-256 key in the machine key store and binds the
-        issued certificate to it in LocalMachine\My (run elevated). The CA's intermediate goes to LocalMachine\CA.
+      - Windows: certreq.exe creates a non-exportable ECDSA P-256 key in the machine key store; the issued
+        certificate goes to LocalMachine\My and certutil -repairstore binds it to that key (run elevated). The CA's
+        intermediate goes to LocalMachine\CA; the root is pinned, never added to the machine's Trusted Root store.
       - Elsewhere: an ECDSA P-256 key and the certificate in ~/.config/webinventory/tideline-sensor.pfx (mode 0600).
     The pinned root goes to %ProgramData%\WebInventory\tideline-root.crt (~/.config/webinventory/ elsewhere), with
     tideline-sensor.json recording the CA URL. Invoke-WebInventory.ps1 -ShipTo and Send-WebInventoryRun.ps1 use both
@@ -144,6 +145,9 @@ function Save-TidelineFiles($Roots, [Uri]$Base, [string]$Sensor, $Cert) {
 
 # ---- Windows: certreq.exe makes a non-exportable ECDSA P-256 key in the machine key store ----
 function New-WindowsRequest([string]$Subject, [string[]]$Sans, [string]$Work) {
+    # the pending request (a placeholder certificate holding the new key) is found again by this friendly name
+    $marker = 'Tideline sensor request ' + [guid]::NewGuid().ToString('N').Substring(0, 12)
+    $script:PendingMarker = $marker
     $sanText = @(foreach ($s in $Sans) {
             $ip = $null
             if ($s -match '^[a-z][a-z0-9+.-]*:' -and $s -notmatch '@') { 'url={0}' -f $s }
@@ -154,7 +158,7 @@ function New-WindowsRequest([string]$Subject, [string[]]$Sans, [string]$Work) {
     $inf = @('[Version]', 'Signature="$Windows NT$"', '', '[NewRequest]', ('Subject = "CN={0}"' -f $Subject),
         'KeyAlgorithm = ECDSA_P256', 'KeyLength = 256', 'HashAlgorithm = SHA256', 'MachineKeySet = TRUE', 'Exportable = FALSE',
         'ProviderName = "Microsoft Software Key Storage Provider"', 'KeyUsage = "CERT_DIGITAL_SIGNATURE_KEY_USAGE"', 'RequestType = PKCS10',
-        'SMIME = FALSE', ('FriendlyName = "Tideline sensor {0}"' -f $Subject), '', '[EnhancedKeyUsageExtension]', 'OID = 1.3.6.1.5.5.7.3.2', '',
+        'SMIME = FALSE', ('FriendlyName = "{0}"' -f $marker), '', '[EnhancedKeyUsageExtension]', 'OID = 1.3.6.1.5.5.7.3.2', '',
         '[Extensions]', '2.5.29.17 = "{text}"')
     foreach ($t in $sanText) { $inf += ('_continue_ = "{0}&"' -f $t) }
     $infPath = Join-Path $Work 'sensor.inf'; $reqPath = Join-Path $Work 'sensor.req'
@@ -164,22 +168,51 @@ function New-WindowsRequest([string]$Subject, [string[]]$Sans, [string]$Work) {
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $reqPath)) { throw ("certreq -new failed ({0}): {1}" -f $LASTEXITCODE, (($out | Out-String) -replace '\s+', ' ').Trim()) }
     $b64 = ([IO.File]::ReadAllText($reqPath) -replace '-----[A-Z ]+-----', '' -replace '\s', '')
-    [WebInv.SensorCert]::Pem([Convert]::FromBase64String($b64), 'CERTIFICATE REQUEST')
+    @{ Pem = [WebInv.SensorCert]::Pem([Convert]::FromBase64String($b64), 'CERTIFICATE REQUEST'); Marker = $marker }
 }
-function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Work) {
-    $crt = Join-Path $Work 'sensor.crt'
-    [IO.File]::WriteAllText($crt, $LeafPem, [Text.Encoding]::ASCII)
-    $ErrorActionPreference = 'Continue'
-    $out = & certreq.exe -accept -q -machine $crt 2>&1
-    $ErrorActionPreference = 'Stop'
-    if ($LASTEXITCODE -ne 0) { throw ("certreq -accept failed ({0}): {1}" -f $LASTEXITCODE, (($out | Out-String) -replace '\s+', ' ').Trim()) }
+# the placeholder certreq left in LocalMachine\REQUEST; with -DeleteKey also its key (a request that was not issued)
+function Remove-PendingRequest([string]$Marker, [switch]$DeleteKey) {
+    $rq = New-Object Security.Cryptography.X509Certificates.X509Store('REQUEST', 'LocalMachine')
+    try { $rq.Open('ReadWrite') } catch { return }
+    try {
+        foreach ($c in @($rq.Certificates | Where-Object { $_.FriendlyName -eq $Marker })) {
+            $k = $null
+            if ($DeleteKey) { try { $k = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPrivateKey($c) } catch { } }
+            $rq.Remove($c)
+            if ($k) { try { $k.Key.Delete() } catch { } finally { $k.Dispose() } }
+        }
+    }
+    finally { $rq.Close() }
+}
+# certreq -accept would insist on a chain to a root in the machine's trust store, and the Tideline root is pinned, not
+# trusted machine-wide. So the issued certificate goes into LocalMachine\My as it is, and certutil -repairstore binds it
+# to the key certreq made (it finds the key by the certificate's public key).
+function Install-WindowsCert([string]$LeafPem, [string[]]$ChainPem, [string]$Work, [string]$Marker) {
     $leaf = New-Object Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]@([WebInv.SensorCert]::PemBlocks($LeafPem, 'CERTIFICATE'))[0])
-    $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadOnly')
-    try { $c = @($st.Certificates.Find('FindByThumbprint', $leaf.Thumbprint, $false))[0] } finally { $st.Close() }
-    if (-not $c -or -not $c.HasPrivateKey) { throw "the certificate $($leaf.Thumbprint) is not in LocalMachine\My with its key after certreq -accept" }
     # intermediates, so that Schannel sends the chain
     $ca = New-Object Security.Cryptography.X509Certificates.X509Store('CA', 'LocalMachine'); $ca.Open('ReadWrite')
     try { foreach ($p in $ChainPem) { foreach ($d in [WebInv.SensorCert]::PemBlocks($p, 'CERTIFICATE')) { $x = New-Object Security.Cryptography.X509Certificates.X509Certificate2 (, [byte[]]$d); if ($x.Thumbprint -ne $leaf.Thumbprint -and $x.Subject -ne $x.Issuer) { $ca.Add($x) } } } } finally { $ca.Close() }
+    $my = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $my.Open('ReadWrite')
+    try { $my.Add($leaf) } finally { $my.Close() }
+    $c = $null; $log = @()
+    foreach ($attempt in @(@(), @('-csp', 'Microsoft Software Key Storage Provider'))) {
+        $ErrorActionPreference = 'Continue'
+        $out = & certutil.exe -silent @attempt -repairstore my $leaf.SerialNumber 2>&1
+        $rc = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        $log += ('certutil {0}-repairstore ({1}): {2}' -f $(if ($attempt.Count) { '-csp KSP ' } else { '' }), $rc, (($out | Out-String) -replace '\s+', ' ').Trim())
+        $st = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $st.Open('ReadOnly')
+        try { $c = @($st.Certificates.Find('FindByThumbprint', $leaf.Thumbprint, $false))[0] } finally { $st.Close() }
+        if ($c -and $c.HasPrivateKey) { break }
+    }
+    if (-not $c -or -not $c.HasPrivateKey) {
+        $my = New-Object Security.Cryptography.X509Certificates.X509Store('My', 'LocalMachine'); $my.Open('ReadWrite')
+        try { foreach ($x in @($my.Certificates.Find('FindByThumbprint', $leaf.Thumbprint, $false))) { $my.Remove($x) } } finally { $my.Close() }
+        throw ("the certificate {0} could not be bound to its key: {1}" -f $leaf.Thumbprint, ($log -join ' | '))
+    }
+    try { $c.FriendlyName = 'Tideline sensor ' + [WebInv.SensorCert]::SensorId($c) } catch { }
+    Remove-PendingRequest $Marker
+    $script:PendingMarker = $null
     $c
 }
 function Get-KeyFile($Cert) {
@@ -287,7 +320,7 @@ try {
         Write-Line ("Enrolling sensor {0} with {1} (token for {2}, expires {3:u})" -f $sensor, $base, $sub, $exp.UtcDateTime) 'Cyan'
         try { $roots = Get-PinnedRoot $base $fp } catch { Stop-With 2 (Get-Inner $_) }
         Write-Line ("  root {0} matches the token's fingerprint; the CA's certificate chains to it" -f $roots[0].Subject)
-        $req = if ($onWindows) { @{ Pem = (New-WindowsRequest $sub $sans $work) } } else { New-PortableRequest $sub $sans }
+        $req = if ($onWindows) { New-WindowsRequest $sub $sans $work } else { New-PortableRequest $sub $sans }
         $body = [ordered]@{ csr = $req.Pem; ott = $Token.Trim() }
         if ($NotAfter) { $body.notAfter = $NotAfter }
         try { $r = Invoke-Ca $base 'POST' '/1.0/sign' (ConvertTo-Json -InputObject $body -Compress) $null $roots } catch { Stop-With 2 (Get-Inner $_) }
@@ -295,7 +328,7 @@ try {
         $j = $r.Json
         $chain = @(); $cc = $j.Arr('certChain'); if ($cc) { $chain = @($cc | ForEach-Object { [string]$_ }) } elseif ($j.Str('ca')) { $chain = @($j.Str('ca')) }
         if ($onWindows) {
-            $cert = Install-WindowsCert $j.Str('crt') $chain $work
+            $cert = Install-WindowsCert $j.Str('crt') $chain $work $req.Marker
             Grant-Key $cert $GrantKeyAccess
             Write-Line ("  key: ECDSA P-256 in the machine key store, {0}" -f $(if (Test-NotExportable $cert) { 'not exportable' } else { 'EXPORTABLE (unexpected)' }))
             $where = 'LocalMachine\My'
@@ -323,13 +356,13 @@ try {
     Write-Line ("Renewing sensor {0} (certificate {1}, valid until {2:u}) with a new key at {3}" -f $sensor, $old.Thumbprint, $old.NotAfter, $base) 'Cyan'
     $cn = if ($old.Subject -match 'CN=([^,]+)') { $Matches[1] } else { $sensor }
     $sans = @([WebInv.SensorCert]::Uris($old))
-    $req = if ($onWindows) { @{ Pem = (New-WindowsRequest $cn $sans $work) } } else { New-PortableRequest $cn $sans }
+    $req = if ($onWindows) { New-WindowsRequest $cn $sans $work } else { New-PortableRequest $cn $sans }
     try { $r = Invoke-Ca $base 'POST' '/1.0/rekey' (ConvertTo-Json -InputObject ([ordered]@{ csr = $req.Pem }) -Compress) $old $roots } catch { Stop-With 2 (Get-Inner $_) }
     if ($r.Status -ne 201 -and $r.Status -ne 200) { Stop-With 2 ("the CA refused the renewal: {0}" -f (Get-CaError $r)) }
     $j = $r.Json
     $chain = @(); $cc = $j.Arr('certChain'); if ($cc) { $chain = @($cc | ForEach-Object { [string]$_ }) } elseif ($j.Str('ca')) { $chain = @($j.Str('ca')) }
     if ($onWindows) {
-        $cert = Install-WindowsCert $j.Str('crt') $chain $work
+        $cert = Install-WindowsCert $j.Str('crt') $chain $work $req.Marker
         $grant = @($GrantKeyAccess)
         if (-not $grant.Count) {
             # the accounts that could read the previous key keep that right on the new one
@@ -345,4 +378,8 @@ try {
     Write-Line ("Renewed: sensor {0}, certificate {1} in {2}, valid until {3:u}" -f $sensor, $cert.Thumbprint, $where, $cert.NotAfter) 'Green'
     exit 0
 }
-finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
+finally {
+    # a request that was never issued leaves no placeholder or key behind
+    if ($onWindows -and $script:PendingMarker) { Remove-PendingRequest $script:PendingMarker -DeleteKey }
+    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+}

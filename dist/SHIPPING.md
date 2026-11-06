@@ -60,7 +60,9 @@ The token is valid for five minutes. It names the CA, the fingerprint of the CA'
 ```
 
 - `certreq.exe` creates an ECDSA P-256 key in the machine key store. The key is not exportable.
-- The issued certificate goes to `LocalMachine\My`, bound to that key, and the CA's intermediate to `LocalMachine\CA`.
+- The issued certificate goes to `LocalMachine\My`, bound to that key with `certutil -repairstore`, and the CA's
+  intermediate to `LocalMachine\CA`. The Tideline root is not added to the machine's Trusted Root store; it is
+  pinned for shipping only.
 - The root is fetched by the token's fingerprint and saved to `%ProgramData%\WebInventory\tideline-root.crt`. The
   CA's own TLS certificate must chain to it. `tideline-sensor.json` records the CA URL.
 - `-GrantKeyAccess` lets the account of the scheduled scan use the key (SYSTEM and Administrators always can).

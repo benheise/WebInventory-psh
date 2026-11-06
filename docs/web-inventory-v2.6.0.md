@@ -120,8 +120,12 @@ copied to a host on its own.
 - **Windows.**
   - `certreq.exe -new -machine` creates an ECDSA P-256 key in the Software Key Storage Provider, machine key set,
     not exportable.
-  - `certreq -accept` binds the issued certificate to it in `LocalMachine\My`; the intermediate goes to
-    `LocalMachine\CA`.
+  - The issued certificate is added to `LocalMachine\My`, and `certutil -repairstore` binds it to that key; the
+    intermediate goes to `LocalMachine\CA`.
+  - Not `certreq -accept`: it refuses a certificate whose chain does not end in the machine's Trusted Root store
+    (CERT_E_CHAINING, found on the Windows CI runner). The Tideline root is pinned for shipping and is deliberately
+    not trusted machine-wide.
+  - certreq's pending request is removed afterwards, and with its key if the CA did not issue.
   - `-GrantKeyAccess` adds read access to the key file for the scan's account.
 - **Elsewhere.** A key in memory and a PFX at `~/.config/webinventory/tideline-sensor.pfx`, created with mode 0600.
 - **Renewal.** `-Renew` posts a new key's request to step-ca's `rekey` endpoint, over mutual TLS with the current

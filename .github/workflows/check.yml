@@ -221,9 +221,9 @@ jobs:
           curl -sSLO https://github.com/smallstep/cli/releases/download/v0.30.2/step_linux_0.30.2_amd64.tar.gz
           printf '%s  %s\n' 126615795bafe3f2d3f890e2d628fa6e2857315fb48d0671d34b23047cc37d73 step-ca_linux_0.30.2_amd64.tar.gz abf5ffe9a39c01c7b4e777d50a96f30f33f5bd8eeafa2dfeef22b8a4abeee14a step_linux_0.30.2_amd64.tar.gz | sha256sum -c --quiet
           for f in *.tar.gz; do tar -xzf "$f"; done
-          cp "$(find . -name step-ca -type f | head -1)" "$(find . -path '*/bin/step' -type f | head -1)" .
+          mkdir -p bin && cp "$(find . -name step-ca -type f -not -path './bin/*' | head -1)" "$(find . -path '*/bin/step' -type f -not -path './bin/*' | head -1)" bin/
           cd "$GITHUB_WORKSPACE"
-          bash tests/v26/register.sh "$RUNNER_TEMP/reg" "$RUNNER_TEMP/step" pwsh > reg.txt 2>&1 || rc=1
+          bash tests/v26/register.sh "$RUNNER_TEMP/reg" "$RUNNER_TEMP/step/bin" pwsh > reg.txt 2>&1 || rc=1
           cat reg.txt
           grep '^FAIL' reg.txt | head -9 | sed 's/^/::error title=Tideline enrollment::/'
           echo "::$([ $rc = 0 ] && echo notice || echo error) title=Tideline enrollment (PowerShell 7, step-ca)::$(tail -1 reg.txt)"
