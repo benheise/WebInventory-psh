@@ -2,8 +2,10 @@
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also PowerShell 7), built as a
 standalone CMDB replacement. One script, no installs, no external binaries: TCP connect, HTTP/HTTPS detection on any
-port, product/version/CPE identification from 11,549 rules, certificate and TLS posture, hygiene flags, and opt-in
-SMB/RDP/SNMP identity, written to CSV, JSONL and HTML. An optional inventory store keeps first/last seen, versions and
+port, product/version/CPE identification from 11,551 rules, certificate and TLS posture, hygiene flags, and opt-in
+SMB/RDP/SNMP identity, written to CSV, JSONL and HTML. Each service's IP is matched offline against the ranges
+cloud and CDN providers publish (provider, region, service), and opt-in `-Cname` records the CNAME chains of hostname
+targets. An optional inventory store keeps first/last seen, versions and
 a change log per service on an append-only, hash-chained archive, and can be joined offline with NVD, CISA KEV and
 FIRST EPSS files.
 
@@ -12,9 +14,17 @@ credentials it ever uses are an SNMP community or SNMPv3 user you supply. Reques
 `-IdentifyPaths` (16 fixed public pages) and `-VersionPaths` (one GET to a product's documented version URL, only
 after that product was detected without a version).
 
-**Current release: 2.4.1**, the first release verified on Windows PowerShell 5.1 itself (CI on GitHub's Windows
-runners: earlier releases did not compile there; see "What v2.4.1 fixes" in [`dist/README.md`](dist/README.md)).
-2.4.0 added opt-in version URLs for detected products (`-VersionPaths`), Jira and Varnish CPE aliases from a
+**Current release: 2.5.0** adds:
+- cloud/CDN attribution from the providers' published IP ranges (AWS, Azure including Government, Google, Oracle,
+  DigitalOcean, Akamai/Linode, Cloudflare, Fastly);
+- `-Cname`;
+- screenshot checks (ok/blank/suspect/failed with a reason);
+- exit code 4 for a run in which nothing answered;
+- RDP certificates when Schannel cannot handshake;
+- fixes for Forgejo (no longer also reported as Gitea) and for Cloudflare's CPE.
+
+See [`docs/web-inventory-v2.5.0.md`](docs/web-inventory-v2.5.0.md). 2.4.1 was the first release verified on Windows
+PowerShell 5.1 itself; earlier releases did not compile there. 2.4.0 added opt-in version URLs for detected products (`-VersionPaths`), Jira and Varnish CPE aliases from a
 comparison with run-recon, and a weekly pull request that refreshes the external lists. See
 [`docs/web-inventory-v2.4.0.md`](docs/web-inventory-v2.4.0.md) and
 [`docs/web-inventory-v2.4.0-run-recon.md`](docs/web-inventory-v2.4.0-run-recon.md); 2.3.2 (version capture):
@@ -30,6 +40,7 @@ Everything an operator needs is in [`dist/`](dist):
 | `Invoke-WebInventory.ps1` | The tool (engine, built-in and version-only rules and the CPE supplement embedded) |
 | `WebInventory.rules.recog.json` | 3,098 Rapid7 Recog rules (BSD-2), auto-loaded next to the script |
 | `WebInventory.rules.wappalyzer.json` | 7,824 webappanalyzer rules (GPL-3.0 data), auto-loaded; refreshed by the weekly pull request |
+| `WebInventory.cloud.json` | Published IP ranges of cloud and CDN providers (92,358 prefixes), auto-loaded when a service on a public address answers; refreshed by the weekly pull request |
 | `WebInventory.example.psd1` | Settings template for scheduled runs |
 | `Test-WebInventoryStore.ps1` | One-off store validation on the scanner host |
 | `README.md` | Full operator guide |
@@ -55,11 +66,12 @@ are refused.
 | `src/` | Sources: PowerShell sections (`10-header.ps1` … `60-main.ps1`), the C# engine, store and probe blocks, `builtin-rules.json`, `version-rules.json` (generated), `cpe-supplement.json`, the self-test certificate (public part only) |
 | `build.py` | Assembles `dist/Invoke-WebInventory.ps1` (UTF-8 BOM, CRLF) and `dist/Test-WebInventoryStore.ps1` |
 | `dist/` | Built release files (byte-exact; see `.gitattributes`) |
-| `docs/` | Decision records (v2.3, v2.3.1, v2.3.2, v2.4.0), the run-recon comparison, the per-product version coverage table and the product sheet |
+| `docs/` | Decision records (v2.3, v2.3.1, v2.3.2, v2.4.0, v2.5.0), the run-recon comparison, the per-product version coverage table and the product sheet |
 | `lab/` | Local lab fixtures: web farm, TLS, CONNECT proxy, RDP, SNMP agent, screenshot pages (127.0.0.1 only) |
 | `tests/` | Regression scenarios, C# compile check, PSScriptAnalyzer profile run, store scenarios, performance A/B harness |
 | `tools/cpe/` | Rebuilds the CPE supplement from a newer NVD CPE Dictionary; see its README |
 | `tools/version/` | The reviewed version-only rules (`rules.py` → `src/version-rules.json`), coverage, and the container, WordPress and replay harnesses that check them; see its README |
+| `tools/cloud/` | Builds `dist/WebInventory.cloud.json` from the providers' published IP-range lists; see its README |
 | `tools/refresh/` | Pulls the newest upstream lists (Recog, webappanalyzer, NVD CPE Dictionary and CVE feeds, CISA KEV, nuclei-templates, WhatWeb), rebuilds, tests and summarises; see its README |
 | `.github/workflows/` | `refresh-lists.yml`: the refresh every Monday as one pull request, with the Windows PowerShell 5.1 checks; `check.yml`: build reproducibility, self-test, rule examples and store validation on Windows PowerShell 5.1 and PowerShell 7 for every push and pull request |
 
@@ -67,7 +79,7 @@ are refused.
 
 ```bash
 python3 build.py                                  # writes dist/Invoke-WebInventory.ps1
-pwsh ./dist/Invoke-WebInventory.ps1 -SelfTest     # 133 checks on PowerShell 7 (140 on Windows with ESENT)
+pwsh ./dist/Invoke-WebInventory.ps1 -SelfTest     # 139 checks on PowerShell 7 (146 on Windows with ESENT)
 # lab regression scenarios (Linux; needs python3 + openssl; certificates are generated, never committed)
 bash lab/make-certs.sh /tmp/wi-certs
 bash lab/with-lab.sh /tmp/wi-certs bash tests/scenarios.sh pwsh "$PWD/dist/Invoke-WebInventory.ps1" /tmp/wi-work
@@ -82,7 +94,7 @@ failing checks show as annotations on the commit.
 ## Keeping the lists current
 
 `tools/refresh/refresh.sh` (run weekly by `.github/workflows/refresh-lists.yml`) pulls the newest version of every
-external list WebInventory is built from and opens one pull request, `refresh/external-lists`, with the rebuilt rule
+external list WebInventory is built from (rule packs, NVD and KEV data, the cloud/CDN IP ranges) and opens one pull request, `refresh/external-lists`, with the rebuilt rule
 packs, the regenerated coverage table and a summary of what changed upstream. The CPE mappings
 (`tools/cpe/decisions.py`) and the version-only rules (`tools/version/rules.py`) stay hand-reviewed: the pull request
 lists new candidates and fails its checks when a reviewed name has left the NVD dictionary or a version-only rule no

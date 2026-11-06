@@ -77,7 +77,12 @@ Both are alias groups in `tools/cpe/decisions.py`, so they only widen the vulner
 - It has no version-only rules; products that httpx names without a version (a title, a cookie) stay
   version-less, which WebInventory's 2.3.2 work showed is about half of all products with a CPE.
 
-## Recommendations for WebInventory (not implemented)
+## Recommendations for WebInventory
+
+All four were implemented in 2.5.0 (`web-inventory-v2.5.0.md`): cloud and CDN attribution
+(`Cloud`/`CloudRegion`/`CloudService`), screenshot checks (ok/blank/suspect/failed), exit code 4 for a run in which
+nothing answered (3 stayed "interrupted"), and `-Cname`.
+
 
 1. **Hosting attribution.** A `Cloud` column from the IP ranges the providers publish (AWS `ip-ranges.json`, Azure
    Service Tags, Google `cloud.json`, Cloudflare `ips-v4`/`ips-v6`, Oracle, DigitalOcean). Offline lookup, no

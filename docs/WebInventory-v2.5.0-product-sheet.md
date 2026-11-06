@@ -1,8 +1,8 @@
-# Invoke-WebInventory v2.4.1 — Product Sheet
+# Invoke-WebInventory v2.5.0 — Product Sheet
 
 **Agentless web and service inventory for Windows, with history, evidence and offline vulnerability correlation, in a single PowerShell file.**
 
-Release 2.4.1 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
+Release 2.5.0 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 7) · nothing to install
 
 ---
 
@@ -11,11 +11,12 @@ Release 2.4.1 · Windows PowerShell 5.1 + .NET Framework 4.7.2 (also PowerShell 
 | | |
 |---|---|
 | **What it does** | Finds web services on any port, identifies what they are (product, version, CPE, OS, hardware), records TLS and certificate posture and hygiene flags, and (opt-in) reads SMB, RDP and SNMP identity. The result is a CMDB-grade inventory. |
-| **Footprint** | One script, `Invoke-WebInventory.ps1` (926 KB), plus optional rule packs placed next to it. There is no installer, no agent, no external binary and no internet dependency. |
+| **Footprint** | One script, `Invoke-WebInventory.ps1` (994 KB), plus optional rule packs and the cloud ranges placed next to it. There is no installer, no agent, no external binary and no internet dependency. |
 | **Platforms** | Windows PowerShell 5.1 with .NET Framework 4.7.2+ (4.8 for TLS 1.3 through Schannel). Also PowerShell 7 on Windows, Linux and macOS; the store uses its portable engine off Windows. |
-| **Knowledge base** | 11,549 fingerprint rules: 513 curated built-in, 114 version-only, 3,098 Rapid7 Recog, 7,824 Wappalyzer (webappanalyzer). 1,327 products carry a reviewed NVD CPE; 691 of them get a version (697 with `-VersionPaths`). A weekly repository workflow pulls the newest upstream lists and opens a pull request with the rebuilt packs. |
-| **Per-run output** | 79-column CSV, JSONL with per-detection evidence, offline HTML report, field-level delta, `run.json`, SHA-256 manifest, run and error logs. |
+| **Knowledge base** | 11,551 fingerprint rules: 515 curated built-in, 114 version-only, 3,098 Rapid7 Recog, 7,824 Wappalyzer (webappanalyzer). 1,326 products carry a reviewed NVD CPE; 691 of them get a version (697 with `-VersionPaths`). 92,358 IP ranges published by cloud and CDN providers. A weekly repository workflow pulls the newest upstream lists and opens a pull request with the rebuilt packs and ranges. |
+| **Per-run output** | 83-column CSV, JSONL with per-detection evidence, offline HTML report, field-level delta, `run.json`, SHA-256 manifest, run and error logs. |
 | **History** | Inventory store: first/last seen, versions and a change log per service. The database is Windows' built-in ESENT, rebuilt on demand from an append-only, hash-chained archive. |
+| **Hosting** | Each service's IP matched offline against the ranges AWS, Azure (public, Government, China), Google, Oracle, DigitalOcean, Akamai (Linode), Cloudflare and Fastly publish: provider, region, service. Opt-in CNAME chains of hostname targets. |
 | **Vulnerability view** | Inventory CPEs joined offline with NVD CVE JSON 2.0 feeds, CISA KEV and FIRST EPSS, under every NVD name of each product (184 alias groups). |
 | **Safety model** | Scope is fail-closed. No exploitation, no brute force, no default credentials, no path enumeration. |
 
@@ -135,7 +136,7 @@ Flags are observations, not exploitation results. They land in `Flags`, are high
 | Protocols (v2.3) | `SMBv1`, `SMBSigningNotRequired`, `RdpNlaNotRequired`, `RdpStandardSecurity`, `SnmpV1V2c` |
 | Version advisories | `PHP2Shell:vulnerable`, `PHP2Shell:eol-branch`, `PHP2Shell:version-hidden`, with the `+mod_php` and `+vendor-build` modifiers. The reasoning goes in `Advisories`. |
 
-### 4.4 Output schema (79 columns, CSV and JSONL)
+### 4.4 Output schema (83 columns, CSV and JSONL)
 
 | Group | Columns |
 |---|---|
@@ -148,8 +149,9 @@ Flags are observations, not exploitation results. They land in `Flags`, are high
 | Review | `Flags`, `Advisories`, `Banner`, `Notes` |
 | v2.3 (appended) | `DeviceName`, `Domain`, `ProtocolInfo`, `Jarm`, `Ja4s` |
 | v2.4 (appended) | `VersionPaths` |
+| v2.5 (appended) | `Cname`, `Cloud`, `CloudRegion`, `CloudService` |
 
-The v2.3 and v2.4 columns are appended after `Notes`, so existing CSV consumers keep their column positions. JSONL adds a `Detections` array: each detection's kind, name, version, category, confidence, CPE, source and evidence.
+The v2.3, v2.4 and v2.5 columns are appended after `Notes`, so existing CSV consumers keep their column positions. JSONL adds a `Detections` array: each detection's kind, name, version, category, confidence, CPE, source and evidence.
 
 ## 5. Capability catalogue: what each capability does and how it is wired
 
@@ -243,6 +245,20 @@ Each entry lists the switches, the code path (PowerShell function → C# class),
 - **Wiring:** `Net.ReverseLookup` results are cached per IP in a synchronized table shared by all workers. Forward resolution uses `Net.ResolveMany`, a sliding window of 32 lookups each on its own timeout. `-AllAddresses` scans every A/AAAA record of a name.
 - **Writes:** `ReverseDns`; DNS failures go to the error log, and an unresolved name is not fatal.
 
+#### A11b. CNAME chains (opt-in, v2.5.0)
+- **Switches:** `-Cname`, `-DnsServer ip[:port]`.
+- **Wiring:** after forward resolution, `WebInv.Cname.Many` asks for each resolved target name (16 in parallel):
+  - On Windows it uses `DnsQuery_W` (the system DNS client: same servers, suffix search, cache, NRPT) and keeps the answer section's CNAME records.
+  - Elsewhere, or with `-DnsServer`, it sends an RFC 1035 query over UDP to the resolvers in `/etc/resolv.conf`, with search domains for dotless names.
+  - The chain is followed from the queried name.
+  - A name that is not in DNS has no CNAME. A server that does not answer is a `CNAME` error.
+- **Writes:** `Cname` (targets in order, `;`-separated) on the rows of that name. SAN virtual-host rows and IP targets are not looked up. Store-gated (`cname` profile flag).
+
+#### A11c. Cloud / CDN attribution (default, offline, v2.5.0)
+- **Switches:** `-CloudFile`, `-NoCloud`.
+- **Wiring:** `WebInventory.cloud.json` (`tools/cloud/build.py`) is loaded once the first service on a public address answers, or before the scan with `-CloudFile`. `WebInv.Cloud.Find` returns the longest-prefix match: one hash table per prefix length in use, IPv4, IPv6 and IPv4-mapped. `IsPrivate` addresses are never looked up; no published range overlaps them. The run log records the file's version, prefix counts and SHA-256, and warns past 45 days.
+- **Writes:** `Cloud`, `CloudRegion`, `CloudService`; store-gated (`cloud` profile flag; the first fill is `Enriched`).
+
 #### A12. Fingerprinting engine
 - **Wiring:** `Complete-Row` → `WebInv.Matcher.Evaluate(Observation)`.
   - **Prefilter.** Each rule regex is reduced to the literal text a match must contain (an OR of AND-sets, via `Lit`). An Aho-Corasick pass over each value then runs only the rules whose literals are present; a 120 KB page matches in about 8 ms.
@@ -291,7 +307,7 @@ All six capabilities in this section load the extras block through `Initialize-E
 - **Switch:** `-Rdp` (TCP 3389; `rdp://host:port`).
 - **Wiring:** `Invoke-RdpCheck` → `WebInv.Rdp.Probe`:
   - **Negotiation.** An X.224 Connection Request offering SSL, HYBRID and HYBRID_EX shows the protocol the server selects.
-  - **TLS.** An `SslStream` (Schannel) handshake captures the RDP certificate.
+  - **TLS.** An `SslStream` (Schannel) handshake captures the RDP certificate. When Schannel cannot complete it (a TLS 1.0-only server on a host with TLS 1.0 disabled), a fresh connection repeats the X.224 exchange and the engine's raw ClientHello (`Tls.HelloOn`, bound through `Extras.RawCert`) reads the certificate (`CertSource` = `rdp-raw`, no chain check).
   - **CredSSP.** A TSRequest carrying NTLM NEGOTIATE returns the CHALLENGE.
   - **NLA check.** A TLS-only request answered with failure 5, HYBRID_REQUIRED_BY_SERVER, means NLA is enforced.
   - **Standard security.** A standard-RDP request shows whether legacy RDP security is still accepted. RDP-only servers are recognised, and negotiation failures are reported by name.
@@ -333,7 +349,15 @@ All six capabilities in this section load the extras block through `Initialize-E
   6. **Cleanup.** Process trees and profiles are removed after each page. On a rerun, captures already marked `ok` are kept.
 - **Writes:**
   - PNGs in `WebInventory_<RunId>_screenshots\`.
-  - Index `WebInventory_<RunId>_screenshots.csv`: `Url`, `Host`, `IP`, `Port`, `File`, `Sha256`, `Bytes`, `Status`, `PageTitle`, `PageRequests`, `BlockedOrigins`, `ProxyRefused`, `Ms`.
+  - Index `WebInventory_<RunId>_screenshots.csv`: `Url`, `Host`, `IP`, `Port`, `File`, `Sha256`, `Bytes`, `Status`, `Reason`, `PageTitle`, `PageRequests`, `BlockedOrigins`, `ProxyRefused`, `Ms`, `BrowserUrl`, `BrowserStatus`, `Capture`.
+  - **Checks (v2.5.0).** After each capture the browser reports `location.href`, the main document's status (`Network.responseReceived` of the main frame), the title and the visible text length. `WebInv.Png` decodes the image (8-bit grey/RGB/RGBA, all filter types) to measure its dominant colour. `WebInv.ShotCheck` then sets `Status`:
+    - **failed**: no image; the main document came from an origin outside the scan; or the browser's own error page.
+    - **suspect**: an error status in the browser where the scan saw success; or a title the scan did not see.
+    - **blank**: a 0-byte page, or at least 99.5 % one colour with no visible text, naming the origins the scope proxy refused.
+    - **suspect**: the same image for services the scan saw with different titles.
+    - **ok**: otherwise.
+
+    The HTML report shows the status and reason above every image that is not ok.
   - Manifest entries with relative paths, and the image in the HTML report's row details. Screenshots are not archived in the store.
 - **Note:** certificate errors are ignored for rendering (internal self-signed sites). Pages behind HTTP Basic authentication are recorded as failed.
 
@@ -382,7 +406,7 @@ All six capabilities in this section load the extras block through `Initialize-E
 | `_run.log`, `_error.log` | Preflight, effective parameters (defaults marked, secrets redacted), per-check debug, summary; categorised errors (`INPUT`, `SCOPE`, `DNS`, `NET`, `PROXY`, `TLS`, `WORKER`, `IO`, `RULES`, `SNMP`, `SCREENSHOT`, `SELFTEST`, `FATAL`) |
 | `-PassThru` | Row objects on the pipeline (scan and store queries) |
 
-Exit codes: `0` clean · `1` fatal / refused to start · `2` completed with logged errors (or a failed store ingest, or failed verification) · `3` interrupted or time limit hit.
+Exit codes: `0` clean · `1` fatal / refused to start · `2` completed with logged errors (or a failed store ingest, or failed verification) · `3` interrupted or time limit hit · `4` completed, but nothing answered (every port closed or filtered, or every name unresolved; takes precedence over 2).
 
 #### C3. Preflight and hostile-content handling
 - **Preflight (logged):** .NET release, FIPS policy, Schannel client protocol registry, the effective `SslProtocols`, SHA-256 provider, execution policy, the script's Authenticode status and the SHA-256 of every rule pack. The run refuses to start on .NET older than 4.7.2, or if the mmh3 self-check fails.
@@ -498,7 +522,7 @@ Exit codes: `0` clean · `1` fatal / refused to start · `2` completed with logg
 - **Measured:** 447,034 NVD records (2002–2026 plus the modified feed, 253 MB compressed) in about 50 s on 2 vCPU (lab store: 48.7 s in v2.3.0, 50.0 s in v2.3.1 with aliases); KEV 1,766 entries; EPSS 398,142 rows. On the lab store, v2.3.1 lists 936 rows (107 KEV) where v2.3.0 listed 1,347 (518 KEV): 453 product-only KEV rows from `(Ubuntu)` / `(Debian)` `Server` tokens are held back (counted) and 42 FortiOS KEV rows are new.
 - **Limits:**
   - Distribution packages with backported fixes report the upstream version, so they can still match.
-  - Services fingerprinted without a CPE and version cannot match. 636 of the 1,327 products with a CPE still get no version by default (630 with `-VersionPaths`); most do not show one in what a scan receives (by reason: `docs/web-inventory-coverage.md`).
+  - Services fingerprinted without a CPE and version cannot match. 635 of the 1,326 products with a CPE still get no version by default (629 with `-VersionPaths`); most do not show one in what a scan receives (by reason: `docs/web-inventory-coverage.md`).
 
 ### F. Rule management
 
@@ -525,9 +549,11 @@ Exit codes: `0` clean · `1` fatal / refused to start · `2` completed with logg
 | `-VersionPaths` | off | 0–4 GETs, only for products detected without a version |
 | `-ProbeSans` | off | up to `-MaxSans` (10) GETs + redirects, same IP only |
 | `-ReverseDns` | off | 1 PTR lookup per IP (cached) |
+| `-Cname` | off | 1 A query per hostname target to this host's DNS resolvers; nothing to the target |
+| Cloud ranges | on (offline) | 0: a lookup in `WebInventory.cloud.json`, loaded once a service on a public address answers |
 | `-TlsFingerprint` | off | 10 TLS connections (JARM; 20 if retried); JA4S 0 |
 | `-Smb` | off | 2–3 connections per host with 445 open |
-| `-Rdp` | off | 2–3 connections |
+| `-Rdp` | off | 2–3 connections (+1–2 when Schannel cannot handshake and the raw ClientHello reads the certificate) |
 | `-Snmp` | off | 1 UDP request (+1 for v3 discovery), retried on silence |
 | `-Screenshot` | off | One browser per page (4 in parallel), restricted to the scanned origins; 2–4 s per page in the lab |
 
@@ -556,10 +582,10 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 | C# compile of all three blocks with Windows PowerShell 5.1's compiler (CodeDom csc, C# 5), warnings as errors | 0 errors, 0 warnings (2.4.1; earlier releases failed here on warning CS0675) | GitHub `windows-2022` runner |
 | C# 5 compile of all three blocks against .NET Framework 4.7.2 reference assemblies | 0 errors, 0 warnings | Linux workspace |
 | PSScriptAnalyzer, Windows PowerShell 5.1 compatibility profiles | Clean, apart from deliberate empty `catch` blocks and the explicitly loaded `System.Security.Cryptography.Pkcs` types | Linux workspace |
-| `-SelfTest` | 140/140 with ESENT on Windows PowerShell 5.1; 133/133 on PowerShell 7 | GitHub `windows-2022` and `ubuntu-24.04` runners; PowerShell 7.4 locally |
+| `-SelfTest` | 146/146 with ESENT on Windows PowerShell 5.1; 139/139 on PowerShell 7 | GitHub `windows-2022` and `ubuntu-24.04` runners; PowerShell 7.4 locally |
 | `Test-WebInventoryStore.ps1` | 10/10: ESENT against the portable engine (3 runs of 2,000 services), four hard kills, verify, rebuild across engines, backfill, event-log anchoring | GitHub `windows-2022` runner |
-| Lab regression scenarios | 25/25 | Local lab |
-| Store scenarios | v2.2: 40/40 · v2.3: 34/34 (v2.3.1 adds alias, platform-check and OS-suppression cases) · Enriched gating: 4/4 | Portable engine |
+| Lab regression scenarios | 30/30 (v2.5.0 adds exit code 4 and option checks) | Local lab |
+| Store scenarios | v2.2: 40/40 · v2.3: 34/34 (v2.3.1 adds alias, platform-check and OS-suppression cases) · Enriched gating: 4/4 · v2.5 gating (cloud, CNAME): 4/4 | Portable engine |
 | Interleaved A/B against v2.2.0 | Identical in 12/12 | Lab and 200-service farm |
 | Crash safety | `kill -9` at four points of a 50,000-service ingest: byte-identical digests after reopen | Portable engine |
 | JARM against `jarm.py` | Identical on 6 TLS services | Lab |
@@ -580,6 +606,11 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 | v2.4.0 A/B against v2.3.2 | Lab, 200-service farm and closed ports identical field by field; with `-VersionPaths` lab and farm identical too, same request counts (no product there needs a version URL); wall times within run-to-run noise, startup +0.1 s | Lab and 200-service farm |
 | v2.4.0 Jira and Varnish aliases | Jira 8.20.0: 2 → 18 rows (1 KEV); Varnish 6.0.10: 1 → 3 (KEV CVE-2023-44487) | NVD 2002–2026, KEV |
 | v2.4.0 list refresh, end to end | Current upstream in a scratch copy: webappanalyzer 7,824 → 7,874 rules, Recog and supplement unchanged, 1 CPE candidate listed, tests pass, exit 10 (changed, checks passed) | NVD feeds and CPE Dictionary 2026-11-06 |
+| v2.5.0 cloud lookup against a Python longest-prefix oracle | 0 mismatches: 80,000 addresses on PowerShell 7, 40,000 on Windows PowerShell 5.1 (inside ranges, every edge and its neighbours, anywhere) | Linux workspace; GitHub runners |
+| v2.5.0 CNAME | Same chain as `Resolve-DnsName` (Windows DNS client) and `dig` (UDP) for 5 public names; loopback responder in the self-test; lab scan with `-DnsServer` | GitHub runners; lab |
+| v2.5.0 screenshot checks | Eight cases in real headless Chromium classified as intended: ok; blank (empty body; white app shell behind the scope proxy); failed (redirect off scope); suspect (503 to the browser, renamed title, one image for two titles) | Lab |
+| v2.5.0 RDP raw certificate | TLS 1.0-only RDP server: certificate, TLS 1.0, `WeakTLS` through the raw ClientHello; NLA server unchanged | Lab |
+| v2.5.0 A/B against v2.4.1 | Lab, 200-service farm and closed ports identical field by field; wall times within run-to-run noise; closed-port run exits 4 | Lab and 200-service farm |
 | v2.3.2 vulnerabilities | 17 product recordings: 149 rows (52 KEV) before, 197 (35 KEV) after. Gone: 21 Roundcube range rows (6 KEV) from a favicon's `1.5.0` for a 1.6.20 server, and 11 KEV listings whose real version is outside the range (TeamCity 4, Solr 3, Metabase 2, Spark, n8n). New: range or exact-version matches for Gitea 1.22.3 (40), TeamCity 2025.11.8 (13), Solr 9.4.1 (7), Metabase 0.58.39 (5), CoBlocks and PixelYourSite (5), Checkmk 2.4.0p39 (4), Mattermost 10.11.26 (3) | NVD 2002–2026, KEV, EPSS |
 
 **Windows PowerShell 5.1 in CI:** the repository's `Check` workflow compiles the three C# blocks with Windows PowerShell 5.1's compiler and runs `-SelfTest`, `-TestRules` and `Test-WebInventoryStore.ps1` on GitHub's `windows-2022` runners for every push and pull request. Its first runs found that releases before 2.4.1 did not compile on Windows PowerShell 5.1 (`Add-Type` treats compiler warnings as errors there, and csc warned on the OID parser); 2.4.1 passes every check there.
@@ -616,6 +647,7 @@ These figures were measured under PowerShell 7.4 on Linux. Before quoting them f
 | Wappalyzer (webappanalyzer) rule pack | GPL-3.0 (data) | From commit `d91f7e51`. No obligations for internal use; keep `LICENSE-GPL-3.0.txt` and the notice with the pack if you distribute it outside your organisation. The script reads it as data. |
 | Favicon hash | MurmurHash3 x86_32, public domain | Re-implemented in C# |
 | JARM | BSD-3-Clause (Salesforce) | Method re-implemented in C#; checked against `jarm.py` |
+| Cloud/CDN IP ranges | Published by each provider for customers' firewalls | AWS, Azure (Service Tags), Google, Oracle, DigitalOcean, Akamai (Linode), Cloudflare, Fastly; sources and hashes recorded in the file |
 | JA4S | FoxIO License 1.1 | Internal, non-monetised use is permitted. Using JA4+ to provide value to paying customers needs a FoxIO OEM licence, and FoxIO states the JA4+ methods are patent pending. `-NoJa4s` keeps JARM and drops JA4S. |
 
 Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summary is a plain reading of those licences, not legal advice.
@@ -634,7 +666,8 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 **Known limits:**
 - Version-based findings (CPEs, advisories, vulnerability matches) cannot see distribution backports.
 - Wappalyzer's JavaScript-variable (`js`) and DOM (`dom`) checks need a browser and are skipped.
-- RDP certificates from TLS 1.0-only servers are unreadable on hardened scanner hosts (Schannel).
+- RDP certificates read through the raw ClientHello have no chain check, and the NTLM names of such servers stay empty.
+- Akamai's CDN, IBM Cloud, Alibaba, Hetzner and OVH publish no machine-readable range list: their addresses stay unattributed.
 - Names resolve on the scanning host even with `-Proxy`.
 - Screenshots are not archived in the store.
 - One process opens a store at a time.
@@ -642,17 +675,16 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 
 **Recommended next steps** (not implemented):
 - Archive and diff screenshots in the store.
-- Read RDP certificates with a raw ClientHello after the X.224 exchange.
 - Review the CPE and version candidates each weekly refresh pull request lists, and add products as new releases start to show their version.
-- Hosting attribution from the providers' published IP ranges, screenshot capture validation, a distinct exit code for a run in which nothing answered, and CNAME chains for hostname targets (from the run-recon comparison, `docs/web-inventory-v2.4.0-run-recon.md`).
 
-## 12. Parameter reference (104 parameters)
+## 12. Parameter reference (108 parameters)
 
 | Group | Parameters (defaults in parentheses) |
 |---|---|
 | Targets | `-Target` (positional), `-TargetFile`, `-HostFile`, `-Port` (`web`), `-PortFile`, `-Exclude`, `-ExcludeFile`, `-Scope`, `-ScopeFile`, `-DropOutOfScope`, `-SkipInvalidInput`, `-AllAddresses`, `-MaxTargets` (65536), `-Force` |
 | Pace | `-Pace` (Normal), `-Threads` (64), `-TimeoutMs` (3000), `-Retries` (1), `-MaxPerHost` (4), `-DelayMs` (0), `-JitterMs` (0), `-MaxRedirects` (5), `-MaxBodyBytes` (262144), `-BannerWaitMs` (300), `-MaxRuntimeMinutes` (0 = none) |
-| Probes | `-NoFavicon`, `-NoExtras`, `-NoTlsScan`, `-Options`, `-IdentifyPaths`, `-VersionPaths`, `-ProbeSans`, `-MaxSans` (10), `-ReverseDns`, `-FollowOffHost`, `-UserAgent`, `-CertWarnDays` (30) |
+| Probes | `-NoFavicon`, `-NoExtras`, `-NoTlsScan`, `-Options`, `-IdentifyPaths`, `-VersionPaths`, `-ProbeSans`, `-MaxSans` (10), `-ReverseDns`, `-Cname`, `-DnsServer`, `-FollowOffHost`, `-UserAgent`, `-CertWarnDays` (30) |
+| Hosting | `-CloudFile` (`WebInventory.cloud.json` next to the script), `-NoCloud` |
 | v2.3 probes | `-TlsFingerprint`, `-NoJa4s`, `-Smb`, `-Rdp`, `-Snmp`, `-SnmpCommunity`, `-SnmpVersion` (2c with a community, else 3), `-SnmpCredential`, `-SnmpAuthProtocol` (SHA), `-SnmpPrivProtocol` (AES when a privacy password is given), `-SnmpPrivPassword` |
 | Screenshots | `-Screenshot`, `-BrowserPath` (Edge), `-BrowserArgument`, `-ScreenshotThreads` (4), `-ScreenshotSize` (1366x768), `-ScreenshotTimeoutSec` (30) |
 | Network path | `-Proxy`, `-ProxyCredential` |
@@ -667,26 +699,28 @@ Full texts are in `THIRD-PARTY-NOTICES.txt` and `LICENSE-GPL-3.0.txt`. This summ
 
 | File | Purpose |
 |---|---|
-| `Invoke-WebInventory.ps1` | The tool: one file with the engines, the 513 built-in and 114 version-only rules and the CPE supplement embedded. SHA-256 in `SHA256SUMS.txt` |
+| `Invoke-WebInventory.ps1` | The tool: one file with the engines, the 515 built-in and 114 version-only rules and the CPE supplement embedded. SHA-256 in `SHA256SUMS.txt` |
 | `WebInventory.rules.recog.json` | 3,098 Recog rules (auto-loaded) |
 | `WebInventory.rules.wappalyzer.json` | 7,824 Wappalyzer rules (auto-loaded) |
+| `WebInventory.cloud.json` | Cloud/CDN IP ranges (92,358 prefixes; loaded when a service on a public address answers) |
 | `WebInventory.example.psd1` | Settings template for scheduled runs |
 | `Test-WebInventoryStore.ps1` | One-off store validation on the scanner host |
 | `README.md`, `PERFORMANCE.md` | Operator guide; measured performance and A/B records |
 | `THIRD-PARTY-NOTICES.txt`, `LICENSE-GPL-3.0.txt` | Licences and upstream provenance |
 | `SHA256SUMS.txt` | Hashes of the files above |
 
-The dev suite (`WebInventory-v2.4.1-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary) `tools/version/` (the version-only rules, their review, and the container, WordPress and replay harnesses), `tools/refresh/` (the list refresh) and `.github/workflows/` (the weekly refresh and the Windows PowerShell 5.1 / PowerShell 7 checks).
+The dev suite (`WebInventory-v2.5.0-dev-suite.zip`, and the GitHub repository) adds the sources (`src/`, including `cpe-supplement.json`), `build.py`, the lab fixtures (web, TLS, proxy, RDP, SNMP, screenshot pages), the test harnesses (regressions, store scenarios, performance A/B) and `tools/cpe/` (rebuilds the CPE supplement from a newer NVD dictionary) `tools/version/` (the version-only rules, their review, and the container, WordPress and replay harnesses), `tools/cloud/` (builds the cloud ranges), `tools/refresh/` (the list refresh) and `.github/workflows/` (the weekly refresh and the Windows PowerShell 5.1 / PowerShell 7 checks).
 
 ## 14. Quick start
 
 ```powershell
-.\Invoke-WebInventory.ps1 -SelfTest                                     # offline checks (140 on Windows with ESENT)
+.\Invoke-WebInventory.ps1 -SelfTest                                     # offline checks (146 on Windows with ESENT)
 .\Invoke-WebInventory.ps1 10.0.0.0/24 -ListTargets                      # expand + scope-check only; sends nothing
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -ScopeFile .\authorized.txt -Pace Polite -BaselineCsv auto
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -Smb -Rdp -TlsFingerprint -Screenshot -Store D:\WebInventoryStore
 .\Invoke-WebInventory.ps1 -HostFile .\hosts.txt -VersionPaths -Store D:\WebInventoryStore    # + version URLs of detected products
 .\Invoke-WebInventory.ps1 -HostFile .\dmz.txt -Proxy http://jump01:3128 -ProxyCredential (Get-Credential)
+.\Invoke-WebInventory.ps1 -HostFile .\dmz-names.txt -Cname -Screenshot                       # CNAME chains, checked screenshots
 .\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Changes -WithinDays 7 -ChangeType Added,Retired
 .\Invoke-WebInventory.ps1 -Store D:\WebInventoryStore -StoreQuery Vulnerabilities -NvdFeed D:\feeds\nvd `
     -KevFile D:\feeds\known_exploited_vulnerabilities.json -EpssFile D:\feeds\epss_scores-current.csv.gz -Filter 'Kev=Yes'

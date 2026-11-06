@@ -750,6 +750,39 @@ Other keys: `o` (`i` ignore case, `s` dot-all, `a` absolute anchors, `b` the val
     host, and try `-Screenshot` once interactively there (Edge policies can block headless mode or remote debugging; the
     canary reports it).
 
+- **v2.5.0 additions** (Linux workspace and GitHub's Windows and Ubuntu runners):
+  - **Compile and static checks.** The three C# blocks compile with Windows PowerShell 5.1's compiler (CI) and as
+    C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0 warnings. PSScriptAnalyzer
+    findings are unchanged.
+  - **Tests.** Self-test 146/146 on Windows PowerShell 5.1 (ESENT) and 139/139 on PowerShell 7. All 3,225 rule
+    examples pass on both. The 30 lab regression scenarios pass, including the new exit-code and option checks.
+    Store scenarios v2.2 40/40 and v2.3 34/34; gating v2.3 4/4 and v2.5 4/4; `Test-WebInventoryStore.ps1` 10/10 on
+    Windows.
+  - **Cloud lookup.** Compared with a Python longest-prefix match over the same file: 80,000 addresses (inside
+    ranges, on every edge and its neighbours, anywhere) with 0 mismatches on PowerShell 7, and 40,000 with 0 on
+    Windows PowerShell 5.1. No published range overlaps private, loopback, link-local, CGNAT, multicast or reserved
+    space. A service on a public address in a test range loaded the ranges and filled all three columns; a run with
+    only internal addresses did not load them.
+  - **CNAME.** Loopback responder in the self-test. Five public names give the same chain as `Resolve-DnsName`
+    (Windows DNS client) and as `dig` (UDP, Linux) in CI. A lab scan with `-DnsServer` put the expected chain on
+    every row of the name.
+  - **Screenshot checks.** Real headless Chromium against eight lab cases
+    (`lab/shotcases.py`):
+    - ok: a normal page;
+    - blank: an empty body;
+    - blank: a white app shell whose script comes from a CDN, with the refused origin named;
+    - failed: a redirect to another host, with both refused origins named;
+    - suspect: a 503 to the browser and a 200 to the scanner;
+    - suspect, both: two identical pages under two titles;
+    - suspect: a script that renames the page.
+  - **RDP.** A TLS 1.0-only fake RDP server, which the PowerShell 7/OpenSSL client refuses, gives its certificate,
+    TLS 1.0 and `WeakTLS:TLS1.0` through the raw ClientHello. An NLA server keeps the Schannel path and its NTLM build
+    (`tests/v25/rdp-raw.sh`).
+  - **Forgejo.** Replayed container recordings: Forgejo 9.0.3 and 17.0.1 give Forgejo only; Gitea 1.22.3 and
+    1.27.3 are unchanged. The re-imported Wappalyzer pack differs from v2.4.1's only in the five Cloudflare rules.
+  - **A/B against v2.4.1.** Two interleaved runs each (`PERFORMANCE.md`): lab, 200-service farm and closed ports are
+    identical field by field, and wall times are within run-to-run noise. The closed-port run now exits 4.
+
 - **v2.4.0 additions** (same Linux workspace):
   - The three C# blocks compile as C# 5 against the .NET Framework 4.7.2 reference assemblies with 0 errors and 0
     warnings; PSScriptAnalyzer findings unchanged (16 deliberate empty `catch` blocks, 12 notes on the explicitly
@@ -1021,7 +1054,7 @@ Treat these flags as a prioritised work list for the owning teams, not as confir
 ## Further recommendations (not implemented)
 1. **Screenshots in the store.** Screenshots stay in `-OutputDir`; archiving them (and diffing them across runs) would
    make the store several times larger, so it was left out.
-2. **Version capture, continued.** 636 of the 1,327 products with a CPE still get no version by default (630 with
+2. **Version capture, continued.** 635 of the 1,326 products with a CPE still get no version by default (629 with
    `-VersionPaths`), mostly because nothing a scan receives shows it (the reasons are listed per product in
    `docs/web-inventory-coverage.md`). Six have a candidate that could not be checked here (Sophos Firewall: no image or
    sample of the value; Rancher: its image needs a cgroup v2 host; QNAP QTS (service and OS), N-central, Contao: no sample of how the
