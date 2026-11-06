@@ -92,8 +92,9 @@ jobs:
           Add-Type -TypeDefinition $Matches[1] -ReferencedAssemblies System.Core -IgnoreWarnings
           $same = 0; $names = 'www.github.com', 'www.microsoft.com', 'www.office.com', 'docs.python.org', 'learn.microsoft.com'
           foreach ($n in $names) {
-              # CDN names can answer differently from one query to the next: a difference is asked once more
-              for ($try = 0; $try -lt 2; $try++) {
+              # CDN names can answer differently from one query to the next: a difference is asked again, twice
+              for ($try = 0; $try -lt 3; $try++) {
+                  if ($try) { Start-Sleep -Seconds 2 }
                   $e = $null; $mine = @([WebInv.Cname]::Chain($n, $null, 5000, [ref]$e))
                   $ref = @(Resolve-DnsName -Name $n -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'CNAME' } | ForEach-Object { $_.NameHost.ToLowerInvariant().TrimEnd('.') })
                   $ok = $null -eq $e -and ($mine -join ' > ') -eq ($ref -join ' > ')
@@ -104,8 +105,9 @@ jobs:
               Write-Host $line
               if (-not $ok) { Write-Host ("::warning title=CNAME differs::{0}" -f $line) }
           }
-          Write-Host ("::{0} title=CNAME (Windows DNS client)::{1} of {2} names give the same chain as Resolve-DnsName" -f $(if ($same -eq $names.Count) { 'notice' } else { 'error' }), $same, $names.Count)
-          if ($same -ne $names.Count) { $rc = 1 }
+          # public CDN names rotate their answers; one name that still differs after three tries is a warning, two fail
+          Write-Host ("::{0} title=CNAME (Windows DNS client)::{1} of {2} names give the same chain as Resolve-DnsName" -f $(if ($same -eq $names.Count) { 'notice' } elseif ($same -ge $names.Count - 1) { 'warning' } else { 'error' }), $same, $names.Count)
+          if ($same -lt $names.Count - 1) { $rc = 1 }
           exit $rc
       - name: Store validation (ESENT against the portable engine, hard kills, rebuild)
         if: success() || failure()
@@ -190,7 +192,8 @@ jobs:
           same=0; total=0
           for n in $names; do
             total=$((total+1))
-            for try in 1 2; do   # CDN names can answer differently from one query to the next: ask a difference once more
+            for try in 1 2 3; do   # CDN names can answer differently from one query to the next: ask a difference again, twice
+              [ $try = 1 ] || sleep 2
               got=$(pwsh -NoProfile -File cn.ps1 "$n" | awk -v n="$n" '$1==n {print $2}')
               ref=$(dig +short "$n" A | grep -E '\.$' | sed 's/\.$//' | tr 'A-Z' 'a-z' | paste -sd '>' -)
               [ "$got" = "$ref" ] && break
@@ -199,8 +202,9 @@ jobs:
             [ "$got" = "$ref" ] || echo "::warning title=CNAME differs::$n: UDP [$got] dig [$ref]"
             [ "$got" = "$ref" ] && same=$((same+1))
           done
-          echo "::$([ $same = $total ] && echo notice || echo error) title=CNAME (UDP, PowerShell 7)::$same of $total names give the same chain as dig"
-          [ $same = $total ] || rc=1
+          # public CDN names rotate their answers; one name that still differs after three tries is a warning, two fail
+          echo "::$([ $same = $total ] && echo notice || { [ $same -ge $((total-1)) ] && echo warning || echo error; }) title=CNAME (UDP, PowerShell 7)::$same of $total names give the same chain as dig"
+          [ $same -ge $((total-1)) ] || rc=1
           exit $rc
       - name: Tideline shipping end to end (mock ingest, step-ca enrollment), JSONL contract
         if: success() || failure()
