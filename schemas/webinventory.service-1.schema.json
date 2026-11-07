@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benheise/WebInventory-psh/schemas/webinventory.service-1",
+  "$id": "urn:tideline:schema:webinventory.service/1",
+  "x-tideline-schema": "webinventory.service/1",
   "title": "WebInventory service (results JSONL line)",
   "description": "One line of WebInventory_<RunId>.jsonl: the CSV's 83 columns with JSON types, plus Detections (each detection's product, version, confidence, CPE, rule source and evidence). Columns added in a later 2.x release are a minor version and appear as extra properties; runs of earlier releases lack the newer columns.",
   "type": "object",

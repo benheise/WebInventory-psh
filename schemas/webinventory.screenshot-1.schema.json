@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benheise/WebInventory-psh/schemas/webinventory.screenshot-1",
+  "$id": "urn:tideline:schema:webinventory.screenshot/1",
+  "x-tideline-schema": "webinventory.screenshot/1",
   "title": "WebInventory screenshot index line",
   "description": "One line of WebInventory_<RunId>_screenshots.jsonl: a capture and its check (Status ok, blank, suspect or failed, with Reason). File is the PNG's path relative to the output folder, empty when no image was taken. Values are the CSV's cells as text (without the CSV's formula guard); counts, ports, sizes and durations are integers when the cell holds one, \"\" when it is empty.",
   "type": "object",

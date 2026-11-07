@@ -32,13 +32,17 @@ extras = (src / "35-extras.ps1").read_text(encoding="utf-8")
 shot_cols = re.findall(r"'([^']+)'", re.search(r"foreach \(\$c in ('Url', 'Host'.*?)\) \{ \$o\[\$c\]", extras).group(1))
 
 S = "https://json-schema.org/draft/2020-12/schema"
-BASE = "https://github.com/benheise/WebInventory-psh/schemas/"
+# ids as the shared contract (tideline-schemas) writes them: $id urn:tideline:schema:<id>, repeated in x-tideline-schema,
+# so the schemas name no repository
+def sid(name):   # webinventory.service-1 -> webinventory.service/1
+    stem, ver = name.rsplit("-", 1)
+    return stem + "/" + ver
 STR = {"type": "string"}
 INT_OR_EMPTY = {"anyOf": [{"type": "integer"}, {"const": ""}]}
 BOOL_OR_EMPTY = {"anyOf": [{"type": "boolean"}, {"const": ""}]}
 
 def schema(name, title, desc, props, required, extra=True):
-    return {"$schema": S, "$id": BASE + name, "title": title, "description": desc, "type": "object",
+    return {"$schema": S, "$id": "urn:tideline:schema:" + sid(name), "x-tideline-schema": sid(name), "title": title, "description": desc, "type": "object",
             "required": required, "properties": props, "additionalProperties": extra}
 
 # ---- services: the results JSONL (types as the script has written them since v2.0)
@@ -104,7 +108,7 @@ part = {"type": "object", "additionalProperties": False,
         "allOf": [
             {"if": {"properties": {"kind": {"const": "artifact"}}}, "then": {"required": ["role"]}, "else": {"required": ["schema", "records"]}},
             {"if": {"required": ["chunk"]}, "then": {"required": ["chunks", "file_bytes", "file_sha256"]}}]}
-envelope = {"$schema": S, "$id": BASE + "tideline-envelope-1", "title": "Tideline run envelope (manifest)",
+envelope = {"$schema": S, "$id": "urn:tideline:schema:tideline-envelope/1", "x-tideline-schema": "tideline-envelope/1", "title": "Tideline run envelope (manifest)",
             "description": "The manifest a sensor sends with POST /v1/runs, signed (ES256) over its exact bytes in the Tideline-Signature "
                            "header. Each part is then uploaded with PUT /v1/runs/{run_id}/parts/{n}. See SHIPPING.md.",
             "type": "object", "additionalProperties": False,

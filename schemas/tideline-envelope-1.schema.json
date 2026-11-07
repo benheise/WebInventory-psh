@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benheise/WebInventory-psh/schemas/tideline-envelope-1",
+  "$id": "urn:tideline:schema:tideline-envelope/1",
+  "x-tideline-schema": "tideline-envelope/1",
   "title": "Tideline run envelope (manifest)",
   "description": "The manifest a sensor sends with POST /v1/runs, signed (ES256) over its exact bytes in the Tideline-Signature header. Each part is then uploaded with PUT /v1/runs/{run_id}/parts/{n}. See SHIPPING.md.",
   "type": "object",

@@ -35,7 +35,7 @@ FAIL=()
 note() { echo "[refresh] $*"; }
 failed() { FAIL+=("$1"); echo "[refresh] CHECK FAILED: $1" >&2; }
 fetch() {   # url file: download with retries (NVD and CISA throttle bursts)
-  curl -fsSL --retry 6 --retry-delay 20 --retry-all-errors -A 'WebInventory-list-refresh (+https://github.com/benheise/WebInventory-psh)' -o "$2.part" "$1"
+  curl -fsSL --retry 6 --retry-delay 20 --retry-all-errors -A 'WebInventory-list-refresh (+https://github.com/benheise/Hinterland)' -o "$2.part" "$1"
   mv "$2.part" "$2"
 }
 cd "$REPO"

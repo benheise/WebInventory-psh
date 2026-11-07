@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benheise/WebInventory-psh/schemas/webinventory.delta-1",
+  "$id": "urn:tideline:schema:webinventory.delta/1",
+  "x-tideline-schema": "webinventory.delta/1",
   "title": "WebInventory delta line",
   "description": "One line of WebInventory_<RunId>_delta.jsonl: a change against the -BaselineCsv run. Key is host|port; Field and Old are empty for NEW, Field and New for REMOVED. Values are the CSV's cells as text (without the CSV's formula guard); counts, ports, sizes and durations are integers when the cell holds one, \"\" when it is empty.",
   "type": "object",
