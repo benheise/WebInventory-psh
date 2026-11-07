@@ -229,5 +229,32 @@ print("%d lines, first: %s %s %s" % (len(rows), rows[0]["level"], rows[0]["categ
 PY
 [ "$(rc "$WD/s26/exit")" = 2 ] && [ $? = 0 ] && grep -q DNS "$WD/s26/err.txt" && python3 "$W/tests/v26/received.py" --data "$WD/m23/data" --run-json "$(runjson "$WD/s26")" > /dev/null && ok "26 exit 2; errors.jsonl $(cat "$WD/s26/err.txt"); delivered" || bad "26 errors part" "$WD/s26/err.txt"
 
+echo "=== 27. a run made before 2.6 (run.json without runUuid or exitCode, not in its own manifest): delivered, name-based run_id, exit_code null"
+O=$WD/s27/out; mkdir -p "$WD/s27"; cp -r "$WD/s23/out" "$O"; rm -f "$O"/*_ship-state.json
+python3 - "$O" <<'PY'
+import json, pathlib, sys
+d = pathlib.Path(sys.argv[1]); rj = next(d.glob("WebInventory_*_run.json"))
+info = json.loads(rj.read_text(encoding="utf-8-sig"))
+for k in ("runUuid", "exitCode", "engagement"):
+    info.pop(k, None)
+info["scanner"] = "WebInventory 2.5.0"
+rj.write_text(json.dumps(info, indent=2), encoding="utf-8")
+m = next(d.glob("WebInventory_*_manifest.txt"))   # 2.5.0 did not list run.json in its manifest
+m.write_text("".join(l for l in m.read_text(encoding="utf-8").splitlines(True) if not l.rstrip().endswith("_run.json")), encoding="utf-8")
+PY
+send "$WD/s27" "$O" -ShipTo https://localhost:18950 "${PFX[@]}" -Engagement eng-old
+python3 - "$WD/m23/data" > "$WD/s27/old.txt" <<'PY'
+import json, pathlib, sys
+runs = [json.loads(p.read_text()) for p in pathlib.Path(sys.argv[1], "runs").glob("*/state.json")]
+old = [r for r in runs if r["manifest"]["tool_version"] == "2.5.0"]
+assert len(old) == 1, "%d 2.5.0 runs at the mock" % len(old)
+r = old[0]
+assert r["state"] == "verified" and r["manifest"]["exit_code"] is None and r["run_id"][14] == "5", (r["state"], r["manifest"]["exit_code"], r["run_id"])
+print("run %s %s, exit_code null" % (r["run_id"], r["state"]))
+PY
+oldrc=$?
+[ "$(rc "$WD/s27/send.exit")" = 0 ] && [ $oldrc = 0 ] && python3 "$W/tests/v26/received.py" --data "$WD/m23/data" --run-json "$(ls "$O"/WebInventory_*_run.json)" > "$WD/s27/recv.txt" \
+    && ok "27 $(cat "$WD/s27/old.txt")" || { bad "27 a run made before 2.6" "$WD/s27/send.txt"; cat "$WD/s27/old.txt" "$WD/s27/recv.txt" 2>/dev/null; }
+
 echo "ship scenario: $pass passed, $fail failed"
 [ $fail = 0 ]

@@ -70,7 +70,7 @@ PowerShell 5.1, nothing to install, and the SOC-registered User-Agent.
 | `-SelfTest`, PowerShell 7 on Linux | 156 of 156 (149 in 2.6.1); new: rule ids kept through a merge, explain lines, canonical pack hash cases, pins present |
 | `-TestRules` | 11,551 rules, 3,225 with examples, 0 mismatches |
 | `tests/scenarios.sh` | 50 of 50; 20 new: the three WAF pages, 530/1016, `-ApiDocPaths` hits, flags and no hit on a catch-all host, no `WafBlocked` on an ordinary 200, throttle `Notes` and run.json, one User-Agent across every request path, `Appliance` with CentOS left in `OsHint`, detection rule ids, explain lines, the profile flag, pack pinning (CRLF + BOM verifies, one added field is refused, `-AllowModifiedRules` loads it) |
-| `tests/v26/ship.sh` | 28 of 28, every envelope and record valid against the vendored Tideline schemas |
+| `tests/v26/ship.sh` | 29 of 29, every envelope and record valid against the vendored Tideline schemas; scenario 27 ships a run made before 2.6 (`exit_code` null, name-based `run_id`) |
 | `tools/schemas/check.py` | 0 problems |
 | Output against 2.6.1 (lab, farm, farm at 20 ms RTT) | 426 rows: no field differs except the new `Appliance` (set on the two FortiGate-certificate fixtures) and `Rules`. 862 of 862 direct detections carry both evidence and rule ids |
 
