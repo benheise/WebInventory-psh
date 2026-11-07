@@ -37,11 +37,6 @@
       "type": "string",
       "maxLength": 40
     },
-    "tool_run": {
-      "type": "string",
-      "maxLength": 100,
-      "description": "the tool's own run id (WebInventory: yyyyMMdd_HHmmss)"
-    },
     "sensor": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",

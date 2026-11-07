@@ -12,11 +12,26 @@ ap.add_argument("--kinds", default=""); ap.add_argument("--state", default="veri
 a = ap.parse_args()
 rj = pathlib.Path(a.run_json); info = json.loads(rj.read_text(encoding="utf-8-sig"))
 runs = [json.loads(p.read_text()) for p in pathlib.Path(a.data, "runs").glob("*/state.json")]
-mine = [r for r in runs if r["manifest"].get("tool_run") == info["runId"]]
+# 2.6.1: the envelope no longer carries the tool's own run id (tool_run); match on run.json's runUuid, or for a run
+# made before 2.6 on the tool manifest's SHA-256, which the envelope does carry
+def _sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+_tm = _sha(rj.parent / ("WebInventory_%s_manifest.txt" % info["runId"]))
+mine = [r for r in runs if (info.get("runUuid") and r["run_id"] == info["runUuid"]) or
+        (not info.get("runUuid") and _tm and r["manifest"].get("tool_manifest_sha256") == _tm)]
 if len(mine) != 1:
     print("received: %d runs for %s at the mock" % (len(mine), info["runId"])); sys.exit(1)
 r = mine[0]; m = r["manifest"]; rd = pathlib.Path(a.data, "runs", r["run_id"])
 problems = []
+# the envelope against Tideline's own schema (benheise/Tideline schemas/, tag schemas-v1.1.0, minor 1, copied next
+# to this file): 2.6.0 also wrote a tool_run field, which tideline-envelope/1 refuses
+try:
+    import jsonschema
+    _env = json.loads(pathlib.Path(__file__).with_name("tideline-envelope.1.json").read_text(encoding="utf-8"))
+    for _e in jsonschema.Draft202012Validator(_env).iter_errors(m):
+        problems.append("envelope fails tideline-envelope/1 (schemas-v1.1.0): %s" % _e.message)
+except ImportError:
+    problems.append("jsonschema is not installed: cannot check the envelope against tideline-envelope/1")
 if r["state"] != a.state: problems.append("state %s, expected %s" % (r["state"], a.state))
 if info.get("runUuid") and r["run_id"] != info["runUuid"]: problems.append("run_id %s is not run.json runUuid %s" % (r["run_id"], info["runUuid"]))
 files = collections.defaultdict(list)

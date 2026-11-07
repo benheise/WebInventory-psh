@@ -118,7 +118,6 @@ envelope = {"$schema": S, "$id": "urn:tideline:schema:tideline-envelope/1", "x-t
                 "run_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
                 "tool": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
                 "tool_version": {"type": "string", "maxLength": 40},
-                "tool_run": {"type": "string", "maxLength": 100, "description": "the tool's own run id (WebInventory: yyyyMMdd_HHmmss)"},
                 "sensor": {"type": "string", "pattern": ID, "description": "must equal the sensor id in the client certificate"},
                 "engagement": {"anyOf": [{"type": "string", "pattern": ID}, {"type": "null"}]},
                 "job_id": {"anyOf": [{"type": "string", "maxLength": 100}, {"type": "null"}]},

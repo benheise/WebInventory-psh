@@ -147,8 +147,8 @@ certificate must chain to the pinned root and name the host.
   2.6 gets a name-based UUID from its computer, run id and manifest.
 
 ```json
-{"schema":"tideline-envelope/1","run_id":"3f6c0d2e-7a51-4b8e-9d0f-2c4b1e7a9f10","tool":"webinventory","tool_version":"2.6.0",
- "tool_run":"20261106_140211","sensor":"wi-scan01","engagement":"eng-2026-014","job_id":null,
+{"schema":"tideline-envelope/1","run_id":"3f6c0d2e-7a51-4b8e-9d0f-2c4b1e7a9f10","tool":"webinventory","tool_version":"2.6.1",
+ "sensor":"wi-scan01","engagement":"eng-2026-014","job_id":null,
  "started":"2026-11-06T14:02:11Z","finished":"2026-11-06T14:19:47Z","exit_code":0,"profile":{"tlsScan":true,"...":"..."},
  "tool_manifest_sha256":"<sha256 of _manifest.txt>",
  "parts":[{"n":1,"kind":"services","schema":"webinventory.service/1","media":"application/x-ndjson","name":"WebInventory_20261106_140211.jsonl",
