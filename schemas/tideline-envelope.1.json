@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:tideline:schema:tideline-envelope/1",
   "title": "Tideline run envelope",
-  "description": "The signed manifest a sensor sends with POST /v1/runs. The signature (ES256) covers these exact bytes and travels in the Tideline-Signature header. Each part's sha256 and bytes are taken over the bytes the part carries as the tool wrote them, before any gzip, and match the tool's own SHA-256 manifest; a file split into chunks also carries the whole file's file_sha256 and file_bytes. Minor 1 adds the optional part fields encoding, role, chunk, chunks, file_bytes and file_sha256, media parameters, and name-based (version 5) run ids, all written by WebInventory 2.6.",
+  "description": "The signed manifest a sensor sends with POST /v1/runs. The signature (ES256) covers these exact bytes and travels in the Tideline-Signature header. Each part's sha256 and bytes are taken over the bytes the part carries as the tool wrote them, before any gzip, and match the tool's own SHA-256 manifest; a file split into chunks also carries the whole file's file_sha256 and file_bytes. Minor 1 adds the optional part fields encoding, role, chunk, chunks, file_bytes and file_sha256, media parameters, and name-based (version 5) run ids, all written by WebInventory 2.6, and a null exit_code for a run made before its tool recorded one (a WebInventory 2.5 run shipped by a later sender).",
   "x-tideline-schema": "tideline-envelope/1",
   "x-minor": 1,
   "type": "object",
@@ -59,9 +59,17 @@
       "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$"
     },
     "exit_code": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 255
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "the tool's exit code; null (minor 1) for a run made before its tool recorded one: WebInventory 2.5 runs, which Hinterland's sender ships with a name-based run_id"
     },
     "profile": {
       "type": "object"

@@ -159,7 +159,9 @@ certificate must chain to the pinned root and name the host.
            "bytes":84112,"sha256":"<sha256>","encoding":"identity"}]}
 ```
 
-`exit_code` is the scan's own exit code; the store and shipping stages that follow it are not included.
+`exit_code` is the scan's own exit code; the store and shipping stages that follow it are not included. A run made
+before 2.6 recorded none, so it ships with `exit_code` null and a name-based `run_id` (Tideline accepts both from
+`tideline-envelope/1` minor 1).
 
 ## 6. Delivery, resume and exit codes
 
