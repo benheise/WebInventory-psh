@@ -94,4 +94,55 @@ check "unquoted octet list fails closed instead of scanning 7.0.0.1" "$rc" "1"
 rc=$(run 127.0.0.1:18080 -Treads 4 -ListTargets)
 check "misspelled parameter is refused, not scanned" "$rc" "1"
 
+# ---------------- v2.7 ----------------
+jl() { ls "$WORK"/WebInventory_*[0-9].jsonl | head -1; }
+col() {  # col <port> <column>: that row's value
+    python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    r=json.loads(l)
+    if str(r["Port"])==sys.argv[2]: print(r[sys.argv[3]] if r[sys.argv[3]] is not None else ""); break' "$(jl)" "$1" "$2"
+}
+newdir
+UALOG="${LAB_UA_LOG:-/tmp/wi-lab-ua.log}"; : > "$UALOG"
+rc=$(run -Target 127.0.0.1:18100,18101,18102,18103,18104,18105,18106,18107,18108 -ApiDocPaths -IdentifyPaths -VersionPaths -Options -ExplainFingerprint -UserAgent 'WI-UA-CHECK/2.7' -NoProgress -NoHtml)
+check "v2.7 lab run completes (exit 0)" "$rc" "0"
+check "Cloudflare block page -> WafBlocked:Cloudflare" "$(col 18100 Flags | grep -o 'WafBlocked:Cloudflare')" "WafBlocked:Cloudflare"
+check "Akamai block page -> WafBlocked:Akamai" "$(col 18101 Flags | grep -o 'WafBlocked:Akamai')" "WafBlocked:Akamai"
+check "BIG-IP ASM block page (HTTP 200) -> WafBlocked:F5" "$(col 18102 Flags | grep -o 'WafBlocked:F5')" "WafBlocked:F5"
+check "Cloudflare 530 'error code: 1016' -> OriginDnsError" "$(col 18103 Flags | grep -o 'OriginDnsError')" "OriginDnsError"
+check "-ApiDocPaths: OpenAPI, Swagger UI, GraphiQL and docker-compose found" "$(col 18104 ApiDocPaths)" "/openapi.json=openapi;/swagger-ui/index.html=swagger-ui;/graphiql=graphiql;/docker-compose.yml=docker-compose"
+check "-ApiDocPaths: ApiDocsExposed and DockerFileExposed flags" "$(col 18104 Flags | grep -o 'ApiDocsExposed\|DockerFileExposed' | paste -sd, -)" "ApiDocsExposed,DockerFileExposed"
+check "-ApiDocPaths: a site that answers 200 for every path gives no hit" "$(col 18105 ApiDocPaths)" ""
+check "-ApiDocPaths: no WafBlocked on an ordinary 200 site" "$(col 18105 Flags | grep -c WafBlocked)" "0"
+check "429s: the row's Notes say it was throttled" "$(col 18106 Notes | grep -c 'throttled: 0 timeouts, 0 resets')" "1"
+check "429s: run.json sessions[].throttle counts them" "$(python3 -c 'import json,glob,sys; t=json.load(open(glob.glob(sys.argv[1]+"/*_run.json")[0]))["sessions"][-1]["throttle"]; print(t["http429"]>=3, t["throttledChecks"])' "$WORK")" "True 1"
+check "every request to the recorder carries -UserAgent (main, favicon, robots, security.txt, 404, OPTIONS, -IdentifyPaths, -VersionPaths, -ApiDocPaths)" "$(cut -f3 "$UALOG" | sort -u | paste -sd'|' -)" "WI-UA-CHECK/2.7"
+check "the recorder saw the -VersionPaths and -ApiDocPaths requests" "$(grep -c $'^GET\t/api/version\t\|^GET\t/openapi.json\t\|^OPTIONS\t/\t' "$UALOG")" "3"
+check "Appliance: the iDRAC, with CentOS left in OsHint" "$(col 18108 Appliance)|$(col 18108 OsHint | grep -o CentOS | head -1)" "Dell iDRAC|CentOS"
+check "Detections carry the rule ids behind them" "$(python3 -c 'import json,sys
+for l in open(sys.argv[1]):
+    r=json.loads(l)
+    if str(r["Port"])=="18108": print(any("b:t-idrac" in (d.get("Rules") or "") for d in r["Detections"]))' "$(jl)")" "True"
+check "-ExplainFingerprint: FP-MATCH per rule output and the RESULT line" "$(grep -c '^FP-MATCH builtin b:t-idrac title=Integrated Dell Remote Access Controller' "$WORK"/*_explain.log)|$(grep -c '^RESULT service Dell iDRAC conf=95 rules=b:t-idrac$' "$WORK"/*_explain.log)" "2|1"
+check "run.json profile records apiDocPaths" "$(python3 -c 'import json,glob,sys; print(json.load(open(glob.glob(sys.argv[1]+"/*_run.json")[0]))["profile"]["apiDocPaths"])' "$WORK")" "True"
+
+# companion rule packs are pinned (canonical SHA-256: CRLF and a BOM still verify; any other change is refused)
+PK="${WORK}_pk"; rm -rf "$PK"; mkdir -p "$PK"; cp "$(dirname "$SCRIPT")"/Invoke-WebInventory.ps1 "$(dirname "$SCRIPT")"/WebInventory.rules.*.json "$PK/"
+python3 - "$PK/WebInventory.rules.recog.json" <<'PY'
+import sys; p=sys.argv[1]; b=open(p,'rb').read().replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'); open(p,'wb').write(b'\xef\xbb\xbf'+b)
+PY
+newdir
+rc=$(cd "$WORK" && "$PWSH" -NoProfile -File "$PK/Invoke-WebInventory.ps1" -Target 127.0.0.1:18080 -NoProgress -NoHtml > last.out 2>&1; echo $?)
+check "a pack with CRLF line endings and a BOM still verifies and loads" "$(grep -c 'differs from the one this release' "$WORK"/*_error.log)|$(grep -c "rules 'recog'.*loaded" "$WORK"/*_run.log)" "0|1"
+python3 - "$PK/WebInventory.rules.wappalyzer.json" <<'PY'
+import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read(); i=s.index('"rules"'); open(p,'w',encoding='utf-8',newline='').write(s[:i]+'"x":"y",'+s[i:])
+PY
+newdir
+rc=$(cd "$WORK" && "$PWSH" -NoProfile -File "$PK/Invoke-WebInventory.ps1" -Target 127.0.0.1:18080 -NoProgress -NoHtml > last.out 2>&1; echo $?)
+check "a companion pack with one field added is refused and logged" "$(grep -c 'WebInventory.rules.wappalyzer.json differs from the one this release was built with' "$WORK"/*_error.log)|$(grep -c "rules 'wappalyzer'.*loaded" "$WORK"/*_run.log)" "1|0"
+newdir
+rc=$(cd "$WORK" && "$PWSH" -NoProfile -File "$PK/Invoke-WebInventory.ps1" -Target 127.0.0.1:18080 -AllowModifiedRules -NoProgress -NoHtml > last.out 2>&1; echo $?)
+check "-AllowModifiedRules loads it, with a warning" "$(grep -c "rules 'wappalyzer'.*loaded" "$WORK"/*_run.log)|$(grep -c 'loaded because of -AllowModifiedRules' "$WORK"/*_run.log)" "1|1"
+rm -rf "$PK"
+
 echo "scenarios: $pass passed, $fail failed"

@@ -38,10 +38,12 @@ offline. It uses the same version-aware matching as `-StoreQuery Vulnerabilities
 `_vulns.csv`, `_vulns.jsonl` and `_vulns.provenance.json` (the feed files and their hashes) before the run's manifest.
 Reading every NVD year takes about 60 s (447,034 records, measured for the same join in 2.3).
 
-The JSON Schemas (2020-12) are in the repository's `schemas/` folder and are generated from the script's column lists
-(`tools/schemas/gen.py`). `tests/v26/contract.py` validates any output folder against them. Of 540,115 results lines kept
-from the lab and benchmark runs of earlier releases, every line a scan wrote validates against
-`webinventory.service/1`; the 128 that do not are hand-made store-test fixtures without `ScannedAt`.
+The JSON Schemas (2020-12) are in the repository's `schemas/` folder: since 2.7.0 they are Tideline's own files
+(benheise/Tideline `schemas/`, the tag named in `schemas/VENDORED.txt`), and CI checks them against the script's column
+lists (`tools/schemas/check.py`). `tests/v26/contract.py` validates any output folder against them. `webinventory.service/1` is frozen
+from the 2.5.0 field set and requires every field of it; the fields 2.7.0 adds (`ApiDocPaths`, `Appliance`, each
+detection's `Rules`) are its minor 1 and optional, so lines written by 2.5.0 and later validate. Lines from releases
+before 2.5.0 lack fields it requires.
 
 ## 2. Setting up a scanner host
 
@@ -142,13 +144,13 @@ certificate must chain to the pinned root and name the host.
 - **Signature:** over the manifest's exact bytes, with the key of the client certificate (IEEE P1363 r‖s, as .NET
   produces it).
 - **Manifest:** deterministic. The same run, sensor and engagement always give the same bytes, so a re-send is
-  recognised as the same run. The format (`tideline-envelope/1`) is `schemas/tideline-envelope-1.schema.json`.
+  recognised as the same run. The format (`tideline-envelope/1`) is `schemas/tideline-envelope.1.json`.
 - **The run's id** is `runUuid` from `run.json`, made once per run and kept across resumed sessions. A run made before
   2.6 gets a name-based UUID from its computer, run id and manifest.
 
 ```json
-{"schema":"tideline-envelope/1","run_id":"3f6c0d2e-7a51-4b8e-9d0f-2c4b1e7a9f10","tool":"webinventory","tool_version":"2.6.0",
- "tool_run":"20261106_140211","sensor":"wi-scan01","engagement":"eng-2026-014","job_id":null,
+{"schema":"tideline-envelope/1","run_id":"3f6c0d2e-7a51-4b8e-9d0f-2c4b1e7a9f10","tool":"webinventory","tool_version":"2.6.1",
+ "sensor":"wi-scan01","engagement":"eng-2026-014","job_id":null,
  "started":"2026-11-06T14:02:11Z","finished":"2026-11-06T14:19:47Z","exit_code":0,"profile":{"tlsScan":true,"...":"..."},
  "tool_manifest_sha256":"<sha256 of _manifest.txt>",
  "parts":[{"n":1,"kind":"services","schema":"webinventory.service/1","media":"application/x-ndjson","name":"WebInventory_20261106_140211.jsonl",

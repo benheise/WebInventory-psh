@@ -243,6 +243,68 @@ if __name__ == "__main__":
         return resp(200, "OK", [("Server", "Apache-Coyote/1.1"), ("Content-Type", "text/html")],
                     "<html><head><title>Slow Report Server</title></head><body>generated in 1500 ms</body></html>")
     http_server(18097, slow)
+    # ---- v2.7 fixtures ----
+    # WAF block pages (WafBlocked:<vendor>): the scan must say a WAF answered, not report a thin row as the product
+    def waf_cloudflare(method, path, h):
+        return resp(403, "Forbidden", [("Server", "cloudflare"), ("CF-RAY", "8f1a2b3c4d5e6f70-IAD"), ("Content-Type", "text/html")],
+                    "<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head><body><div id=\"cf-wrapper\">"
+                    "<div id=\"cf-error-details\"><h1>Sorry, you have been blocked</h1><h2>You are unable to access example.test</h2>"
+                    "<p>Cloudflare Ray ID: <strong>8f1a2b3c4d5e6f70</strong></p></div></div></body></html>")
+    def waf_akamai(method, path, h):
+        return resp(403, "Forbidden", [("Server", "AkamaiGHost"), ("Content-Type", "text/html")],
+                    "<HTML><HEAD>\n<TITLE>Access Denied</TITLE>\n</HEAD><BODY>\n<H1>Access Denied</H1>\n \nYou don't have permission to access "
+                    "\"http&#58;&#47;&#47;example&#46;test&#47;\" on this server.<P>\nReference&#32;&#35;18&#46;5f0d1702&#46;1762481234&#46;2a3b4c5d\n</BODY>\n</HTML>\n")
+    def waf_f5(method, path, h):   # BIG-IP ASM answers 200 with its block page
+        return resp(200, "OK", [("Content-Type", "text/html; charset=utf-8"), ("Cache-Control", "no-cache")],
+                    "<html><head><title>Request Rejected</title></head><body>The requested URL was rejected. Please consult with your "
+                    "administrator.<br><br>Your support ID is: 14212355541984071137<br><br><a href='javascript:history.back();'>[Go Back]</a></body></html>")
+    def cf_1016(method, path, h):  # a proxied record whose origin no longer resolves (OriginDnsError)
+        return resp(530, "", [("Server", "cloudflare"), ("CF-RAY", "8f1a2b3c4d5e6f71-IAD"), ("Content-Type", "text/plain; charset=UTF-8")], "error code: 1016")
+    def apidocs(method, path, h):
+        if path == "/openapi.json":
+            return resp(200, "OK", [("Content-Type", "application/json")], '{"openapi":"3.0.1","info":{"title":"Orders API","version":"1.4"},"paths":{"/orders":{}}}')
+        if path == "/swagger-ui/index.html":
+            return resp(200, "OK", [("Content-Type", "text/html")], "<html><head><title>Swagger UI</title><link rel=\"stylesheet\" href=\"swagger-ui.css\"></head>"
+                        "<body><div id=\"swagger-ui\"></div><script src=\"swagger-ui-bundle.js\"></script><script>SwaggerUIBundle({url:'/openapi.json'})</script></body></html>")
+        if path == "/graphiql":
+            return resp(200, "OK", [("Content-Type", "text/html")], "<html><head><title>GraphiQL</title><link href=\"https://unpkg.com/graphiql/graphiql.min.css\" rel=\"stylesheet\"/></head>"
+                        "<body><div id=\"graphiql\">Loading...</div><script src=\"https://unpkg.com/graphiql/graphiql.min.js\"></script></body></html>")
+        if path == "/docker-compose.yml":
+            return resp(200, "OK", [("Content-Type", "application/octet-stream")], "services:\n  web:\n    image: nginx:1.27\n    ports:\n      - \"80:80\"\n  db:\n    image: postgres:16\n")
+        if path == "/":
+            return resp(200, "OK", [("Server", "nginx"), ("Content-Type", "text/html")], "<html><head><title>Orders</title></head><body>orders</body></html>")
+        return resp(404, "Not Found", [("Server", "nginx"), ("Content-Type", "text/html")], "<html><body>404</body></html>")
+    def catchall(method, path, h):  # a soft-404 site: every path answers 200 with the same page
+        return resp(200, "OK", [("Server", "nginx"), ("Content-Type", "text/html")],
+                    "<html><head><title>Welcome</title></head><body>Welcome. swagger openapi graphiql services: image:</body></html>")
+    def throttled(method, path, h):
+        return resp(429, "Too Many Requests", [("Server", "nginx"), ("Retry-After", "30"), ("Content-Type", "text/html")], "<html><body>slow down</body></html>")
+    ua_log = os.environ.get("LAB_UA_LOG", "/tmp/wi-lab-ua.log")
+    ua_lock = threading.Lock()
+    def ua_recorder(method, path, h):  # writes method, path and User-Agent of every request it gets
+        with ua_lock:
+            with open(ua_log, "a", encoding="utf-8") as f:
+                f.write("%s\t%s\t%s\n" % (method, path, h.get("user-agent", "")))
+        if path == "/":
+            return resp(200, "OK", [("Server", "nginx"), ("Content-Type", "text/html")],
+                        "<html><head><title>Vaultwarden Web</title><link rel=\"icon\" href=\"/favicon.ico\"></head><body>vault</body></html>")
+        if path == "/favicon.ico":
+            return resp(200, "OK", [("Content-Type", "image/x-icon")], FAVICON)
+        if path == "/old":
+            return resp(301, "Moved", [("Location", "/")], "")
+        return resp(404, "Not Found", [("Server", "nginx"), ("Content-Type", "text/html")], "<html><body>404</body></html>")
+    def idrac_on_centos(method, path, h):  # an appliance whose banner names the OS it runs on: Appliance is the iDRAC
+        return resp(200, "OK", [("Server", "Apache/2.4.6 (CentOS)"), ("Content-Type", "text/html")],
+                    "<html><head><title>Integrated Dell Remote Access Controller 9</title></head><body>login</body></html>")
+    http_server(18108, idrac_on_centos)
+    http_server(18100, waf_cloudflare)
+    http_server(18101, waf_akamai)
+    http_server(18102, waf_f5)
+    http_server(18103, cf_1016)
+    http_server(18104, apidocs)
+    http_server(18105, catchall)
+    http_server(18106, throttled)
+    http_server(18107, ua_recorder)
     print("lab up", flush=True)
     while True:
         time.sleep(3600)

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.6.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.7.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -52,6 +52,16 @@
     Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
     that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
     their status codes are listed in the VersionPaths column.
+.PARAMETER ApiDocPaths
+    Opt-in: request a fixed list of API document and console paths (/openapi.json, /swagger.json, /v3/api-docs,
+    /swagger-ui/index.html, /redoc, /graphiql, /playground...) and Docker files (/docker-compose.yml, /Dockerfile), GET
+    only, no redirects followed. A path counts only when its 200 response holds that document's own keywords (a site
+    that answers 200 for every path gives no hit). Hits go to the ApiDocPaths column and the ApiDocsExposed or
+    DockerFileExposed flag. GraphQL introspection is a POST and is never sent.
+.PARAMETER ThrottleThreshold
+    Timeouts, connection resets and HTTP 429 answers a single check may meet before its row's Notes say it was throttled
+    (results may be incomplete). Every check's counts are summed in run.json (sessions[].throttle) and the run log.
+    Default 3.
 .PARAMETER Cname
     Opt-in: record the CNAME chain of each hostname target in the Cname column (targets given as names; SAN virtual hosts
     are not looked up). One A query per name to this host's DNS resolvers, never to the targets. On Windows through the
@@ -104,6 +114,15 @@
     .psd1 of parameter values (data only, parsed with Import-PowerShellDataFile). Command line wins.
 .PARAMETER BaselineCsv
     Previous results CSV to diff against ('auto' = newest WebInventory_*.csv in -OutputDir).
+.PARAMETER ExplainFingerprint
+    Write WebInventory_<RunId>_explain.log: for each service, every rule that matched (FP-MATCH, with the rule pack, rule
+    id, field and value) and every rule whose literal prefilter passed but whose regex or condition then failed
+    (FP-FAIL), then the detections the row reports (RESULT). Meant for one target or a few; sends nothing extra.
+.PARAMETER AllowModifiedRules
+    Load a companion rule pack (WebInventory.rules.*.json next to the script) even when its SHA-256 differs from the one
+    this release was built with. Without it such a pack is refused and logged. The hash is taken over the pack with its
+    line endings normalised and any byte-order mark removed, so a checkout with CRLF line endings still verifies.
+    Packs given with -RulesFile are the operator's own and are not checked.
 .PARAMETER ImportRules
     Convert a Rapid7 Recog xml directory or a webappanalyzer 'src' directory into a rule pack and exit.
 .PARAMETER Store
@@ -202,7 +221,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.6.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.7.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
     Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
     4 = completed, but nothing answered.
@@ -237,6 +256,7 @@ param(
     [ValidateRange(4096, 4194304)][int]$MaxBodyBytes = 262144,
     [ValidateRange(0, 5000)][int]$BannerWaitMs = 300,
     [ValidateRange(0, 10080)][int]$MaxRuntimeMinutes = 0,
+    [ValidateRange(1, 1000)][int]$ThrottleThreshold = 3,
     # ---- Probes
     [switch]$NoFavicon,
     [switch]$NoExtras,
@@ -244,6 +264,7 @@ param(
     [switch]$Options,
     [switch]$IdentifyPaths,
     [switch]$VersionPaths,
+    [switch]$ApiDocPaths,
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
@@ -278,6 +299,8 @@ param(
     # ---- Rules
     [string[]]$RulesFile,
     [switch]$NoCompanionRules,
+    [switch]$AllowModifiedRules,
+    [switch]$ExplainFingerprint,
     [ValidateRange(1, 100)][int]$MinConfidence = 50,
     # ---- Output
     [string]$OutputDir = (Get-Location).ProviderPath,
@@ -338,7 +361,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.0'
+$ScriptVersion = '2.7.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -446,6 +469,8 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 #endregion
 
 #region ---------- Embedded rule pack ----------
+# v2.7: SHA-256 (canonical: no BOM, LF line endings) of each companion rule pack this release was built with (build.py)
+$script:CompanionPackSha256 = @{ __COMPANION_PINS__ }
 $BuiltinRulesJson = @'
 __BUILTIN_RULES__
 '@

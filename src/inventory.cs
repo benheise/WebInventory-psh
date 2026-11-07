@@ -102,7 +102,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.6.0";
+        public const string Version = "2.7.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -407,9 +407,11 @@ namespace WebInv
             // v2.4: appended
             "VersionPaths",
             // v2.5: appended
-            "Cname", "Cloud", "CloudRegion", "CloudService" };
+            "Cname", "Cloud", "CloudRegion", "CloudService",
+            // v2.7: appended (Appliance is derived from Products and Categories, so it is Observed, not material)
+            "ApiDocPaths" };
         // recorded with each sighting, never a reason for a new version (response time, dynamic page hashes, scan clock)
-        public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag" };
+        public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag", "Appliance" };
         // profile flag -> fields that only that probe collects; a run without the probe keeps the previous values
         public static readonly string[][] Gated = {
             new[] { "tlsScan", "TlsSupported", "TlsCiphersByVersion", "TlsWeakCipher", "Alpn", "Http2" },
@@ -422,7 +424,8 @@ namespace WebInv
             new[] { "tlsFingerprint", "Jarm" },
             new[] { "ja4s", "Ja4s" },
             new[] { "cname", "Cname" },
-            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" } };
+            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" },
+            new[] { "apiDocPaths", "ApiDocPaths" } };
         static readonly HashSet<string> MaterialSet = new HashSet<string>(Material, StringComparer.Ordinal);
         public static bool IsMaterial(string f) { return MaterialSet.Contains(f); }
 
@@ -498,6 +501,7 @@ namespace WebInv
         public bool TlsFingerprint, Ja4s, Smb, Rdp, Snmp;   // v2.3 opt-in probes (appended to Profile only when on)
         public bool VersionPaths;                            // v2.4 opt-in (appended to Profile only when on)
         public bool Cname, Cloud;                            // v2.5: -Cname; cloud ranges loaded (appended only when on)
+        public bool ApiDocPaths;                             // v2.7: -ApiDocPaths (appended only when on)
         public long Checks;
         public bool Collected(string flag)
         {
@@ -515,10 +519,11 @@ namespace WebInv
                 case "versionPaths": return VersionPaths;
                 case "cname": return Cname;
                 case "cloud": return Cloud;
+                case "apiDocPaths": return ApiDocPaths;
             }
             return true;
         }
-        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud); } }
+        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud && ApiDocPaths); } }
         // flag as written in a Profile string ("tls=1 favicon=1 ..."); missing = off (flags added later are appended only when on)
         public static bool ProfileHas(string profile, string flag)
         {
@@ -534,7 +539,7 @@ namespace WebInv
                 return string.Format(CultureInfo.InvariantCulture, "tls={0} favicon={1} extras={2} options={3} identifyPaths={4} probeSans={5} reverseDns={6}",
                     TlsScan ? 1 : 0, Favicon ? 1 : 0, Extras ? 1 : 0, Options ? 1 : 0, IdentifyPaths ? 1 : 0, ProbeSans ? 1 : 0, ReverseDns ? 1 : 0)
                     + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "")
-                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "");
+                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "") + (ApiDocPaths ? " apiDocPaths=1" : "");
             }
         }
         public DateTimeOffset Started { get { return StoreUtil.ParseIso(StartedAt); } }
@@ -562,6 +567,7 @@ namespace WebInv
                 r.TlsFingerprint = Flag(p, "tlsFingerprint", false); r.Ja4s = Flag(p, "ja4s", false); r.Smb = Flag(p, "smb", false); r.Rdp = Flag(p, "rdp", false); r.Snmp = Flag(p, "snmp", false);
                 r.VersionPaths = Flag(p, "versionPaths", false);
                 r.Cname = Flag(p, "cname", false); r.Cloud = Flag(p, "cloud", false);
+                r.ApiDocPaths = Flag(p, "apiDocPaths", false);
             }
             if (r.RunId.Length == 0) throw new InvalidDataException("run.json has no runId");
             DateTimeOffset t;
@@ -580,6 +586,7 @@ namespace WebInv
             if (VersionPaths) p.Bool("versionPaths", true);
             if (Cname) p.Bool("cname", true);
             if (Cloud) p.Bool("cloud", true);
+            if (ApiDocPaths) p.Bool("apiDocPaths", true);
             return new JsonObj().Num("format", 1).Str("runId", RunId).Str("startedAt", StartedAt).Str("finishedAt", FinishedAt).Bool("complete", Complete)
                 .Bool("synthesized", Synthesized).Str("scanner", Scanner).Str("tag", Tag).Str("operator", Operator).Str("computer", Computer)
                 .Num("checks", Checks).Raw("profile", p.ToString()).ToString();
@@ -611,6 +618,7 @@ namespace WebInv
                 if (StoreUtil.Str(o, "VersionPaths").Length > 0) r.VersionPaths = true;
                 if (StoreUtil.Str(o, "Cname").Length > 0) r.Cname = true;
                 if (StoreUtil.Str(o, "Cloud").Length > 0) r.Cloud = true;
+                if (StoreUtil.Str(o, "ApiDocPaths").Length > 0) r.ApiDocPaths = true;
                 if (StoreUtil.Str(o, "Vhost") == "True") r.ProbeSans = true;
                 if (StoreUtil.Str(o, "ReverseDns").Length > 0) r.ReverseDns = true;
                 if (StoreUtil.Str(o, "Jarm").Length > 0) r.TlsFingerprint = true;

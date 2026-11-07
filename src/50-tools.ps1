@@ -19,12 +19,34 @@ function Import-RulePack {
     if ($Fatal -and $n -eq 0) { Stop-Fatal "Rule pack '$Label' loaded zero rules" }
 }
 
+# v2.7 companion pack integrity: SHA-256 over the pack's bytes with a UTF-8 byte-order mark removed and CRLF/CR line
+# endings turned into LF, so the hash does not depend on how git checked the file out. A file whose content differs only
+# in where a CR sits (the trick behind nuclei's CVE-2024-43405 signature bypass) still hashes differently from the
+# release unless the difference is a line ending.
+function Get-CanonicalSha256([byte[]]$Bytes) {
+    $t = [Text.Encoding]::UTF8.GetString($Bytes)
+    if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $t = $t.Substring(1) }
+    $t = $t.Replace("`r`n", "`n").Replace("`r", "`n")
+    [WebInv.Hash]::Sha256Hex([Text.Encoding]::UTF8.GetBytes($t))
+}
+
 function Initialize-Rules {
     [WebInv.Matcher]::Clear()
     Import-RulePack -Json $BuiltinRulesJson -Label 'builtin' -Path '' -Fatal $true
     if (-not $NoCompanionRules -and $PSScriptRoot) {
         foreach ($f in @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'WebInventory.rules.*.json' -File -ErrorAction SilentlyContinue)) {
-            Import-RulePack -Json ([IO.File]::ReadAllText($f.FullName)) -Label $f.Name -Path $f.FullName -Fatal $false
+            $bytes = [IO.File]::ReadAllBytes($f.FullName)
+            $want = $script:CompanionPackSha256[$f.Name]
+            if ($want) {
+                $have = Get-CanonicalSha256 $bytes
+                if ($have -ne $want) {
+                    $m = "companion rule pack {0} differs from the one this release was built with (sha256 {1}, expected {2})" -f $f.Name, $have, $want
+                    if (-not $AllowModifiedRules) { Write-ErrLog 'RULES' $f.Name ($m + '; not loaded (-AllowModifiedRules loads it)'); $script:PackInfo.Add("rules '$($f.Name)' REFUSED: modified"); continue }
+                    Write-RunLog ($m + '; loaded because of -AllowModifiedRules') 'WARN'
+                }
+            }
+            else { Write-RunLog ("companion rule pack {0} is not one this release ships; loaded as the operator's own" -f $f.Name) }
+            Import-RulePack -Json ([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)) -Label $f.Name -Path $f.FullName -Fatal $false
         }
     }
     foreach ($rf in @($RulesFile | Where-Object { $_ })) {
@@ -461,6 +483,22 @@ function Invoke-SelfTest {
     Assert 'requiresCategory gate drops ungated hit' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 0 }
     $o6.Add('selftest.shop', 'cart')
     Assert 'requiresCategory gate passes with category present' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 1 }
+    # v2.7: each detection names the rules behind it; -ExplainFingerprint lists matches and near misses
+    $rxPack = [WebInv.Matcher]::ReadPack('{"name":"rxtest","rules":[{"id":"st:rx-a","f":"selftest.rx","r":"Rho/(\\d+)","n":"ST Rho","v":"{1}","k":80},{"id":"st:rx-b","f":"selftest.rx2","r":"rho","n":"ST Rho","k":60},{"id":"st:rx-c","f":"selftest.rx","r":"Rhodium\\s(\\d+)","n":"ST Rho Pro","k":70}]}')
+    [void][WebInv.Matcher]::Load($rxPack, (New-Object 'System.Collections.Generic.List[string]'))
+    $o7 = New-Object WebInv.Observation; $o7.Add('selftest.rx', 'Rho/7 server Rhodium-x'); $o7.Add('selftest.rx2', 'rho inside')
+    $rho = @([WebInv.Matcher]::Evaluate($o7) | Where-Object { $_.Name -eq 'ST Rho' })
+    Assert 'v2.7 detection Rules: both rules behind one merged detection' { $rho.Count -eq 1 -and $rho[0].Rules -eq 'st:rx-a;st:rx-b' -and $rho[0].Version -eq '7' }
+    $xl = @([WebInv.Matcher]::Explain($o7))
+    Assert 'v2.7 Explain: FP-MATCH for the matching rule, with its output' { @($xl | Where-Object { $_ -like 'FP-MATCH * st:rx-a selftest.rx=Rho/7 -> service ST Rho 7 conf=80' }).Count -eq 1 }
+    Assert 'v2.7 Explain: the near miss (prefilter passed, regex failed) is FP-FAIL' { @($xl | Where-Object { $_ -like 'FP-FAIL * st:rx-c selftest.rx=* regex did not match' }).Count -eq 1 }
+    Assert 'v2.7 Explain: a summary line' { $xl[-1] -like 'SUMMARY rules tried=*' }
+    # v2.7: companion pack pins are taken over canonical bytes (no BOM, LF line endings)
+    $U = [Text.Encoding]::UTF8
+    $c1 = Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`n`"b`":2}`n")); $c2 = Get-CanonicalSha256 ([byte[]](@(0xEF, 0xBB, 0xBF) + $U.GetBytes("{`"a`":1,`r`n`"b`":2}`r`n")))
+    Assert 'v2.7 pack hash: CRLF and a BOM give the LF hash' { $c1 -eq $c2 -and $c1 -eq (Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`r`"b`":2}`r"))) }
+    Assert 'v2.7 pack hash: any other change differs' { $c1 -ne (Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`n`"b`":3}`n"))) }
+    Assert 'v2.7 pack pins: one per companion pack this release ships' { $script:CompanionPackSha256.Count -ge 2 -and @($script:CompanionPackSha256.Values | Where-Object { $_ -match '^[0-9a-f]{64}$' }).Count -eq $script:CompanionPackSha256.Count }
     # version-only outputs: they add a version to a product another rule detected, and nothing else
     $voPack = [WebInv.Matcher]::ReadPack('{"name":"votest","rules":[{"id":"st:vo-det","f":"selftest.det","r":"Acme","n":"ST Acme","c":"Web application","p":"cpe:2.3:a:stacme:acme:*","k":80},{"id":"st:vo-ver","f":"selftest.page","r":"Acme v(\\d+\\.\\d+\\.\\d+)","n":"ST Acme","v":"{1}","p":"cpe:2.3:a:stacme:acme:{v}","vo":true},{"id":"st:vo-det2","f":"selftest.det2","r":"Beta ([\\d.]+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","k":80},{"id":"st:vo-ver2","f":"selftest.page","r":"Beta v(\\d+\\.\\d+\\.\\d+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","vo":true},{"id":"st:vo-gate","f":"selftest.det3","r":"Gamma","n":"ST Gamma","c":"Shipping carriers","rc":["Ecommerce"],"p":"cpe:2.3:a:stgamma:gamma:*","k":80},{"id":"st:vo-ver3","f":"selftest.page","r":"Gamma v(\\d+\\.\\d+\\.\\d+)","n":"ST Gamma","v":"{1}","p":"cpe:2.3:a:stgamma:gamma:{v}","vo":true}]}')
     [void][WebInv.Matcher]::Load($voPack, (New-Object 'System.Collections.Generic.List[string]'))

@@ -1,33 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:tideline:schema:tideline-envelope/1",
+  "title": "Tideline run envelope",
+  "description": "The signed manifest a sensor sends with POST /v1/runs. The signature (ES256) covers these exact bytes and travels in the Tideline-Signature header. Each part's sha256 and bytes are taken over the bytes the part carries as the tool wrote them, before any gzip, and match the tool's own SHA-256 manifest; a file split into chunks also carries the whole file's file_sha256 and file_bytes. Minor 1 adds the optional part fields encoding, role, chunk, chunks, file_bytes and file_sha256, media parameters, and name-based (version 5) run ids, all written by WebInventory 2.6.",
   "x-tideline-schema": "tideline-envelope/1",
-  "title": "Tideline run envelope (manifest)",
-  "description": "The manifest a sensor sends with POST /v1/runs, signed (ES256) over its exact bytes in the Tideline-Signature header. Each part is then uploaded with PUT /v1/runs/{run_id}/parts/{n}. See SHIPPING.md.",
+  "x-minor": 1,
   "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema",
-    "run_id",
-    "tool",
-    "tool_version",
-    "sensor",
-    "engagement",
-    "job_id",
-    "started",
-    "finished",
-    "exit_code",
-    "profile",
-    "tool_manifest_sha256",
-    "parts"
-  ],
   "properties": {
     "schema": {
       "const": "tideline-envelope/1"
     },
     "run_id": {
       "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[45][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "description": "UUID: version 4, or version 5 (name-based) for a run WebInventory made before 2.6"
     },
     "tool": {
       "type": "string",
@@ -35,23 +21,18 @@
     },
     "tool_version": {
       "type": "string",
-      "maxLength": 40
-    },
-    "tool_run": {
-      "type": "string",
-      "maxLength": 100,
-      "description": "the tool's own run id (WebInventory: yyyyMMdd_HHmmss)"
+      "minLength": 1,
+      "maxLength": 64
     },
     "sensor": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-      "description": "must equal the sensor id in the client certificate"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
     },
     "engagement": {
-      "anyOf": [
+      "oneOf": [
         {
           "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
         },
         {
           "type": "null"
@@ -59,10 +40,10 @@
       ]
     },
     "job_id": {
-      "anyOf": [
+      "oneOf": [
         {
           "type": "string",
-          "maxLength": 100
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
         },
         {
           "type": "null"
@@ -78,21 +59,12 @@
       "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ$"
     },
     "exit_code": {
-      "anyOf": [
-        {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 255
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "the scan's exit code (store and shipping stages not included); null for runs made before 2.6"
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
     },
     "profile": {
-      "type": "object",
-      "description": "the run.json profile, unchanged"
+      "type": "object"
     },
     "tool_manifest_sha256": {
       "type": "string",
@@ -104,16 +76,6 @@
       "maxItems": 100000,
       "items": {
         "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "n",
-          "kind",
-          "media",
-          "name",
-          "bytes",
-          "sha256",
-          "encoding"
-        ],
         "properties": {
           "n": {
             "type": "integer",
@@ -121,28 +83,22 @@
           },
           "kind": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$",
-            "description": "a record kind (NDJSON) or artifact"
+            "pattern": "^[a-z][a-z-]{0,31}$"
           },
           "schema": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9.-]*/[0-9]+$",
-            "description": "record schema of an NDJSON part"
-          },
-          "role": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9-]{0,31}$",
-            "description": "what an artifact is: run-info, tool-manifest, vuln-provenance, log, screenshot"
+            "pattern": "^[a-z][a-z0-9.-]*/[0-9]+$"
           },
           "media": {
             "type": "string",
-            "maxLength": 100
+            "maxLength": 100,
+            "pattern": "^[a-z]+/[a-z0-9.+-]+(; ?[a-z0-9-]+=[A-Za-z0-9._-]+)*$",
+            "description": "a media type, with optional parameters (text/plain; charset=utf-8)"
           },
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 400,
-            "description": "the file's path in the run folder (forward slashes)"
+            "maxLength": 512
           },
           "records": {
             "type": "integer",
@@ -150,38 +106,53 @@
           },
           "bytes": {
             "type": "integer",
-            "minimum": 0,
-            "description": "size before compression"
+            "minimum": 0
           },
           "sha256": {
             "type": "string",
-            "pattern": "^[0-9a-f]{64}$",
-            "description": "SHA-256 of the part before compression (for a whole file: as in the tool's own manifest)"
+            "pattern": "^[0-9a-f]{64}$"
           },
           "encoding": {
             "enum": [
               "gzip",
               "identity"
             ],
-            "description": "Content-Encoding of the upload"
+            "description": "Content-Encoding of the upload; absent means gzip"
+          },
+          "role": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,31}$",
+            "description": "what an artifact is: run-info, tool-manifest, vuln-provenance, log, screenshot"
           },
           "chunk": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "description": "this part's position when one file is sent as several parts"
           },
           "chunks": {
             "type": "integer",
-            "minimum": 2
+            "minimum": 2,
+            "description": "how many parts the file was split into"
           },
           "file_bytes": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "size of the whole file a chunk belongs to"
           },
           "file_sha256": {
             "type": "string",
-            "pattern": "^[0-9a-f]{64}$"
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the whole file a chunk belongs to"
           }
         },
+        "required": [
+          "n",
+          "kind",
+          "name",
+          "bytes",
+          "sha256"
+        ],
+        "additionalProperties": false,
         "allOf": [
           {
             "if": {
@@ -193,7 +164,7 @@
             },
             "then": {
               "required": [
-                "role"
+                "media"
               ]
             },
             "else": {
@@ -220,5 +191,21 @@
         ]
       }
     }
-  }
+  },
+  "required": [
+    "schema",
+    "run_id",
+    "tool",
+    "tool_version",
+    "sensor",
+    "engagement",
+    "job_id",
+    "started",
+    "finished",
+    "exit_code",
+    "profile",
+    "tool_manifest_sha256",
+    "parts"
+  ],
+  "additionalProperties": false
 }

@@ -1,17 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:tideline:schema:webinventory.error/1",
-  "x-tideline-schema": "webinventory.error/1",
   "title": "WebInventory error or warning",
   "description": "One line of WebInventory_<RunId>_errors.jsonl: what the run's error log holds (level error or fatal, with the category and the target) and the run log's warnings (level warning).",
+  "x-tideline-schema": "webinventory.error/1",
+  "x-minor": 0,
+  "x-producer": "WebInventory 2.6 and later",
   "type": "object",
-  "required": [
-    "time",
-    "level",
-    "category",
-    "target",
-    "message"
-  ],
   "properties": {
     "time": {
       "type": "string"
@@ -33,5 +28,12 @@
       "type": "string"
     }
   },
+  "required": [
+    "time",
+    "level",
+    "category",
+    "target",
+    "message"
+  ],
   "additionalProperties": false
 }

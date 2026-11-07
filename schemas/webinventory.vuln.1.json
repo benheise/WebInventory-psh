@@ -1,18 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:tideline:schema:webinventory.vuln/1",
+  "title": "WebInventory vulnerability match",
+  "description": "Frozen in schemas-v1.1.0 from what WebInventory 2.6 writes (it replaces the draft of v1.0.0, which typed every value as a string). One line of WebInventory_<RunId>_vulns.jsonl (-NvdFeed on a scan run) or of a -StoreQuery Vulnerabilities JSONL: one service and CVE, matched offline from the service's CPE and version, with CISA KEV and FIRST EPSS when given. Values are the CSV's cells as text (without the CSV's formula guard); counts, ports, sizes and durations are integers when the cell holds one, \"\" when it is empty.",
   "x-tideline-schema": "webinventory.vuln/1",
-  "title": "WebInventory vulnerability line",
-  "description": "One line of WebInventory_<RunId>_vulns.jsonl (-NvdFeed on a scan run) or of a -StoreQuery Vulnerabilities JSONL: one service and CVE, matched offline from the service's CPE and version, with CISA KEV and FIRST EPSS when given. Values are the CSV's cells as text (without the CSV's formula guard); counts, ports, sizes and durations are integers when the cell holds one, \"\" when it is empty.",
+  "x-minor": 0,
+  "x-producer": "WebInventory 2.6 and later (-NvdFeed on a scan run)",
   "type": "object",
-  "required": [
-    "Host",
-    "IP",
-    "Port",
-    "Url",
-    "Cpe",
-    "Cve"
-  ],
   "properties": {
     "Host": {
       "type": "string"
@@ -85,5 +79,28 @@
       "type": "string"
     }
   },
+  "required": [
+    "Host",
+    "IP",
+    "Port",
+    "Url",
+    "Status",
+    "Products",
+    "Cpe",
+    "Cve",
+    "Kev",
+    "KevDateAdded",
+    "KevDueDate",
+    "KevRansomware",
+    "Epss",
+    "EpssPercentile",
+    "CvssScore",
+    "CvssSeverity",
+    "CvssVersion",
+    "Published",
+    "Match",
+    "EntityId",
+    "Description"
+  ],
   "additionalProperties": true
 }

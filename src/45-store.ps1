@@ -47,6 +47,7 @@ function Write-RunInfo {
     $sessions.Add([ordered]@{
             started = (Format-Iso $script:ScriptStart); finished = (Format-Iso (Get-Date)); resumed = [bool]$Resume
             interrupted = $Interrupted; timeLimit = $TimeLimit; rows = $Rows; runLog = $RunLogPath; errorLog = $ErrLogPath
+            throttle = (Get-ThrottleSummary)
         })
     $checks = 0
     if ($script:ProgressPath -and (Test-Path -LiteralPath $script:ProgressPath)) { foreach ($l in [IO.File]::ReadLines($script:ProgressPath)) { if ($l.Trim()) { $checks++ } } }
@@ -58,7 +59,7 @@ function Write-RunInfo {
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
-            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled
+            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled; apiDocPaths = [bool]$ApiDocPaths
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
             proxy = $(if ($Proxy) { $proxyLabel } else { '' }); snmp = $(if ($Snmp) { $snmpMode } else { '' })

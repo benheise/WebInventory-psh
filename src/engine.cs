@@ -1761,6 +1761,7 @@ namespace WebInv
         public string Source = "";
         public string Field = "";
         public string Evidence = "";
+        public string Rules = "";       // v2.7: ids of the rules behind this detection, ';'-joined (at most MaxRuleIds)
         public string Flag = "";
         public string HostName = "";
         public string[] Implies;
@@ -2197,6 +2198,7 @@ namespace WebInv
                             d.Field = kv.Key;
                             string ev = m.Value; if (ev.Length > 120) ev = ev.Substring(0, 120);
                             d.Evidence = kv.Key + "=" + ev;
+                            d.Rules = r.Id ?? "";
                             d.HostName = Expand(o.H, m);
                             d.Implies = o.Im; d.Excludes = o.Xs; d.Requires = o.Rq; d.RequiresCategory = o.Rc;
                             if (o.Vo)
@@ -2212,6 +2214,81 @@ namespace WebInv
                 }
             }
             return Aggregate(raw);
+        }
+
+        public const int MaxRuleIds = 12;
+        static string AddRuleIds(string have, string add)
+        {
+            List<string> ids = new List<string>(string.IsNullOrEmpty(have) ? new string[0] : have.Split(';'));
+            foreach (string id in add.Split(';'))
+                if (id.Length > 0 && ids.Count < MaxRuleIds && !ids.Contains(id)) ids.Add(id);
+            return string.Join(";", ids.ToArray());
+        }
+
+        // v2.7 -ExplainFingerprint: what every rule pack made of one service's observations. FP-MATCH is a rule that matched
+        // (and what it output); FP-FAIL is a rule whose literal prefilter passed (or whose field has too few rules to have
+        // one) but whose regex, base64 decoding or condition then failed: the near misses. Rules the prefilter or a port
+        // list ruled out are only counted.
+        public static List<string> Explain(Observation obs)
+        {
+            List<string> lines = new List<string>();
+            int tried = 0, preOut = 0, portOut = 0;
+            foreach (KeyValuePair<string, List<string>> kv in obs.F)
+            {
+                List<Rule> list;
+                if (!byField.TryGetValue(kv.Key, out list)) continue;
+                AhoCorasick ac = null;
+                fieldAc.TryGetValue(kv.Key, out ac);
+                bool[][] present = ac != null ? new bool[kv.Value.Count][] : null;
+                foreach (Rule r in list)
+                {
+                    if (r.Ports != null && r.Ports.Length > 0 && Array.IndexOf(r.Ports, obs.Port) < 0) { portOut++; continue; }
+                    for (int vi = 0; vi < kv.Value.Count; vi++)
+                    {
+                        string v = kv.Value[vi];
+                        if (v == null) continue;
+                        bool prefiltered = false;
+                        if (ac != null && r.LitIds != null)
+                        {
+                            bool[] h = present[vi];
+                            if (h == null) { h = ac.Scan(v, Math.Min(v.Length, MaxValueChars)); present[vi] = h; }
+                            bool ok = false;
+                            foreach (int[] t in r.LitIds)
+                            {
+                                bool all = true;
+                                foreach (int id in t) if (!h[id]) { all = false; break; }
+                                if (all) { ok = true; break; }
+                            }
+                            if (!ok) { preOut++; continue; }
+                            prefiltered = true;
+                        }
+                        tried++;
+                        // a field with too few rules for an automaton has every rule tried: each one is a near miss too
+                        if (ac == null) prefiltered = true;
+                        string vv = v;
+                        if (r.B64) { vv = FromBase64(v); if (vv == null) { if (prefiltered) lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "base64 decoding failed")); continue; } }
+                        Match m = SafeMatch(r.Re, vv);
+                        if (m == null) { lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "regex timed out")); continue; }
+                        if (!m.Success) { if (prefiltered) lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "regex did not match")); continue; }
+                        if (!CondsOk(r, obs)) { lines.Add(ExplainLine("FP-FAIL", r, kv.Key, m.Value, "condition not met")); break; }
+                        foreach (OutDef o in r.Out)
+                        {
+                            string kind = string.IsNullOrEmpty(o.T) ? (string.IsNullOrEmpty(o.N) ? "flag" : "service") : o.T;
+                            string what = kind == "flag" ? (o.Flag ?? "") : (Expand(o.N, m) + (string.IsNullOrEmpty(o.V) ? "" : " " + Expand(o.V, m)));
+                            lines.Add(ExplainLine("FP-MATCH", r, kv.Key, m.Value, "-> " + kind + " " + what.Trim() + (o.Vo ? " (version only)" : " conf=" + (o.K > 0 ? Math.Min(100, o.K) : 85))));
+                        }
+                        break;
+                    }
+                }
+            }
+            lines.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "SUMMARY rules tried={0} ruled out by prefilter={1} by port={2}", tried, preOut, portOut));
+            return lines;
+        }
+        static string ExplainLine(string tag, Rule r, string field, string value, string what)
+        {
+            string v = value ?? ""; if (v.Length > 100) v = v.Substring(0, 100);
+            v = v.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
+            return tag + " " + (string.IsNullOrEmpty(r.Src) ? "?" : r.Src) + " " + r.Id + " " + field + "=" + v + " " + what;
         }
 
         public static List<Detection> Aggregate(List<Detection> raw)
@@ -2335,9 +2412,9 @@ namespace WebInv
                 // and the version-only contribution is then merged into it like any other
                 Detection v = new Detection();
                 v.Kind = e.Kind; v.Name = e.Name; v.Version = e.Version; v.Cpe = e.Cpe; v.Source = e.Source; v.Field = e.Field;
-                v.Evidence = e.Evidence; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
+                v.Evidence = e.Evidence; v.Rules = e.Rules; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
                 e.Kind = d.Kind; e.Name = d.Name; e.Category = d.Category; e.Confidence = d.Confidence; e.Cpe = d.Cpe; e.Flag = d.Flag;
-                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.HostName = d.HostName;
+                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.Rules = d.Rules; e.HostName = d.HostName;
                 e.Implies = d.Implies; e.Excludes = d.Excludes; e.Requires = d.Requires; e.RequiresCategory = d.RequiresCategory;
                 e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion; e.VersionOnly = false;
                 d = v;
@@ -2368,6 +2445,7 @@ namespace WebInv
             if (string.IsNullOrEmpty(e.HostName)) e.HostName = d.HostName;
             if (!string.IsNullOrEmpty(d.Source) && e.Source.IndexOf(d.Source, StringComparison.OrdinalIgnoreCase) < 0) e.Source += "+" + d.Source;
             if (!string.IsNullOrEmpty(d.Evidence) && e.Evidence.Length < 400 && e.Evidence.IndexOf(d.Evidence, StringComparison.Ordinal) < 0) e.Evidence += " | " + d.Evidence;
+            if (!string.IsNullOrEmpty(d.Rules)) e.Rules = AddRuleIds(e.Rules, d.Rules);
             e.Implies = Union(e.Implies, d.Implies); e.Excludes = Union(e.Excludes, d.Excludes); e.Requires = Union(e.Requires, d.Requires);
             // the gate only survives a merge if every contributing rule was gated
             if (!d.VersionOnly && e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
@@ -3235,7 +3313,7 @@ namespace WebInv
 
     public static class Util
     {
-        public const string EngineVersion = "2.6.0";
+        public const string EngineVersion = "2.7.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
