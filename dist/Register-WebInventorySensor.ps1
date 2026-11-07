@@ -68,7 +68,7 @@ param(
     [ValidateRange(5, 600)][int]$TimeoutSec = 30
 )
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.0'
+$ScriptVersion = '2.6.1'
 
 $ShipSource = @'
 // Tideline result shipping: shared by Invoke-WebInventory.ps1 (-ShipTo), Send-WebInventoryRun.ps1 and
@@ -1004,7 +1004,7 @@ namespace WebInv
         public byte[] Manifest(string sensor, string runId, string engagement)
         {
             JObj m = new JObj();
-            m.Add("schema", Envelope).Add("run_id", runId).Add("tool", "webinventory").Add("tool_version", ToolVersion).Add("tool_run", ToolRun);
+            m.Add("schema", Envelope).Add("run_id", runId).Add("tool", "webinventory").Add("tool_version", ToolVersion);
             m.Add("sensor", sensor).Add("engagement", string.IsNullOrEmpty(engagement) ? null : engagement).Add("job_id", null);
             m.Add("started", Started).Add("finished", Finished).Add("exit_code", ExitCode);
             m.Add("profile", Profile).Add("tool_manifest_sha256", ToolManifestSha256);
@@ -1328,7 +1328,7 @@ namespace WebInv
         }
     }
 
-    public static class ShipInfo { public static string Version = "2.6.0"; }
+    public static class ShipInfo { public static string Version = "2.6.1"; }
 }
 '@
 

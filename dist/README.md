@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.6.0
+# Invoke-WebInventory.ps1 v2.6.1
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -85,6 +85,16 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.6.1 changes
+
+- **Tideline accepts the envelopes.** 2.6.0 put the tool's own run id (`tool_run`) into every envelope, and
+  Tideline's `tideline-envelope/1` allows no extra fields, so Tideline refused every run. The field is gone; the id
+  is still in `run.json`, which ships with the run as its `run-info` artifact. The part fields 2.6.0 added
+  (`encoding`, `role`, `chunk`, `chunks`, `file_bytes`, `file_sha256`) and media types with a charset are part of
+  `tideline-envelope/1` from minor 1 (benheise/Tideline, tag `schemas-v1.1.0`).
+- **The shipping tests check every received envelope against Tideline's own schema** (`tests/v26/received.py`, with
+  a copy of `tideline-envelope.1.json`), so a field Tideline does not know fails the build.
 
 ## What v2.6.0 adds
 

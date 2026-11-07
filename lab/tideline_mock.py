@@ -396,7 +396,7 @@ def show(a):
     for p in sorted((pathlib.Path(a.data) / "runs").glob("*/state.json")):
         r = json.loads(p.read_text())
         m = r["manifest"]
-        print(json.dumps({"run_id": r["run_id"], "sensor": r["sensor"], "state": r["state"], "tool_run": m.get("tool_run"), "engagement": m.get("engagement"),
+        print(json.dumps({"run_id": r["run_id"], "sensor": r["sensor"], "state": r["state"], "tool_version": m.get("tool_version"), "engagement": m.get("engagement"),
                           "exit_code": m.get("exit_code"), "parts": len(m["parts"]), "received": len(r["received"]),
                           "kinds": sorted({x["kind"] if x["kind"] != "artifact" else "artifact:" + x["role"] for x in m["parts"]})}))
 

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.6.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.6.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -202,7 +202,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.6.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.6.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
     Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
     4 = completed, but nothing answered.
@@ -338,7 +338,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.0'
+$ScriptVersion = '2.6.1'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 

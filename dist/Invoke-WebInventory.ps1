@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.6.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.6.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -202,7 +202,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.6.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.6.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
     Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
     4 = completed, but nothing answered.
@@ -338,7 +338,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.0'
+$ScriptVersion = '2.6.1'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -3662,7 +3662,7 @@ namespace WebInv
 
     public static class Util
     {
-        public const string EngineVersion = "2.6.0";
+        public const string EngineVersion = "2.6.1";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -6051,7 +6051,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.6.0";
+        public const string Version = "2.6.1";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
@@ -9416,7 +9416,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.6.0";
+        public const string Version = "2.6.1";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -15343,7 +15343,7 @@ namespace WebInv
         public byte[] Manifest(string sensor, string runId, string engagement)
         {
             JObj m = new JObj();
-            m.Add("schema", Envelope).Add("run_id", runId).Add("tool", "webinventory").Add("tool_version", ToolVersion).Add("tool_run", ToolRun);
+            m.Add("schema", Envelope).Add("run_id", runId).Add("tool", "webinventory").Add("tool_version", ToolVersion);
             m.Add("sensor", sensor).Add("engagement", string.IsNullOrEmpty(engagement) ? null : engagement).Add("job_id", null);
             m.Add("started", Started).Add("finished", Finished).Add("exit_code", ExitCode);
             m.Add("profile", Profile).Add("tool_manifest_sha256", ToolManifestSha256);
@@ -15667,7 +15667,7 @@ namespace WebInv
         }
     }
 
-    public static class ShipInfo { public static string Version = "2.6.0"; }
+    public static class ShipInfo { public static string Version = "2.6.1"; }
 }
 '@
 
