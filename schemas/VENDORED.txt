@@ -1,4 +1,4 @@
-Vendored from benheise/Tideline schemas/ at HEAD (commit a6465f9905f6) by tools/schemas/vendor.sh, with their lines
+Vendored from benheise/Tideline schemas/ at schemas-v1.1.0 (commit 03e9540dec7a) by tools/schemas/vendor.sh, with their lines
 of Tideline's SHA256SUMS. Do not edit them here: change them in Tideline, tag a schemas-v* release and vendor again.
 tools/schemas/check.py (run in CI) checks they match the columns src/ writes, and tests/v26/contract.py validates
 real output against them.
