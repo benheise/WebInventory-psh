@@ -11,7 +11,7 @@ usage: build.py [--cache DIR] [--offline] [--out dist/WebInventory.cloud.json] [
 """
 import argparse, csv, datetime, hashlib, io, ipaddress, json, os, re, sys, tempfile, urllib.request
 
-UA = 'WebInventory-cloud-ranges (+https://github.com/benheise/WebInventory-psh)'
+UA = 'WebInventory-cloud-ranges (+https://github.com/benheise/Hinterland)'
 # Azure publishes its Service Tags under a new URL every week; the download page names the current file
 AZURE = [('Azure', 56519, 'ServiceTags_Public'), ('Azure Government', 57063, 'ServiceTags_AzureGovernment'), ('Azure China', 57062, 'ServiceTags_China')]
 SOURCES = [

@@ -1,4 +1,10 @@
-# WebInventory (Invoke-WebInventory.ps1)
+# Hinterland
+
+**Hinterland** is the project and repository name (formerly `WebInventory-psh`). The tool keeps its own name: the
+script is `Invoke-WebInventory.ps1`, with its companions, rule packs and output files named `WebInventory*` as before.
+The scanner's User-Agent (`... WebInventory/2.0 (authorized asset inventory)`, registered with the SOC) and the
+Windows event-log source `WebInventory` are unchanged, so no scheduled task, SOC rule or store anchor needs to change.
+Old links to `benheise/WebInventory-psh` redirect here.
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also PowerShell 7), built as a
 standalone CMDB replacement. One script, no installs, no external binaries: TCP connect, HTTP/HTTPS detection on any

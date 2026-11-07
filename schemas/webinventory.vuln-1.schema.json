@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/benheise/WebInventory-psh/schemas/webinventory.vuln-1",
+  "$id": "urn:tideline:schema:webinventory.vuln/1",
+  "x-tideline-schema": "webinventory.vuln/1",
   "title": "WebInventory vulnerability line",
   "description": "One line of WebInventory_<RunId>_vulns.jsonl (-NvdFeed on a scan run) or of a -StoreQuery Vulnerabilities JSONL: one service and CVE, matched offline from the service's CPE and version, with CISA KEV and FIRST EPSS when given. Values are the CSV's cells as text (without the CSV's formula guard); counts, ports, sizes and durations are integers when the cell holds one, \"\" when it is empty.",
   "type": "object",
