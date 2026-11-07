@@ -35,6 +35,7 @@ with the run. See [`docs/web-inventory-v2.6.1.md`](docs/web-inventory-v2.6.1.md)
   `certreq.exe`.
 
 See [`docs/web-inventory-v2.6.0.md`](docs/web-inventory-v2.6.0.md) and [`dist/SHIPPING.md`](dist/SHIPPING.md).
+Open work is tracked in [`docs/PLAN.md`](docs/PLAN.md).
 
 2.5.0 added:
 - cloud/CDN attribution from the providers' published IP ranges (AWS, Azure including Government, Google, Oracle,
