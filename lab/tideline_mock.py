@@ -60,16 +60,15 @@ def load_validators(d):
         return None, None
     from jsonschema import Draft202012Validator
     v = {}
-    for p in pathlib.Path(d).glob("*.schema.json"):
+    for p in pathlib.Path(d).glob("*.json"):   # the vendored Tideline schemas, keyed by their id (webinventory.service/1)
         s = json.loads(p.read_text(encoding="utf-8"))
-        name = p.name[:-len(".schema.json")]
-        v[name] = Draft202012Validator(s)
-    return v, v.get("tideline-envelope-1")
+        if "x-tideline-schema" in s:
+            v[s["x-tideline-schema"]] = Draft202012Validator(s)
+    return v, v.get("tideline-envelope/1")
 
 
 def schema_key(record_schema):
-    # webinventory.service/1 -> webinventory.service-1
-    return record_schema.replace("/", "-")
+    return record_schema
 
 
 def inflate(body, limit):

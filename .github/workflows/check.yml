@@ -154,8 +154,8 @@ jobs:
         run: |
           python3 build.py
           git diff --exit-code --stat -- dist/ || { echo "::error title=Build::dist/ differs from what build.py makes from src/ (run python3 build.py and commit)"; exit 1; }
-          python3 tools/schemas/gen.py
-          git diff --exit-code --stat -- schemas/ || { echo "::error title=Schemas::schemas/ differs from what tools/schemas/gen.py makes from src/ (run it and commit)"; exit 1; }
+          (cd schemas && sha256sum -c --quiet SHA256SUMS) || { echo "::error title=Schemas::schemas/ differs from the Tideline schemas it vendored (vendor again with tools/schemas/vendor.sh)"; exit 1; }
+          python3 tools/schemas/check.py || { echo "::error title=Schemas::the vendored Tideline schemas do not match the columns src/ writes (change them in Tideline, then vendor)"; exit 1; }
       - name: Self-test and rule examples
         working-directory: ${{ runner.temp }}
         run: |

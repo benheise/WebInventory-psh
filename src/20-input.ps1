@@ -34,6 +34,29 @@ $IdentifyPathList = @(
     '/owa/auth/logon.aspx', '/certsrv/', '/adfs/ls/idpinitiatedsignon.aspx', '/RDWeb/', '/remote/login', '/global-protect/login.esp',
     '/+CSCOE+/logon.html', '/dana-na/auth/url_default/welcome.cgi', '/vpn/index.html', '/version', '/api/health', '/api/v1/status/buildinfo',
     '/rest/applinks/1.0/manifest', '/.well-known/openid-configuration', '/manager/html', '/v2/')
+# v2.7 -ApiDocPaths: API documents and consoles, and Docker files, GET only. A path counts only when its 200 body holds the
+# document's own keywords (Match); NotHtml refuses an HTML page there (a site's catch-all page is not a YAML file).
+# GraphQL introspection is a POST and is not sent.
+$ApiDocPathList = @(
+    @{ Path = '/openapi.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/swagger.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/v3/api-docs'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/v2/api-docs'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/swagger/v1/swagger.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/openapi.yaml'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '(?m)^(openapi|swagger)\s*:\s*["'']?[23]' }
+    @{ Path = '/swagger-ui/index.html'; Kind = 'swagger-ui'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'SwaggerUIBundle|swagger-ui-bundle\.js' }
+    @{ Path = '/swagger-ui.html'; Kind = 'swagger-ui'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'SwaggerUIBundle|swagger-ui-bundle\.js|springfox' }
+    @{ Path = '/redoc'; Kind = 'redoc'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = '<redoc\b|redoc\.standalone\.js' }
+    @{ Path = '/graphiql'; Kind = 'graphiql'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'graphiql(\.min)?\.(js|css)|GraphiQL\.create' }
+    @{ Path = '/playground'; Kind = 'graphql-playground'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'GraphQLPlayground|graphql-playground' }
+    @{ Path = '/docker-compose.yml'; Kind = 'docker-compose'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?m)^services\s*:\s*$[\s\S]*^\s+(image|build)\s*:' }
+    @{ Path = '/docker-compose.yaml'; Kind = 'docker-compose'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?m)^services\s*:\s*$[\s\S]*^\s+(image|build)\s*:' }
+    @{ Path = '/Dockerfile'; Kind = 'dockerfile'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?im)^FROM\s+[a-z0-9][\w./:@-]*(\s+AS\s+\w+)?\s*$' }
+)
+# v2.7 Appliance column: detections in these categories (and every hardware detection) name the device itself
+$ApplianceCategories = @('Firewall', 'Network device', 'Network devices', 'Load balancer', 'Load balancers', 'Storage', 'NAS', 'Router',
+    'Broadband Router', 'Switch', 'VPN', 'Security Appliance', 'Network Appliance', 'Network Management Device', 'SD-WAN Appliance',
+    'Out-of-band mgmt', 'Lights Out Management', 'Power', 'Power Device', 'Building automation', 'Printer', 'IP Camera', 'Appliance')
 #endregion
 
 #region ---------- Target / port / exclusion parsing (nmap-compatible syntax) ----------

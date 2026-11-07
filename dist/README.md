@@ -1,4 +1,4 @@
-# Invoke-WebInventory.ps1 v2.6.1
+# Invoke-WebInventory.ps1 v2.7.0
 
 Non-intrusive web service discovery and fingerprinting for Windows PowerShell 5.1 (also runs on PowerShell 7). It is a CMDB-lite replacement: TCP connect, HTTP/HTTPS auto-detection on any port, identification, certificate and TLS posture, written to CSV/JSONL/HTML with run and error logs. Nothing is installed and there are no external binaries; the inline C# engine compiles at first run.
 
@@ -19,7 +19,8 @@ signed envelope over mutual TLS. `Register-WebInventorySensor.ps1` enrolls the h
 `Send-WebInventoryRun.ps1` sends runs later or carries them by hand (see "What v2.6.0 adds" and `SHIPPING.md`).
 
 It does not exploit, brute-force, guess credentials or enumerate paths. The optional `-IdentifyPaths` set is a fixed list
-of 16 public landing/version pages; the optional `-VersionPaths` sends one GET to a product's documented version URL,
+of 16 public landing/version pages, the optional `-ApiDocPaths` set a fixed list of 14 API document and Docker file
+paths; the optional `-VersionPaths` sends one GET to a product's documented version URL,
 and only after that product was detected without a version. The only credentials it ever uses are an SNMP community or SNMPv3 user you supply
 with `-Snmp`; SMB and RDP stop at the server's first, unauthenticated NTLM message.
 
@@ -85,6 +86,37 @@ Target syntax (CLI, `-TargetFile`, `-HostFile`, `-Exclude`, `-Scope` all share i
   matching `-Smb`, `-Rdp`, `-Snmp`).
 
 PowerShell splits unquoted commas, so `-Target web01:80,443` arrives as `web01:80` + `443`. The script glues bare port tokens back on. A partial numeric such as `7.1` or `443` is refused, because the resolver would otherwise turn it into `7.0.0.1`/`0.0.1.187`. Quote octet ranges that contain commas.
+
+## What v2.7.0 adds
+
+From the AutoAR and competitor reviews (`docs/PLAN.md` in the repository). Details and measurements:
+`docs/web-inventory-v2.7.0.md`.
+
+- **Block pages and dead origins are flagged.** `WafBlocked:<vendor>` in `Flags` when the response is a WAF's own
+  block page (F5 and Imperva at any status; Cloudflare, Akamai, AWS CloudFront, Sucuri, Azure Front Door and
+  ModSecurity at 403, 406, 429 or 503), so a blocked scan no longer reads as a thin, clean row. `OriginDnsError` for
+  Cloudflare's 530 with "error code: 1016": the proxied name's origin does not resolve, which is a takeover risk.
+  Both are read from the response already received.
+- **`Appliance` column** (appended, so 85 columns): the device the service is, when a detection is hardware or in an
+  appliance category (firewall, load balancer, out-of-band controller, storage, printer, camera, power...). `OsHint`
+  keeps the OS underneath, so an iDRAC on CentOS reads `Dell iDRAC` here and CentOS there.
+- **Rule ids on every detection** (JSONL `Detections[].Rules`), and **`-ExplainFingerprint`**: a
+  `_explain.log` with every rule that matched (`FP-MATCH`), every rule whose prefilter passed but whose pattern then
+  failed (`FP-FAIL`) and what the row reports (`RESULT`), per service. For one target or a few; it sends nothing extra.
+- **Throttle accounting.** Timeouts, connection resets and HTTP 429 are counted per check. At `-ThrottleThreshold`
+  (default 3) or more the row's `Notes` say its results may be incomplete; `run.json` has the totals and the worst
+  targets per session (`sessions[].throttle`), and the run log a `Throttling:` line.
+- **`-ApiDocPaths`** (opt-in, GET only, no redirects): OpenAPI and Swagger documents, Swagger UI, ReDoc, GraphiQL,
+  GraphQL Playground, `docker-compose.yml` and `Dockerfile`. A hit needs a 200 with that document's own content, so a
+  site that answers 200 for every path gives none. Hits go to the new `ApiDocPaths` column with `ApiDocsExposed` or
+  `DockerFileExposed`. GraphQL introspection is a POST and is never sent.
+- **The rule packs shipped next to the script are verified.** `WebInventory.rules.recog.json` and
+  `WebInventory.rules.wappalyzer.json` must match the SHA-256 this release was built with (line endings and a
+  byte-order mark do not count), or they are refused and logged. `-AllowModifiedRules` loads an edited one with a
+  warning. A pack of your own under another name, or given with `-RulesFile`, loads as before.
+- **Schemas:** the repository's `schemas/` are now Tideline's own files (`schemas-v1.1.0`), checked against the
+  columns in CI.
+- **Self-test:** 156 checks on PowerShell 7 (149 in 2.6.1).
 
 ## What v2.6.1 changes
 
@@ -723,20 +755,20 @@ on Windows before quoting these numbers.
 - Rule tooling: `-SelfTest`, `-TestRules`, `-ImportRules` (Recog / webappanalyzer), `-ExportRules`.
 
 ## Outputs (in `-OutputDir`; logs always in the current directory)
-`WebInventory_<RunId>.csv` (83 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness, run UUID, engagement, exit code), `_errors.jsonl`, `_delta.csv` + `.jsonl`, `_screenshots.csv` + `.jsonl`, `_vulns.csv` + `.jsonl` + `.provenance.json` (`-NvdFeed`), `_manifest.txt`, `_ship-state.json` (`-ShipTo`), `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` + `.jsonl` (+ `.html`). JSON types and schemas: `SHIPPING.md`.
+`WebInventory_<RunId>.csv` (85 columns, UTF-8 BOM for Excel), `.jsonl` (same plus per-detection confidence/source/evidence/rule ids), `.html`, `_progress.txt`, `_run.json` (when, how and by whom: probe switches, sessions, completeness, run UUID, engagement, exit code), `_errors.jsonl`, `_delta.csv` + `.jsonl`, `_screenshots.csv` + `.jsonl`, `_vulns.csv` + `.jsonl` + `.provenance.json` (`-NvdFeed`), `_manifest.txt`, `_ship-state.json` (`-ShipTo`), `_explain.log` (`-ExplainFingerprint`), `_run.log`, `_error.log`. Store queries write `WebInventory_store_<query>_<stamp>.csv` + `.jsonl` (+ `.html`). JSON types and schemas: `SHIPPING.md`.
 
 Columns that matter most for a CMDB import:
 - **Identity:** `Host`, `IP`, `Port`, `Service`, `Url`/`FinalUrl`, `Title`, `Server`
-- **Fingerprint:** `Products` (name + version), `CPEs` (CPE 2.3), `Categories`, `OsHint`, `Hardware`
+- **Fingerprint:** `Products` (name + version), `CPEs` (CPE 2.3), `Categories`, `Appliance`, `OsHint`, `Hardware`
 - **TLS and certificate:** `TlsSupported`, `CertSubject`/`CertSANs`/`CertNotAfter`/`CertSha256`
 - **Review:** `Flags`
 - **Hosting:** `Cloud`, `CloudRegion`, `CloudService` (published cloud/CDN ranges), `Cname` (`-Cname`)
-- **Requests beyond the default set:** `IdentifiedPaths` (`-IdentifyPaths`), `VersionPaths` (`-VersionPaths`: each version URL requested and its status)
+- **Requests beyond the default set:** `IdentifiedPaths` (`-IdentifyPaths`), `ApiDocPaths` (`-ApiDocPaths`), `VersionPaths` (`-VersionPaths`: each version URL requested and its status)
 
 CPEs built from banners are hints: distros backport fixes without changing version strings.
 
 ## Custom rules
-`-ExportRules .\mine.json` writes the embedded pack. Edit it, rename to `WebInventory.rules.<name>.json` and keep it next to the script (auto-loaded) or pass `-RulesFile`. A minimal rule:
+`-ExportRules .\mine.json` writes the embedded pack. Edit it, rename to `WebInventory.rules.<name>.json` and keep it next to the script (auto-loaded) or pass `-RulesFile`. Use a name of your own: the two packs this release ships (`recog`, `wappalyzer`) are checked against the hashes it was built with, and an edited one is refused unless `-AllowModifiedRules` is given. A minimal rule:
 ```json
 {"id":"acme:portal","f":"title","r":"^ACME Portal v([\\d.]+)","n":"ACME Portal","c":"Web application","v":"{1}","p":"cpe:2.3:a:acme:portal:{v}","k":90,"ex":"ACME Portal v4.2","exv":"4.2"}
 ```

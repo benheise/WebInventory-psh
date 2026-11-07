@@ -29,7 +29,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.6.1";
+        public const string Version = "2.7.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with

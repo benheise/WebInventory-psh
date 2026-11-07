@@ -327,8 +327,19 @@ $Cfg = @{
     MinConfidence = $MinConfidence; CertWarnDays = $CertWarnDays; Advisories = $Advisories; MgmtCategories = $MgmtCategories; MismatchStrings = $script:MismatchStrings
     RdnsCache = [hashtable]::Synchronized(@{}); VhostSeen = [hashtable]::Synchronized(@{})
     TlsFingerprint = [bool]$TlsFingerprint; Ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); Snmp = $snmpCred; Proxy = [bool]$Proxy
+    ApiDocPaths = [bool]$ApiDocPaths; ApiDocPathList = $ApiDocPathList; ApplianceCategories = $ApplianceCategories
+    ThrottleThreshold = $ThrottleThreshold; Explain = [bool]$ExplainFingerprint
 }
-$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
+# v2.7 -ExplainFingerprint: every rule pack's matches and near misses, per service, in WebInventory_<RunId>_explain.log
+$script:ExplainW = $null
+if ($ExplainFingerprint) {
+    $script:ExplainPath = Join-Path $OutputDir ("WebInventory_{0}_explain.log" -f $script:RunId)
+    $script:ExplainW = New-Object IO.StreamWriter($script:ExplainPath, $true, $script:Utf8NoBom)
+    $script:ExplainW.WriteLine(('# WebInventory v{0} -ExplainFingerprint, run {1}. FP-MATCH: a rule matched; FP-FAIL: its prefilter passed but the regex, base64 or condition failed; RESULT: what the row reports (-MinConfidence {2}).' -f $ScriptVersion, $script:RunId, $MinConfidence))
+    foreach ($pi in $script:PackInfo) { $script:ExplainW.WriteLine('# ' + $pi) }
+    if ($Jobs.Count -gt 16) { Write-RunLog ("-ExplainFingerprint with {0} checks writes a long log; it is meant for one or a few targets" -f $Jobs.Count) 'WARN' }
+}
+$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($ApiDocPaths) { $ApiDocPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
 $budgetMs = [long]$ops * ($TimeoutMs * 3 + $DelayMs + $JitterMs + $BannerWaitMs) + 30000
 $banner = "WebInventory v{0}: {1} checks across {2} hosts ({3} excluded{4}). Pace={5} threads={6} per-host={7} timeout={8}ms. Authorised scope only." -f $ScriptVersion, $Jobs.Count, $hostSet.Count, $excludedCount, $(if ($ScopeSet.IsEmpty) { ', no -Scope set' } else { ', scope enforced' }), $Pace, $Threads, $MaxPerHost, $TimeoutMs
 Write-RunLog $banner; Write-RunLog ("Outputs: {0} ; {1} ; {2}; watchdog budget {3} ms per check" -f $script:CsvPath, $script:JsonlPath, $script:ProgressPath, $budgetMs)
@@ -375,10 +386,26 @@ function Start-Worker {
 
 function Format-JobId([string]$JobLine) { $p = $JobLine.Split("`t"); '{0}({1}):{2}' -f $p[0], $p[1], $p[2] }
 
+# v2.7 throttle accounting: timeouts, connection resets and HTTP 429 per check, summed for run.json (per session) and the
+# run log, so a rate limiter or an overloaded host shows as such instead of as thin results
+$script:Throttle = @{ Timeouts = 0; Resets = 0; Http429 = 0; Targets = (New-Object System.Collections.Generic.List[object]) }
+function Get-ThrottleSummary {
+    $top = @($script:Throttle.Targets | Sort-Object { - ($_[1] + $_[2] + $_[3]) } | Select-Object -First 50 | ForEach-Object {
+            [ordered]@{ target = $_[0]; timeouts = $_[1]; resets = $_[2]; http429 = $_[3] } })
+    [ordered]@{ timeouts = $script:Throttle.Timeouts; resets = $script:Throttle.Resets; http429 = $script:Throttle.Http429
+        threshold = $ThrottleThreshold; throttledChecks = @($script:Throttle.Targets | Where-Object { ($_[1] + $_[2] + $_[3]) -ge $ThrottleThreshold }).Count
+        targets = $top }
+}
+
 function Complete-Result {
     param([string]$JobLine, $Res)
     if ($counts.ContainsKey($Res.State)) { $counts[$Res.State]++ } else { $counts.error++ }
     $counts.requests += $Res.Requests
+    if ($Res.Throttle) {   # set by the worker only when the check met a timeout, reset or 429
+        $script:Throttle.Timeouts += $Res.Throttle[0]; $script:Throttle.Resets += $Res.Throttle[1]; $script:Throttle.Http429 += $Res.Throttle[2]
+        $script:Throttle.Targets.Add(@($Res.Target, $Res.Throttle[0], $Res.Throttle[1], $Res.Throttle[2]))
+    }
+    if ($Res.Explain -and $script:ExplainW) { foreach ($l in $Res.Explain) { $script:ExplainW.WriteLine($l) }; $script:ExplainW.Flush() }
     foreach ($l in $Res.Logs) { Write-RunLog $l 'DEBUG' }
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
@@ -523,6 +550,13 @@ finally {
     $errSummary = if ($script:ErrTotal) { ($script:ErrCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value }) -join ' ' } else { 'none' }
     $summary = "{0} in {1:hh\:mm\:ss}: {2}/{3} checks; web={4} open={5} closed={6} filtered={7} worker-errors={8}; rows={9}; requests={10}; rule-regex-timeouts={11}; logged errors: {12}" -f $(if ($interrupted) { 'INTERRUPTED' } elseif ($script:TimeLimitHit) { 'TIME LIMIT' } else { 'Done' }), $elapsed, $doneCount, $total, $counts.web, $counts.open, $counts.closed, $counts.filtered, $counts.error, $counts.rows, $counts.requests, [WebInv.Matcher]::Timeouts, $errSummary
     Write-RunLog $summary
+    if (($script:Throttle.Timeouts + $script:Throttle.Resets + $script:Throttle.Http429) -gt 0) {
+        $ts = Get-ThrottleSummary
+        $tmsg = "Throttling: {0} timeouts, {1} connection resets, {2} HTTP 429 across {3} checks; {4} at or over -ThrottleThreshold {5} (run.json sessions[].throttle; Notes of those rows)" -f $ts.timeouts, $ts.resets, $ts.http429, $script:Throttle.Targets.Count, $ts.throttledChecks, $ThrottleThreshold
+        Write-RunLog $tmsg $(if ($ts.throttledChecks) { 'WARN' } else { 'INFO' })
+        if ($ts.throttledChecks) { Write-Host $tmsg -ForegroundColor Yellow }
+    }
+    if ($script:ExplainW) { $script:ExplainW.Dispose(); $script:ExplainW = $null; $outputs.Add($script:ExplainPath) }
     if ($Proxy) {
         $pmsg = "Proxy {0}: {1} CONNECT requests refused or failed{2}" -f $proxyLabel, [WebInv.Net]::ProxyRefusals, $(if ([WebInv.Net]::ProxyRefusals) { '; last: ' + [WebInv.Net]::ProxyLastRefusal } else { '' })
         Write-RunLog $pmsg $(if ([WebInv.Net]::ProxyRefusals) { 'WARN' } else { 'INFO' })

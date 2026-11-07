@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Invoke-WebInventory.ps1 v2.6.1 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
+    Invoke-WebInventory.ps1 v2.7.0 - non-intrusive web service discovery and fingerprinting (CMDB-lite).
 
 .DESCRIPTION
     TCP connect scan -> HTTP/HTTPS auto-detection on any port -> GET / (+ same-host redirects) ->
@@ -52,6 +52,16 @@
     Vaultwarden /api/version, Mailman 2 /mailman/listinfo, Sitecore /sitecore/shell/sitecore.version.xml), one GET to
     that URL (same scheme, host and port; no redirects followed, no login). At most 4 per service; the requests and
     their status codes are listed in the VersionPaths column.
+.PARAMETER ApiDocPaths
+    Opt-in: request a fixed list of API document and console paths (/openapi.json, /swagger.json, /v3/api-docs,
+    /swagger-ui/index.html, /redoc, /graphiql, /playground...) and Docker files (/docker-compose.yml, /Dockerfile), GET
+    only, no redirects followed. A path counts only when its 200 response holds that document's own keywords (a site
+    that answers 200 for every path gives no hit). Hits go to the ApiDocPaths column and the ApiDocsExposed or
+    DockerFileExposed flag. GraphQL introspection is a POST and is never sent.
+.PARAMETER ThrottleThreshold
+    Timeouts, connection resets and HTTP 429 answers a single check may meet before its row's Notes say it was throttled
+    (results may be incomplete). Every check's counts are summed in run.json (sessions[].throttle) and the run log.
+    Default 3.
 .PARAMETER Cname
     Opt-in: record the CNAME chain of each hostname target in the Cname column (targets given as names; SAN virtual hosts
     are not looked up). One A query per name to this host's DNS resolvers, never to the targets. On Windows through the
@@ -104,6 +114,15 @@
     .psd1 of parameter values (data only, parsed with Import-PowerShellDataFile). Command line wins.
 .PARAMETER BaselineCsv
     Previous results CSV to diff against ('auto' = newest WebInventory_*.csv in -OutputDir).
+.PARAMETER ExplainFingerprint
+    Write WebInventory_<RunId>_explain.log: for each service, every rule that matched (FP-MATCH, with the rule pack, rule
+    id, field and value) and every rule whose literal prefilter passed but whose regex or condition then failed
+    (FP-FAIL), then the detections the row reports (RESULT). Meant for one target or a few; sends nothing extra.
+.PARAMETER AllowModifiedRules
+    Load a companion rule pack (WebInventory.rules.*.json next to the script) even when its SHA-256 differs from the one
+    this release was built with. Without it such a pack is refused and logged. The hash is taken over the pack with its
+    line endings normalised and any byte-order mark removed, so a checkout with CRLF line endings still verifies.
+    Packs given with -RulesFile are the operator's own and are not checked.
 .PARAMETER ImportRules
     Convert a Rapid7 Recog xml directory or a webappanalyzer 'src' directory into a rule pack and exit.
 .PARAMETER Store
@@ -202,7 +221,7 @@
 .EXAMPLE
     .\Invoke-WebInventory.ps1 -ImportRules .\recog\xml                     # builds WebInventory.rules.recog.json
 .NOTES
-    Version 2.6.1. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
+    Version 2.7.0. Windows PowerShell 5.1 + .NET Framework 4.7.2+ (4.8 for TLS 1.3 via Schannel). Also runs on PowerShell 7.
     Exit codes: 0 = clean; 1 = fatal / refused to start; 2 = completed, errors logged (or the store ingest or the
     Tideline delivery failed; or -VerifyStore found a problem); 3 = interrupted or -MaxRuntimeMinutes hit;
     4 = completed, but nothing answered.
@@ -237,6 +256,7 @@ param(
     [ValidateRange(4096, 4194304)][int]$MaxBodyBytes = 262144,
     [ValidateRange(0, 5000)][int]$BannerWaitMs = 300,
     [ValidateRange(0, 10080)][int]$MaxRuntimeMinutes = 0,
+    [ValidateRange(1, 1000)][int]$ThrottleThreshold = 3,
     # ---- Probes
     [switch]$NoFavicon,
     [switch]$NoExtras,
@@ -244,6 +264,7 @@ param(
     [switch]$Options,
     [switch]$IdentifyPaths,
     [switch]$VersionPaths,
+    [switch]$ApiDocPaths,
     [switch]$ProbeSans,
     [ValidateRange(1, 50)][int]$MaxSans = 10,
     [switch]$ReverseDns,
@@ -278,6 +299,8 @@ param(
     # ---- Rules
     [string[]]$RulesFile,
     [switch]$NoCompanionRules,
+    [switch]$AllowModifiedRules,
+    [switch]$ExplainFingerprint,
     [ValidateRange(1, 100)][int]$MinConfidence = 50,
     # ---- Output
     [string]$OutputDir = (Get-Location).ProviderPath,
@@ -338,7 +361,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.1'
+$ScriptVersion = '2.7.0'
 $script:ScriptStart = Get-Date
 $script:ExitCode = 0
 
@@ -2188,6 +2211,7 @@ namespace WebInv
         public string Source = "";
         public string Field = "";
         public string Evidence = "";
+        public string Rules = "";       // v2.7: ids of the rules behind this detection, ';'-joined (at most MaxRuleIds)
         public string Flag = "";
         public string HostName = "";
         public string[] Implies;
@@ -2624,6 +2648,7 @@ namespace WebInv
                             d.Field = kv.Key;
                             string ev = m.Value; if (ev.Length > 120) ev = ev.Substring(0, 120);
                             d.Evidence = kv.Key + "=" + ev;
+                            d.Rules = r.Id ?? "";
                             d.HostName = Expand(o.H, m);
                             d.Implies = o.Im; d.Excludes = o.Xs; d.Requires = o.Rq; d.RequiresCategory = o.Rc;
                             if (o.Vo)
@@ -2639,6 +2664,81 @@ namespace WebInv
                 }
             }
             return Aggregate(raw);
+        }
+
+        public const int MaxRuleIds = 12;
+        static string AddRuleIds(string have, string add)
+        {
+            List<string> ids = new List<string>(string.IsNullOrEmpty(have) ? new string[0] : have.Split(';'));
+            foreach (string id in add.Split(';'))
+                if (id.Length > 0 && ids.Count < MaxRuleIds && !ids.Contains(id)) ids.Add(id);
+            return string.Join(";", ids.ToArray());
+        }
+
+        // v2.7 -ExplainFingerprint: what every rule pack made of one service's observations. FP-MATCH is a rule that matched
+        // (and what it output); FP-FAIL is a rule whose literal prefilter passed (or whose field has too few rules to have
+        // one) but whose regex, base64 decoding or condition then failed: the near misses. Rules the prefilter or a port
+        // list ruled out are only counted.
+        public static List<string> Explain(Observation obs)
+        {
+            List<string> lines = new List<string>();
+            int tried = 0, preOut = 0, portOut = 0;
+            foreach (KeyValuePair<string, List<string>> kv in obs.F)
+            {
+                List<Rule> list;
+                if (!byField.TryGetValue(kv.Key, out list)) continue;
+                AhoCorasick ac = null;
+                fieldAc.TryGetValue(kv.Key, out ac);
+                bool[][] present = ac != null ? new bool[kv.Value.Count][] : null;
+                foreach (Rule r in list)
+                {
+                    if (r.Ports != null && r.Ports.Length > 0 && Array.IndexOf(r.Ports, obs.Port) < 0) { portOut++; continue; }
+                    for (int vi = 0; vi < kv.Value.Count; vi++)
+                    {
+                        string v = kv.Value[vi];
+                        if (v == null) continue;
+                        bool prefiltered = false;
+                        if (ac != null && r.LitIds != null)
+                        {
+                            bool[] h = present[vi];
+                            if (h == null) { h = ac.Scan(v, Math.Min(v.Length, MaxValueChars)); present[vi] = h; }
+                            bool ok = false;
+                            foreach (int[] t in r.LitIds)
+                            {
+                                bool all = true;
+                                foreach (int id in t) if (!h[id]) { all = false; break; }
+                                if (all) { ok = true; break; }
+                            }
+                            if (!ok) { preOut++; continue; }
+                            prefiltered = true;
+                        }
+                        tried++;
+                        // a field with too few rules for an automaton has every rule tried: each one is a near miss too
+                        if (ac == null) prefiltered = true;
+                        string vv = v;
+                        if (r.B64) { vv = FromBase64(v); if (vv == null) { if (prefiltered) lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "base64 decoding failed")); continue; } }
+                        Match m = SafeMatch(r.Re, vv);
+                        if (m == null) { lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "regex timed out")); continue; }
+                        if (!m.Success) { if (prefiltered) lines.Add(ExplainLine("FP-FAIL", r, kv.Key, v, "regex did not match")); continue; }
+                        if (!CondsOk(r, obs)) { lines.Add(ExplainLine("FP-FAIL", r, kv.Key, m.Value, "condition not met")); break; }
+                        foreach (OutDef o in r.Out)
+                        {
+                            string kind = string.IsNullOrEmpty(o.T) ? (string.IsNullOrEmpty(o.N) ? "flag" : "service") : o.T;
+                            string what = kind == "flag" ? (o.Flag ?? "") : (Expand(o.N, m) + (string.IsNullOrEmpty(o.V) ? "" : " " + Expand(o.V, m)));
+                            lines.Add(ExplainLine("FP-MATCH", r, kv.Key, m.Value, "-> " + kind + " " + what.Trim() + (o.Vo ? " (version only)" : " conf=" + (o.K > 0 ? Math.Min(100, o.K) : 85))));
+                        }
+                        break;
+                    }
+                }
+            }
+            lines.Add(string.Format(System.Globalization.CultureInfo.InvariantCulture, "SUMMARY rules tried={0} ruled out by prefilter={1} by port={2}", tried, preOut, portOut));
+            return lines;
+        }
+        static string ExplainLine(string tag, Rule r, string field, string value, string what)
+        {
+            string v = value ?? ""; if (v.Length > 100) v = v.Substring(0, 100);
+            v = v.Replace("\r", " ").Replace("\n", " ").Replace("\t", " ");
+            return tag + " " + (string.IsNullOrEmpty(r.Src) ? "?" : r.Src) + " " + r.Id + " " + field + "=" + v + " " + what;
         }
 
         public static List<Detection> Aggregate(List<Detection> raw)
@@ -2762,9 +2862,9 @@ namespace WebInv
                 // and the version-only contribution is then merged into it like any other
                 Detection v = new Detection();
                 v.Kind = e.Kind; v.Name = e.Name; v.Version = e.Version; v.Cpe = e.Cpe; v.Source = e.Source; v.Field = e.Field;
-                v.Evidence = e.Evidence; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
+                v.Evidence = e.Evidence; v.Rules = e.Rules; v.VersionOnly = true; v.VoVersion = e.VoVersion; v.Confidence = 0;
                 e.Kind = d.Kind; e.Name = d.Name; e.Category = d.Category; e.Confidence = d.Confidence; e.Cpe = d.Cpe; e.Flag = d.Flag;
-                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.HostName = d.HostName;
+                e.Source = d.Source; e.Field = d.Field; e.Evidence = d.Evidence; e.Rules = d.Rules; e.HostName = d.HostName;
                 e.Implies = d.Implies; e.Excludes = d.Excludes; e.Requires = d.Requires; e.RequiresCategory = d.RequiresCategory;
                 e.Version = d.Version; e.VoVersion = d.VoVersion; e.FixedVersion = d.FixedVersion; e.VersionOnly = false;
                 d = v;
@@ -2795,6 +2895,7 @@ namespace WebInv
             if (string.IsNullOrEmpty(e.HostName)) e.HostName = d.HostName;
             if (!string.IsNullOrEmpty(d.Source) && e.Source.IndexOf(d.Source, StringComparison.OrdinalIgnoreCase) < 0) e.Source += "+" + d.Source;
             if (!string.IsNullOrEmpty(d.Evidence) && e.Evidence.Length < 400 && e.Evidence.IndexOf(d.Evidence, StringComparison.Ordinal) < 0) e.Evidence += " | " + d.Evidence;
+            if (!string.IsNullOrEmpty(d.Rules)) e.Rules = AddRuleIds(e.Rules, d.Rules);
             e.Implies = Union(e.Implies, d.Implies); e.Excludes = Union(e.Excludes, d.Excludes); e.Requires = Union(e.Requires, d.Requires);
             // the gate only survives a merge if every contributing rule was gated
             if (!d.VersionOnly && e.RequiresCategory != null && d.RequiresCategory == null) e.RequiresCategory = null;
@@ -3662,7 +3763,7 @@ namespace WebInv
 
     public static class Util
     {
-        public const string EngineVersion = "2.6.1";
+        public const string EngineVersion = "2.7.0";
 
         // strict dotted-quad IPv4 -> 0..2^32-1, or -1
         public static long Ip4(string s)
@@ -3760,6 +3861,8 @@ catch { Stop-Fatal "Engine compile failed: $($_.Exception.Message)" }
 #endregion
 
 #region ---------- Embedded rule pack ----------
+# v2.7: SHA-256 (canonical: no BOM, LF line endings) of each companion rule pack this release was built with (build.py)
+$script:CompanionPackSha256 = @{ 'WebInventory.rules.recog.json' = '07c74773ef1845592311c0cbef7fce307bd0f4e8d71b296dbe51bf71214d857a'; 'WebInventory.rules.wappalyzer.json' = 'ff66bc3f820542105831ae13c7652ab8a253bf10b0f7ffecddb7cd0863f78142' }
 $BuiltinRulesJson = @'
 {"name":"builtin","version":"2.6.0","source":"WebInventory curated rules (Recog/Wappalyzer/Nmap-inspired; patterns written for this tool)","license":"Same as script","rules":[
 {"id":"b:iis","f":"header:server","r":"^Microsoft-IIS/([\\d.]+)","out":[{"n":"Microsoft IIS","c":"Web server","v":"{1}","p":"cpe:2.3:a:microsoft:internet_information_services:{v}","k":95},{"t":"os","n":"Microsoft Windows","c":"OS","k":80}],"ex":"Microsoft-IIS/10.0","exv":"10.0"},
@@ -5155,6 +5258,29 @@ $IdentifyPathList = @(
     '/owa/auth/logon.aspx', '/certsrv/', '/adfs/ls/idpinitiatedsignon.aspx', '/RDWeb/', '/remote/login', '/global-protect/login.esp',
     '/+CSCOE+/logon.html', '/dana-na/auth/url_default/welcome.cgi', '/vpn/index.html', '/version', '/api/health', '/api/v1/status/buildinfo',
     '/rest/applinks/1.0/manifest', '/.well-known/openid-configuration', '/manager/html', '/v2/')
+# v2.7 -ApiDocPaths: API documents and consoles, and Docker files, GET only. A path counts only when its 200 body holds the
+# document's own keywords (Match); NotHtml refuses an HTML page there (a site's catch-all page is not a YAML file).
+# GraphQL introspection is a POST and is not sent.
+$ApiDocPathList = @(
+    @{ Path = '/openapi.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/swagger.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/v3/api-docs'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/v2/api-docs'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/swagger/v1/swagger.json'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '"(openapi|swagger)"\s*:\s*"[23]' }
+    @{ Path = '/openapi.yaml'; Kind = 'openapi'; Flag = 'ApiDocsExposed'; NotHtml = $true; Match = '(?m)^(openapi|swagger)\s*:\s*["'']?[23]' }
+    @{ Path = '/swagger-ui/index.html'; Kind = 'swagger-ui'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'SwaggerUIBundle|swagger-ui-bundle\.js' }
+    @{ Path = '/swagger-ui.html'; Kind = 'swagger-ui'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'SwaggerUIBundle|swagger-ui-bundle\.js|springfox' }
+    @{ Path = '/redoc'; Kind = 'redoc'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = '<redoc\b|redoc\.standalone\.js' }
+    @{ Path = '/graphiql'; Kind = 'graphiql'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'graphiql(\.min)?\.(js|css)|GraphiQL\.create' }
+    @{ Path = '/playground'; Kind = 'graphql-playground'; Flag = 'ApiDocsExposed'; NotHtml = $false; Match = 'GraphQLPlayground|graphql-playground' }
+    @{ Path = '/docker-compose.yml'; Kind = 'docker-compose'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?m)^services\s*:\s*$[\s\S]*^\s+(image|build)\s*:' }
+    @{ Path = '/docker-compose.yaml'; Kind = 'docker-compose'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?m)^services\s*:\s*$[\s\S]*^\s+(image|build)\s*:' }
+    @{ Path = '/Dockerfile'; Kind = 'dockerfile'; Flag = 'DockerFileExposed'; NotHtml = $true; Match = '(?im)^FROM\s+[a-z0-9][\w./:@-]*(\s+AS\s+\w+)?\s*$' }
+)
+# v2.7 Appliance column: detections in these categories (and every hardware detection) name the device itself
+$ApplianceCategories = @('Firewall', 'Network device', 'Network devices', 'Load balancer', 'Load balancers', 'Storage', 'NAS', 'Router',
+    'Broadband Router', 'Switch', 'VPN', 'Security Appliance', 'Network Appliance', 'Network Management Device', 'SD-WAN Appliance',
+    'Out-of-band mgmt', 'Lights Out Management', 'Power', 'Power Device', 'Building automation', 'Printer', 'IP Camera', 'Appliance')
 #endregion
 
 #region ---------- Target / port / exclusion parsing (nmap-compatible syntax) ----------
@@ -5339,7 +5465,29 @@ $WorkerScript = {
         }
         if ($r.TlsError) { Add-Log ('TLS handshake failed ({0}): {1}' -f $Path, $r.TlsError) }
         if ($r.Error) { Add-Log ('I/O ({0} {1}): {2}' -f $Method, $Path, $r.Error) }
-        @{ Raw = $r; Resp = (ConvertFrom-Raw $r.Raw); Tls = $Tls; Ip = $Ip; Port = $Port; Sni = $Sni; HostHdr = $HostHdr }
+        $resp = ConvertFrom-Raw $r.Raw
+        # v2.7 throttle accounting: what a rate limiter or an overloaded host looks like from here (run.json "throttle")
+        if ($r.State -eq 'open' -and $r.TimedOut -and $r.BytesIn -eq 0) { $stats.Timeouts++ }
+        elseif ($r.Error -and $r.Error -match '(?i)reset|forcibly closed|aborted|broken pipe') { $stats.Resets++ }
+        if ($resp.IsHttp -and $resp.Code -eq 429) { $stats.Http429++ }
+        @{ Raw = $r; Resp = $resp; Tls = $Tls; Ip = $Ip; Port = $Port; Sni = $Sni; HostHdr = $HostHdr }
+    }
+    # v2.7: a WAF's own block page in place of the application (WafBlocked:<vendor>), read from a response already
+    # received. Unmistakable pages count at any status (BIG-IP ASM answers 200); the others only at 403, 406, 429 or 503.
+    function Get-WafVendor($Resp) {
+        if (-not $Resp -or -not $Resp.IsHttp) { return $null }
+        $code = [int]$Resp.Code; $t = [string]$Resp.Text; if ($t.Length -gt 65536) { $t = $t.Substring(0, 65536) }
+        $srv = [string]$Resp.Headers['server']
+        if ($t -match 'The requested URL was rejected\. Please consult with your administrator\.' -and $t -match '(?i)support ID is') { return 'F5' }
+        if ($t -match 'Incapsula incident ID|_Incapsula_Resource') { return 'Imperva' }
+        if (@(403, 406, 429, 503) -notcontains $code) { return $null }
+        if (($srv -match '(?i)^cloudflare' -or $Resp.Headers['cf-ray']) -and ($t -match 'Attention Required! \| Cloudflare|cf-error-details|Sorry, you have been blocked' -or [string]$Resp.Headers['cf-mitigated'] -eq 'challenge')) { return 'Cloudflare' }
+        if ($srv -match '(?i)AkamaiGHost' -and $t -match 'Access Denied' -and $t -match 'Reference&#32;&#35;|Reference #') { return 'Akamai' }
+        if ($t -match 'Request blocked\.' -and ($t -match 'Generated by cloudfront' -or $Resp.Headers['x-amz-cf-id'])) { return 'AWS' }
+        if ($srv -match '(?i)Sucuri' -or $Resp.Headers['x-sucuri-id'] -or $t -match 'Sucuri WebSite Firewall - Access Denied') { return 'Sucuri' }
+        if ($Resp.Headers['x-azure-ref'] -and $t -match 'The request is blocked\.') { return 'Azure' }
+        if ($t -match 'This error was generated by Mod_Security|ModSecurity Action') { return 'ModSecurity' }
+        return $null
     }
     function Test-TlsMismatch([string]$Text) {
         if (-not $Text) { return $false }
@@ -5407,6 +5555,7 @@ $WorkerScript = {
         $r.RunId = $Cfg.RunId; $r.ScanTag = $Cfg.Tag; $r.ScannedAt = (Get-Date).ToString('s')
         $r.Host = $J.Host; $r.IP = $J.Ip; $r.Port = $J.Port; $r.State = 'open'; $r.IsWeb = $false; $r.Vhost = $false
         $r._Detections = @()
+        $r._ExtraFlags = New-Object System.Collections.Generic.List[string]
         $r
     }
 
@@ -5562,11 +5711,17 @@ $WorkerScript = {
             if ($d.Category -and -not $cats.Contains($d.Category)) { [void]$cats.Add($d.Category) }
             if ($d.Cpe -and -not $cpes.Contains($d.Cpe)) { [void]$cpes.Add($d.Cpe) }
             if ($Cfg.MgmtCategories -contains $d.Category -and -not $flags.Contains('MgmtInterface')) { [void]$flags.Add('MgmtInterface') }
-            [void]$detOut.Add([ordered]@{ Kind = $d.Kind; Name = $d.Name; Version = $d.Version; Category = $d.Category; Confidence = $d.Confidence; Cpe = $d.Cpe; Source = $d.Source; Evidence = $d.Evidence })
+            [void]$detOut.Add([ordered]@{ Kind = $d.Kind; Name = $d.Name; Version = $d.Version; Category = $d.Category; Confidence = $d.Confidence; Cpe = $d.Cpe; Source = $d.Source; Evidence = $d.Evidence; Rules = $d.Rules })
         }
         $Row.Products = ($svc -join '; '); $Row.Technologies = ($tech -join ';'); $Row.Categories = ($cats -join ';')
         $Row.CPEs = ($cpes -join ';'); $Row.OsHint = ($os -join '; '); $Row.Hardware = ($hw -join '; ')
         $Row._Detections = $detOut.ToArray()
+        # v2.7 appliance identity: a firewall, load balancer or other device the service IS (detections arrive in
+        # confidence order), so an F5 running CentOS is recorded as the F5, with CentOS left in OsHint as what it runs on
+        foreach ($d in $dets) {
+            if ($d.Kind -eq 'flag' -or $d.Confidence -lt $Cfg.MinConfidence -or -not $d.Name) { continue }
+            if ($d.Kind -eq 'hw' -or $Cfg.ApplianceCategories -contains $d.Category) { $Row.Appliance = $d.ToString(); break }
+        }
 
         # ---- hygiene / risk flags (observations, not exploitation) ----
         if ($Row._ExtraFlags) { foreach ($f in $Row._ExtraFlags.ToArray()) { if ($f -and -not $flags.Contains($f)) { [void]$flags.Add($f) } } }
@@ -5616,6 +5771,9 @@ $WorkerScript = {
         }
         $Row.Advisories = ($advOut -join ' || ')
         $Row.Flags = ($flags -join ';')
+        if (($stats.Timeouts + $stats.Resets + $stats.Http429) -ge $Cfg.ThrottleThreshold) {
+            [void]$notes.Add(('throttled: {0} timeouts, {1} resets, {2} HTTP 429 (results for this service may be incomplete)' -f $stats.Timeouts, $stats.Resets, $stats.Http429))
+        }
         if ($notes.Count) { $Row.Notes = (($notes | Select-Object -Unique) -join '; ') }
     }
 
@@ -5753,9 +5911,9 @@ $WorkerScript = {
     $logs = New-Object System.Collections.Generic.List[string]
     $errs = New-Object System.Collections.Generic.List[object]
     $rows = New-Object System.Collections.Generic.List[object]
-    $stats = @{ Requests = 0 }
+    $stats = @{ Requests = 0; Timeouts = 0; Resets = 0; Http429 = 0 }
     $notes = New-Object System.Collections.Generic.List[string]
-    $result = @{ State = 'error'; Target = $TargetId; Rows = $rows; Logs = $logs; Errors = $errs; Requests = 0; Ms = 0 }   # helpers read $TargetId via dynamic scope
+    $result = @{ State = 'error'; Target = $TargetId; Rows = $rows; Logs = $logs; Errors = $errs; Requests = 0; Ms = 0; Throttle = $null; Explain = $null }   # helpers read $TargetId via dynamic scope
     $swJob = [Diagnostics.Stopwatch]::StartNew()
     try {
         if ($J.Scheme -eq 'snmp') { Invoke-SnmpCheck; Set-ReverseDns $rows; return $result }
@@ -5846,6 +6004,10 @@ $WorkerScript = {
             Set-HttpFields $row $web
             Add-WebObs $obs $web
             $fin = $web.Final
+            $wv = Get-WafVendor $fin.Resp
+            if ($wv) { [void]$row._ExtraFlags.Add('WafBlocked:' + $wv) }
+            # v2.7 Cloudflare 1016: the record is proxied by Cloudflare but its origin name no longer resolves (takeover risk)
+            if ($fin.Resp.Code -eq 530 -and [string]$fin.Resp.Text -match 'error code: 1016') { [void]$row._ExtraFlags.Add('OriginDnsError') }
             $origin = New-Object System.Uri $web.FinalUrl
             $oTls = ($origin.Scheme -eq 'https')
             $oIp = $fin.Ip; $oPort = $origin.Port; $oSni = $fin.Sni; $oHost = $fin.HostHdr
@@ -5911,6 +6073,24 @@ $WorkerScript = {
                 }
                 $row.IdentifiedPaths = ($hits -join ';')
             }
+
+            # ---- 8a. optional API documents and Docker files (v2.7, fixed list, GET only): a hit is a 200 whose body has
+            #          the document's own keywords, so a site that answers 200 for every path gives none ----
+            if ($Cfg.ApiDocPaths) {
+                $hits = New-Object System.Collections.Generic.List[string]
+                foreach ($e in $Cfg.ApiDocPathList) {
+                    if ($Cfg.IdentifyPaths -and $Cfg.PathList -contains $e.Path) { continue }   # already requested
+                    $pr = Invoke-Fetch $oTls 'GET' $e.Path $oHost $oIp $oPort $oSni 0
+                    if (-not $pr.Resp.IsHttp -or $pr.Resp.Code -ne 200) { continue }
+                    $t = [string]$pr.Resp.Text; if ($t.Length -gt 65536) { $t = $t.Substring(0, 65536) }
+                    $ct = [string]$pr.Resp.Headers['content-type']
+                    if ($e.NotHtml -and ($ct -match '(?i)text/html' -or $t -match '(?i)^\s*<(!doctype|html)')) { continue }
+                    if ($t -notmatch $e.Match) { continue }
+                    [void]$hits.Add(('{0}={1}' -f $e.Path, $e.Kind))
+                    if (-not $row._ExtraFlags.Contains($e.Flag)) { [void]$row._ExtraFlags.Add($e.Flag) }
+                }
+                $row.ApiDocPaths = ($hits -join ';')
+            }
         }
         elseif ($banner) { Add-BannerObs $obs $row $banner $bannerRaw }
         elseif ($isTls) { $row.Service = 'tls'; $row.Scheme = 'tls' }
@@ -5942,6 +6122,14 @@ $WorkerScript = {
         }
         Complete-Row $row $obs $preDets
         [void]$rows.Add($row)
+        if ($Cfg.Explain) {
+            $ex = New-Object System.Collections.Generic.List[string]
+            [void]$ex.Add(('== {0} {1}' -f $TargetId, $row.Url))
+            foreach ($l in [WebInv.Matcher]::Explain($obs)) { [void]$ex.Add($l) }
+            foreach ($d in $row._Detections) { [void]$ex.Add(('RESULT {0} {1} conf={2} rules={3}' -f $d.Kind, ($d.Name + $(if ($d.Version) { ' ' + $d.Version } else { '' })), $d.Confidence, $d.Rules)) }
+            [void]$ex.Add(('RESULT flags={0}' -f $row.Flags))
+            $result.Explain = $ex.ToArray()
+        }
 
         # ---- 9. optional SAN virtual-host probing (same IP only => stays inside scope) ----
         if ($Cfg.ProbeSans -and $row.IsWeb -and $cert) {
@@ -5995,6 +6183,7 @@ $WorkerScript = {
     finally {
         $result.Requests = $stats.Requests
         $result.Ms = $swJob.ElapsedMilliseconds
+        if (($stats.Timeouts + $stats.Resets + $stats.Http429) -gt 0) { $result.Throttle = @($stats.Timeouts, $stats.Resets, $stats.Http429) }
     }
     $result
     }
@@ -6051,7 +6240,7 @@ namespace WebInv
 
     public static class Extras
     {
-        public const string Version = "2.6.1";
+        public const string Version = "2.7.0";
         // set to WebInv.Net.Connect, so these probes share the scanner's connect semantics and its CONNECT proxy
         public static TcpConnector Connect;
         // set to WebInv.Tls.CertOverStream: the scan engine's raw ClientHello, for RDP servers Schannel cannot handshake with
@@ -8478,7 +8667,9 @@ $Columns = @(
     # v2.4 (appended)
     'VersionPaths',
     # v2.5 (appended)
-    'Cname', 'Cloud', 'CloudRegion', 'CloudService')
+    'Cname', 'Cloud', 'CloudRegion', 'CloudService',
+    # v2.7 (appended)
+    'ApiDocPaths', 'Appliance')
 
 # a results CSV with at least one data row (exit code 4 of a resumed run counts earlier sessions' rows)
 function Test-CsvHasRows([string]$Path) {
@@ -9416,7 +9607,7 @@ namespace WebInv
 
     public static class StoreUtil
     {
-        public const string Version = "2.6.1";
+        public const string Version = "2.7.0";
         public static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
         public static string Hex(byte[] h)
         {
@@ -9721,9 +9912,11 @@ namespace WebInv
             // v2.4: appended
             "VersionPaths",
             // v2.5: appended
-            "Cname", "Cloud", "CloudRegion", "CloudService" };
+            "Cname", "Cloud", "CloudRegion", "CloudService",
+            // v2.7: appended (Appliance is derived from Products and Categories, so it is Observed, not material)
+            "ApiDocPaths" };
         // recorded with each sighting, never a reason for a new version (response time, dynamic page hashes, scan clock)
-        public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag" };
+        public static readonly string[] Observed = { "ScannedAt", "VhostOf", "BodyLength", "BodySha256", "ResponseMs", "CertDaysLeft", "Notes", "ScanTag", "Appliance" };
         // profile flag -> fields that only that probe collects; a run without the probe keeps the previous values
         public static readonly string[][] Gated = {
             new[] { "tlsScan", "TlsSupported", "TlsCiphersByVersion", "TlsWeakCipher", "Alpn", "Http2" },
@@ -9736,7 +9929,8 @@ namespace WebInv
             new[] { "tlsFingerprint", "Jarm" },
             new[] { "ja4s", "Ja4s" },
             new[] { "cname", "Cname" },
-            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" } };
+            new[] { "cloud", "Cloud", "CloudRegion", "CloudService" },
+            new[] { "apiDocPaths", "ApiDocPaths" } };
         static readonly HashSet<string> MaterialSet = new HashSet<string>(Material, StringComparer.Ordinal);
         public static bool IsMaterial(string f) { return MaterialSet.Contains(f); }
 
@@ -9812,6 +10006,7 @@ namespace WebInv
         public bool TlsFingerprint, Ja4s, Smb, Rdp, Snmp;   // v2.3 opt-in probes (appended to Profile only when on)
         public bool VersionPaths;                            // v2.4 opt-in (appended to Profile only when on)
         public bool Cname, Cloud;                            // v2.5: -Cname; cloud ranges loaded (appended only when on)
+        public bool ApiDocPaths;                             // v2.7: -ApiDocPaths (appended only when on)
         public long Checks;
         public bool Collected(string flag)
         {
@@ -9829,10 +10024,11 @@ namespace WebInv
                 case "versionPaths": return VersionPaths;
                 case "cname": return Cname;
                 case "cloud": return Cloud;
+                case "apiDocPaths": return ApiDocPaths;
             }
             return true;
         }
-        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud); } }
+        public bool NeedsCarryOver { get { return !(TlsScan && Favicon && Extras && Options && IdentifyPaths && ReverseDns && TlsFingerprint && Ja4s && VersionPaths && Cname && Cloud && ApiDocPaths); } }
         // flag as written in a Profile string ("tls=1 favicon=1 ..."); missing = off (flags added later are appended only when on)
         public static bool ProfileHas(string profile, string flag)
         {
@@ -9848,7 +10044,7 @@ namespace WebInv
                 return string.Format(CultureInfo.InvariantCulture, "tls={0} favicon={1} extras={2} options={3} identifyPaths={4} probeSans={5} reverseDns={6}",
                     TlsScan ? 1 : 0, Favicon ? 1 : 0, Extras ? 1 : 0, Options ? 1 : 0, IdentifyPaths ? 1 : 0, ProbeSans ? 1 : 0, ReverseDns ? 1 : 0)
                     + (TlsFingerprint ? " tlsFingerprint=1" : "") + (Ja4s ? " ja4s=1" : "") + (Smb ? " smb=1" : "") + (Rdp ? " rdp=1" : "") + (Snmp ? " snmp=1" : "") + (VersionPaths ? " versionPaths=1" : "")
-                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "");
+                    + (Cname ? " cname=1" : "") + (Cloud ? " cloud=1" : "") + (ApiDocPaths ? " apiDocPaths=1" : "");
             }
         }
         public DateTimeOffset Started { get { return StoreUtil.ParseIso(StartedAt); } }
@@ -9876,6 +10072,7 @@ namespace WebInv
                 r.TlsFingerprint = Flag(p, "tlsFingerprint", false); r.Ja4s = Flag(p, "ja4s", false); r.Smb = Flag(p, "smb", false); r.Rdp = Flag(p, "rdp", false); r.Snmp = Flag(p, "snmp", false);
                 r.VersionPaths = Flag(p, "versionPaths", false);
                 r.Cname = Flag(p, "cname", false); r.Cloud = Flag(p, "cloud", false);
+                r.ApiDocPaths = Flag(p, "apiDocPaths", false);
             }
             if (r.RunId.Length == 0) throw new InvalidDataException("run.json has no runId");
             DateTimeOffset t;
@@ -9894,6 +10091,7 @@ namespace WebInv
             if (VersionPaths) p.Bool("versionPaths", true);
             if (Cname) p.Bool("cname", true);
             if (Cloud) p.Bool("cloud", true);
+            if (ApiDocPaths) p.Bool("apiDocPaths", true);
             return new JsonObj().Num("format", 1).Str("runId", RunId).Str("startedAt", StartedAt).Str("finishedAt", FinishedAt).Bool("complete", Complete)
                 .Bool("synthesized", Synthesized).Str("scanner", Scanner).Str("tag", Tag).Str("operator", Operator).Str("computer", Computer)
                 .Num("checks", Checks).Raw("profile", p.ToString()).ToString();
@@ -9925,6 +10123,7 @@ namespace WebInv
                 if (StoreUtil.Str(o, "VersionPaths").Length > 0) r.VersionPaths = true;
                 if (StoreUtil.Str(o, "Cname").Length > 0) r.Cname = true;
                 if (StoreUtil.Str(o, "Cloud").Length > 0) r.Cloud = true;
+                if (StoreUtil.Str(o, "ApiDocPaths").Length > 0) r.ApiDocPaths = true;
                 if (StoreUtil.Str(o, "Vhost") == "True") r.ProbeSans = true;
                 if (StoreUtil.Str(o, "ReverseDns").Length > 0) r.ReverseDns = true;
                 if (StoreUtil.Str(o, "Jarm").Length > 0) r.TlsFingerprint = true;
@@ -13177,6 +13376,7 @@ function Write-RunInfo {
     $sessions.Add([ordered]@{
             started = (Format-Iso $script:ScriptStart); finished = (Format-Iso (Get-Date)); resumed = [bool]$Resume
             interrupted = $Interrupted; timeLimit = $TimeLimit; rows = $Rows; runLog = $RunLogPath; errorLog = $ErrLogPath
+            throttle = (Get-ThrottleSummary)
         })
     $checks = 0
     if ($script:ProgressPath -and (Test-Path -LiteralPath $script:ProgressPath)) { foreach ($l in [IO.File]::ReadLines($script:ProgressPath)) { if ($l.Trim()) { $checks++ } } }
@@ -13188,7 +13388,7 @@ function Write-RunInfo {
             tlsScan = (-not $NoTlsScan); favicon = (-not $NoFavicon); extras = (-not $NoExtras); options = [bool]$Options
             identifyPaths = [bool]$IdentifyPaths; versionPaths = [bool]$VersionPaths; probeSans = [bool]$ProbeSans; reverseDns = [bool]$ReverseDns
             tlsFingerprint = [bool]$TlsFingerprint; ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); smb = [bool]$Smb; rdp = [bool]$Rdp; snmp = [bool]$Snmp; screenshot = [bool]$Screenshot
-            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled
+            cname = [bool]$Cname; cloud = [bool]$script:CloudEnabled; apiDocPaths = [bool]$ApiDocPaths
         }
         settings = [ordered]@{ pace = $Pace; threads = $Threads; maxPerHost = $MaxPerHost; timeoutMs = $TimeoutMs; retries = $Retries; ports = $Port; allAddresses = [bool]$AllAddresses
             proxy = $(if ($Proxy) { $proxyLabel } else { '' }); snmp = $(if ($Snmp) { $snmpMode } else { '' })
@@ -13771,12 +13971,34 @@ function Import-RulePack {
     if ($Fatal -and $n -eq 0) { Stop-Fatal "Rule pack '$Label' loaded zero rules" }
 }
 
+# v2.7 companion pack integrity: SHA-256 over the pack's bytes with a UTF-8 byte-order mark removed and CRLF/CR line
+# endings turned into LF, so the hash does not depend on how git checked the file out. A file whose content differs only
+# in where a CR sits (the trick behind nuclei's CVE-2024-43405 signature bypass) still hashes differently from the
+# release unless the difference is a line ending.
+function Get-CanonicalSha256([byte[]]$Bytes) {
+    $t = [Text.Encoding]::UTF8.GetString($Bytes)
+    if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $t = $t.Substring(1) }
+    $t = $t.Replace("`r`n", "`n").Replace("`r", "`n")
+    [WebInv.Hash]::Sha256Hex([Text.Encoding]::UTF8.GetBytes($t))
+}
+
 function Initialize-Rules {
     [WebInv.Matcher]::Clear()
     Import-RulePack -Json $BuiltinRulesJson -Label 'builtin' -Path '' -Fatal $true
     if (-not $NoCompanionRules -and $PSScriptRoot) {
         foreach ($f in @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'WebInventory.rules.*.json' -File -ErrorAction SilentlyContinue)) {
-            Import-RulePack -Json ([IO.File]::ReadAllText($f.FullName)) -Label $f.Name -Path $f.FullName -Fatal $false
+            $bytes = [IO.File]::ReadAllBytes($f.FullName)
+            $want = $script:CompanionPackSha256[$f.Name]
+            if ($want) {
+                $have = Get-CanonicalSha256 $bytes
+                if ($have -ne $want) {
+                    $m = "companion rule pack {0} differs from the one this release was built with (sha256 {1}, expected {2})" -f $f.Name, $have, $want
+                    if (-not $AllowModifiedRules) { Write-ErrLog 'RULES' $f.Name ($m + '; not loaded (-AllowModifiedRules loads it)'); $script:PackInfo.Add("rules '$($f.Name)' REFUSED: modified"); continue }
+                    Write-RunLog ($m + '; loaded because of -AllowModifiedRules') 'WARN'
+                }
+            }
+            else { Write-RunLog ("companion rule pack {0} is not one this release ships; loaded as the operator's own" -f $f.Name) }
+            Import-RulePack -Json ([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF)) -Label $f.Name -Path $f.FullName -Fatal $false
         }
     }
     foreach ($rf in @($RulesFile | Where-Object { $_ })) {
@@ -14213,6 +14435,22 @@ function Invoke-SelfTest {
     Assert 'requiresCategory gate drops ungated hit' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 0 }
     $o6.Add('selftest.shop', 'cart')
     Assert 'requiresCategory gate passes with category present' { @([WebInv.Matcher]::Evaluate($o6) | Where-Object { $_.Name -eq 'ST Carrier' }).Count -eq 1 }
+    # v2.7: each detection names the rules behind it; -ExplainFingerprint lists matches and near misses
+    $rxPack = [WebInv.Matcher]::ReadPack('{"name":"rxtest","rules":[{"id":"st:rx-a","f":"selftest.rx","r":"Rho/(\\d+)","n":"ST Rho","v":"{1}","k":80},{"id":"st:rx-b","f":"selftest.rx2","r":"rho","n":"ST Rho","k":60},{"id":"st:rx-c","f":"selftest.rx","r":"Rhodium\\s(\\d+)","n":"ST Rho Pro","k":70}]}')
+    [void][WebInv.Matcher]::Load($rxPack, (New-Object 'System.Collections.Generic.List[string]'))
+    $o7 = New-Object WebInv.Observation; $o7.Add('selftest.rx', 'Rho/7 server Rhodium-x'); $o7.Add('selftest.rx2', 'rho inside')
+    $rho = @([WebInv.Matcher]::Evaluate($o7) | Where-Object { $_.Name -eq 'ST Rho' })
+    Assert 'v2.7 detection Rules: both rules behind one merged detection' { $rho.Count -eq 1 -and $rho[0].Rules -eq 'st:rx-a;st:rx-b' -and $rho[0].Version -eq '7' }
+    $xl = @([WebInv.Matcher]::Explain($o7))
+    Assert 'v2.7 Explain: FP-MATCH for the matching rule, with its output' { @($xl | Where-Object { $_ -like 'FP-MATCH * st:rx-a selftest.rx=Rho/7 -> service ST Rho 7 conf=80' }).Count -eq 1 }
+    Assert 'v2.7 Explain: the near miss (prefilter passed, regex failed) is FP-FAIL' { @($xl | Where-Object { $_ -like 'FP-FAIL * st:rx-c selftest.rx=* regex did not match' }).Count -eq 1 }
+    Assert 'v2.7 Explain: a summary line' { $xl[-1] -like 'SUMMARY rules tried=*' }
+    # v2.7: companion pack pins are taken over canonical bytes (no BOM, LF line endings)
+    $U = [Text.Encoding]::UTF8
+    $c1 = Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`n`"b`":2}`n")); $c2 = Get-CanonicalSha256 ([byte[]](@(0xEF, 0xBB, 0xBF) + $U.GetBytes("{`"a`":1,`r`n`"b`":2}`r`n")))
+    Assert 'v2.7 pack hash: CRLF and a BOM give the LF hash' { $c1 -eq $c2 -and $c1 -eq (Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`r`"b`":2}`r"))) }
+    Assert 'v2.7 pack hash: any other change differs' { $c1 -ne (Get-CanonicalSha256 ($U.GetBytes("{`"a`":1,`n`"b`":3}`n"))) }
+    Assert 'v2.7 pack pins: one per companion pack this release ships' { $script:CompanionPackSha256.Count -ge 2 -and @($script:CompanionPackSha256.Values | Where-Object { $_ -match '^[0-9a-f]{64}$' }).Count -eq $script:CompanionPackSha256.Count }
     # version-only outputs: they add a version to a product another rule detected, and nothing else
     $voPack = [WebInv.Matcher]::ReadPack('{"name":"votest","rules":[{"id":"st:vo-det","f":"selftest.det","r":"Acme","n":"ST Acme","c":"Web application","p":"cpe:2.3:a:stacme:acme:*","k":80},{"id":"st:vo-ver","f":"selftest.page","r":"Acme v(\\d+\\.\\d+\\.\\d+)","n":"ST Acme","v":"{1}","p":"cpe:2.3:a:stacme:acme:{v}","vo":true},{"id":"st:vo-det2","f":"selftest.det2","r":"Beta ([\\d.]+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","k":80},{"id":"st:vo-ver2","f":"selftest.page","r":"Beta v(\\d+\\.\\d+\\.\\d+)","n":"ST Beta","v":"{1}","p":"cpe:2.3:a:stbeta:beta:{v}","vo":true},{"id":"st:vo-gate","f":"selftest.det3","r":"Gamma","n":"ST Gamma","c":"Shipping carriers","rc":["Ecommerce"],"p":"cpe:2.3:a:stgamma:gamma:*","k":80},{"id":"st:vo-ver3","f":"selftest.page","r":"Gamma v(\\d+\\.\\d+\\.\\d+)","n":"ST Gamma","v":"{1}","p":"cpe:2.3:a:stgamma:gamma:{v}","vo":true}]}')
     [void][WebInv.Matcher]::Load($voPack, (New-Object 'System.Collections.Generic.List[string]'))
@@ -15667,7 +15905,7 @@ namespace WebInv
         }
     }
 
-    public static class ShipInfo { public static string Version = "2.6.1"; }
+    public static class ShipInfo { public static string Version = "2.7.0"; }
 }
 '@
 
@@ -16259,8 +16497,19 @@ $Cfg = @{
     MinConfidence = $MinConfidence; CertWarnDays = $CertWarnDays; Advisories = $Advisories; MgmtCategories = $MgmtCategories; MismatchStrings = $script:MismatchStrings
     RdnsCache = [hashtable]::Synchronized(@{}); VhostSeen = [hashtable]::Synchronized(@{})
     TlsFingerprint = [bool]$TlsFingerprint; Ja4s = ([bool]$TlsFingerprint -and -not $NoJa4s); Snmp = $snmpCred; Proxy = [bool]$Proxy
+    ApiDocPaths = [bool]$ApiDocPaths; ApiDocPathList = $ApiDocPathList; ApplianceCategories = $ApplianceCategories
+    ThrottleThreshold = $ThrottleThreshold; Explain = [bool]$ExplainFingerprint
 }
-$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
+# v2.7 -ExplainFingerprint: every rule pack's matches and near misses, per service, in WebInventory_<RunId>_explain.log
+$script:ExplainW = $null
+if ($ExplainFingerprint) {
+    $script:ExplainPath = Join-Path $OutputDir ("WebInventory_{0}_explain.log" -f $script:RunId)
+    $script:ExplainW = New-Object IO.StreamWriter($script:ExplainPath, $true, $script:Utf8NoBom)
+    $script:ExplainW.WriteLine(('# WebInventory v{0} -ExplainFingerprint, run {1}. FP-MATCH: a rule matched; FP-FAIL: its prefilter passed but the regex, base64 or condition failed; RESULT: what the row reports (-MinConfidence {2}).' -f $ScriptVersion, $script:RunId, $MinConfidence))
+    foreach ($pi in $script:PackInfo) { $script:ExplainW.WriteLine('# ' + $pi) }
+    if ($Jobs.Count -gt 16) { Write-RunLog ("-ExplainFingerprint with {0} checks writes a long log; it is meant for one or a few targets" -f $Jobs.Count) 'WARN' }
+}
+$ops = 3 + $Retries + 7 + $MaxRedirects + 5 + $(if ($Options) { 1 } else { 0 }) + $(if ($IdentifyPaths) { $IdentifyPathList.Count } else { 0 }) + $(if ($ApiDocPaths) { $ApiDocPathList.Count } else { 0 }) + $(if ($VersionPaths) { 4 } else { 0 }) + $(if ($ProbeSans) { $MaxSans * (2 + $MaxRedirects) } else { 0 }) + $(if ($TlsFingerprint) { 10 } else { 0 })
 $budgetMs = [long]$ops * ($TimeoutMs * 3 + $DelayMs + $JitterMs + $BannerWaitMs) + 30000
 $banner = "WebInventory v{0}: {1} checks across {2} hosts ({3} excluded{4}). Pace={5} threads={6} per-host={7} timeout={8}ms. Authorised scope only." -f $ScriptVersion, $Jobs.Count, $hostSet.Count, $excludedCount, $(if ($ScopeSet.IsEmpty) { ', no -Scope set' } else { ', scope enforced' }), $Pace, $Threads, $MaxPerHost, $TimeoutMs
 Write-RunLog $banner; Write-RunLog ("Outputs: {0} ; {1} ; {2}; watchdog budget {3} ms per check" -f $script:CsvPath, $script:JsonlPath, $script:ProgressPath, $budgetMs)
@@ -16307,10 +16556,26 @@ function Start-Worker {
 
 function Format-JobId([string]$JobLine) { $p = $JobLine.Split("`t"); '{0}({1}):{2}' -f $p[0], $p[1], $p[2] }
 
+# v2.7 throttle accounting: timeouts, connection resets and HTTP 429 per check, summed for run.json (per session) and the
+# run log, so a rate limiter or an overloaded host shows as such instead of as thin results
+$script:Throttle = @{ Timeouts = 0; Resets = 0; Http429 = 0; Targets = (New-Object System.Collections.Generic.List[object]) }
+function Get-ThrottleSummary {
+    $top = @($script:Throttle.Targets | Sort-Object { - ($_[1] + $_[2] + $_[3]) } | Select-Object -First 50 | ForEach-Object {
+            [ordered]@{ target = $_[0]; timeouts = $_[1]; resets = $_[2]; http429 = $_[3] } })
+    [ordered]@{ timeouts = $script:Throttle.Timeouts; resets = $script:Throttle.Resets; http429 = $script:Throttle.Http429
+        threshold = $ThrottleThreshold; throttledChecks = @($script:Throttle.Targets | Where-Object { ($_[1] + $_[2] + $_[3]) -ge $ThrottleThreshold }).Count
+        targets = $top }
+}
+
 function Complete-Result {
     param([string]$JobLine, $Res)
     if ($counts.ContainsKey($Res.State)) { $counts[$Res.State]++ } else { $counts.error++ }
     $counts.requests += $Res.Requests
+    if ($Res.Throttle) {   # set by the worker only when the check met a timeout, reset or 429
+        $script:Throttle.Timeouts += $Res.Throttle[0]; $script:Throttle.Resets += $Res.Throttle[1]; $script:Throttle.Http429 += $Res.Throttle[2]
+        $script:Throttle.Targets.Add(@($Res.Target, $Res.Throttle[0], $Res.Throttle[1], $Res.Throttle[2]))
+    }
+    if ($Res.Explain -and $script:ExplainW) { foreach ($l in $Res.Explain) { $script:ExplainW.WriteLine($l) }; $script:ExplainW.Flush() }
     foreach ($l in $Res.Logs) { Write-RunLog $l 'DEBUG' }
     foreach ($e in $Res.Errors) { Write-ErrLog $e[0] $e[1] $e[2] }
     foreach ($row in $Res.Rows) {
@@ -16455,6 +16720,13 @@ finally {
     $errSummary = if ($script:ErrTotal) { ($script:ErrCounts.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0}={1}' -f $_.Name, $_.Value }) -join ' ' } else { 'none' }
     $summary = "{0} in {1:hh\:mm\:ss}: {2}/{3} checks; web={4} open={5} closed={6} filtered={7} worker-errors={8}; rows={9}; requests={10}; rule-regex-timeouts={11}; logged errors: {12}" -f $(if ($interrupted) { 'INTERRUPTED' } elseif ($script:TimeLimitHit) { 'TIME LIMIT' } else { 'Done' }), $elapsed, $doneCount, $total, $counts.web, $counts.open, $counts.closed, $counts.filtered, $counts.error, $counts.rows, $counts.requests, [WebInv.Matcher]::Timeouts, $errSummary
     Write-RunLog $summary
+    if (($script:Throttle.Timeouts + $script:Throttle.Resets + $script:Throttle.Http429) -gt 0) {
+        $ts = Get-ThrottleSummary
+        $tmsg = "Throttling: {0} timeouts, {1} connection resets, {2} HTTP 429 across {3} checks; {4} at or over -ThrottleThreshold {5} (run.json sessions[].throttle; Notes of those rows)" -f $ts.timeouts, $ts.resets, $ts.http429, $script:Throttle.Targets.Count, $ts.throttledChecks, $ThrottleThreshold
+        Write-RunLog $tmsg $(if ($ts.throttledChecks) { 'WARN' } else { 'INFO' })
+        if ($ts.throttledChecks) { Write-Host $tmsg -ForegroundColor Yellow }
+    }
+    if ($script:ExplainW) { $script:ExplainW.Dispose(); $script:ExplainW = $null; $outputs.Add($script:ExplainPath) }
     if ($Proxy) {
         $pmsg = "Proxy {0}: {1} CONNECT requests refused or failed{2}" -f $proxyLabel, [WebInv.Net]::ProxyRefusals, $(if ([WebInv.Net]::ProxyRefusals) { '; last: ' + [WebInv.Net]::ProxyLastRefusal } else { '' })
         Write-RunLog $pmsg $(if ([WebInv.Net]::ProxyRefusals) { 'WARN' } else { 'INFO' })

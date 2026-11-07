@@ -23,13 +23,13 @@ if len(mine) != 1:
     print("received: %d runs for %s at the mock" % (len(mine), info["runId"])); sys.exit(1)
 r = mine[0]; m = r["manifest"]; rd = pathlib.Path(a.data, "runs", r["run_id"])
 problems = []
-# the envelope against Tideline's own schema (benheise/Tideline schemas/, tag schemas-v1.1.0, minor 1, copied next
-# to this file): 2.6.0 also wrote a tool_run field, which tideline-envelope/1 refuses
+# the envelope against Tideline's own schema (vendored in schemas/, see schemas/VENDORED.txt): 2.6.0 also wrote a
+# tool_run field, which tideline-envelope/1 refuses
 try:
     import jsonschema
-    _env = json.loads(pathlib.Path(__file__).with_name("tideline-envelope.1.json").read_text(encoding="utf-8"))
+    _env = json.loads((pathlib.Path(__file__).resolve().parents[2] / "schemas" / "tideline-envelope.1.json").read_text(encoding="utf-8"))
     for _e in jsonschema.Draft202012Validator(_env).iter_errors(m):
-        problems.append("envelope fails tideline-envelope/1 (schemas-v1.1.0): %s" % _e.message)
+        problems.append("envelope fails tideline-envelope/1: %s" % _e.message)
 except ImportError:
     problems.append("jsonschema is not installed: cannot check the envelope against tideline-envelope/1")
 if r["state"] != a.state: problems.append("state %s, expected %s" % (r["state"], a.state))

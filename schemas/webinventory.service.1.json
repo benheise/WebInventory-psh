@@ -1,0 +1,709 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:tideline:schema:webinventory.service/1",
+  "title": "WebInventory service row",
+  "description": "One line of WebInventory_<RunId>.jsonl: one service (host, address and port), with the same fields as the CSV in the same order, plus Detections. Values keep their JSON types: the fields typed below hold an integer or boolean, or an empty string when nothing was observed; every other field is a string, where an empty string or null means not observed. Unlike the CSV, values carry no formula guard. Frozen from the WebInventory 2.5.0 field set. A field added in a later release is a minor version: consumers accept and keep unknown fields of any type. Minor 1 (WebInventory 2.7) adds ApiDocPaths, Appliance and each detection's Rules; fields a minor adds are optional, so rows of earlier releases still validate.",
+  "x-tideline-schema": "webinventory.service/1",
+  "x-minor": 1,
+  "x-producer": "WebInventory 2.5.0 and later",
+  "type": "object",
+  "properties": {
+    "RunId": {
+      "type": "string",
+      "pattern": "^\\d{8}_\\d{6}$",
+      "description": "WebInventory's run identifier, the run's local start time (yyyyMMdd_HHmmss). It is not the envelope's run_id, which is a UUID v4."
+    },
+    "ScanTag": {
+      "type": "string",
+      "description": "The run's -Tag; empty when none was given."
+    },
+    "ScannedAt": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(Z|[+-]\\d\\d:\\d\\d)?$",
+      "description": "When the service was checked. WebInventory 2.5.0 writes the scanner host's local time with no offset; ingest applies the offset of run.json's startedAt."
+    },
+    "Host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "IP": {
+      "type": "string"
+    },
+    "Port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535
+    },
+    "ReverseDns": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Vhost": {
+      "type": "boolean",
+      "description": "True when the row is a virtual host found on another row's address (see VhostOf)."
+    },
+    "VhostOf": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "State": {
+      "type": "string",
+      "minLength": 1
+    },
+    "IsWeb": {
+      "type": "boolean",
+      "description": "True when the service answered HTTP or HTTPS."
+    },
+    "Service": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Scheme": {
+      "type": "string"
+    },
+    "Url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "FinalUrl": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "StatusCode": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "HTTP status of the final response; empty for a service that is not web or gave no HTTP response."
+    },
+    "Title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Server": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "PoweredBy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Generator": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ContentType": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "BodyLength": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "Bytes in the final response body; empty when there was none."
+    },
+    "BodySha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ResponseMs": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "Milliseconds to the first response; empty when there was none."
+    },
+    "RedirectChain": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Auth": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Cookies": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CookieFlagIssues": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "MissingSecHeaders": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "HstsMaxAge": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "AltSvc": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Products": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Technologies": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Categories": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CPEs": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "OsHint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Hardware": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "FaviconPath": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "FaviconMmh3": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "Shodan-style favicon hash: signed 32-bit MurmurHash3 of the base64 icon; empty when no favicon was fetched."
+    },
+    "FaviconMd5": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Robots": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "SecurityTxt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "AllowedMethods": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "RiskyMethods": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "IdentifiedPaths": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsCipher": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsKeyExchange": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsSupported": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsCiphersByVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "TlsWeakCipher": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Alpn": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Http2": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "True when ALPN negotiated h2; empty when the TLS probe did not run."
+    },
+    "CertSubject": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertIssuer": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertSANs": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertNotBefore": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertNotAfter": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertDaysLeft": {
+      "oneOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "Whole days until the certificate expires, negative once expired; empty without a certificate."
+    },
+    "CertSelfSigned": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "True when the certificate's subject equals its issuer; empty without a certificate."
+    },
+    "CertSigAlg": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertKeyAlg": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertKeySize": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "const": ""
+        }
+      ],
+      "description": "Public key size in bits; empty without a certificate."
+    },
+    "CertSerial": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertSha1": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertSha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertPolicyErrors": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertChainStatus": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CertSource": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Flags": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Advisories": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Banner": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "DeviceName": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Domain": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ProtocolInfo": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Jarm": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Ja4s": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "VersionPaths": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Cname": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "Cloud": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CloudRegion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "CloudService": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ApiDocPaths": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-since-minor": 1,
+      "description": "-ApiDocPaths (WebInventory 2.7): each API document, console or Docker file found, as path=kind, ';'-separated. Minor 1; optional"
+    },
+    "Appliance": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-since-minor": 1,
+      "description": "WebInventory 2.7: the device the service is (a firewall, load balancer, out-of-band controller, hardware...), ahead of the OS in OsHint. Minor 1; optional"
+    },
+    "Detections": {
+      "type": "array",
+      "description": "Every detection behind Products, Technologies, CPEs and OsHint, in the order WebInventory made them.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Kind": {
+            "type": "string"
+          },
+          "Name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "Version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "Category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "Confidence": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "Cpe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "Source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "Evidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "Rules": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-since-minor": 1,
+            "description": "WebInventory 2.7: ids of the rules behind the detection, ';'-separated (at most 12). Minor 1; optional"
+          }
+        },
+        "required": [
+          "Kind",
+          "Name",
+          "Version",
+          "Category",
+          "Confidence",
+          "Cpe",
+          "Source",
+          "Evidence"
+        ],
+        "additionalProperties": true
+      }
+    }
+  },
+  "required": [
+    "RunId",
+    "ScanTag",
+    "ScannedAt",
+    "Host",
+    "IP",
+    "Port",
+    "ReverseDns",
+    "Vhost",
+    "VhostOf",
+    "State",
+    "IsWeb",
+    "Service",
+    "Scheme",
+    "Url",
+    "FinalUrl",
+    "StatusCode",
+    "Title",
+    "Server",
+    "PoweredBy",
+    "Generator",
+    "ContentType",
+    "BodyLength",
+    "BodySha256",
+    "ResponseMs",
+    "RedirectChain",
+    "Auth",
+    "Cookies",
+    "CookieFlagIssues",
+    "MissingSecHeaders",
+    "HstsMaxAge",
+    "AltSvc",
+    "Products",
+    "Technologies",
+    "Categories",
+    "CPEs",
+    "OsHint",
+    "Hardware",
+    "FaviconPath",
+    "FaviconMmh3",
+    "FaviconMd5",
+    "Robots",
+    "SecurityTxt",
+    "AllowedMethods",
+    "RiskyMethods",
+    "IdentifiedPaths",
+    "TlsVersion",
+    "TlsCipher",
+    "TlsKeyExchange",
+    "TlsSupported",
+    "TlsCiphersByVersion",
+    "TlsWeakCipher",
+    "Alpn",
+    "Http2",
+    "CertSubject",
+    "CertIssuer",
+    "CertSANs",
+    "CertNotBefore",
+    "CertNotAfter",
+    "CertDaysLeft",
+    "CertSelfSigned",
+    "CertSigAlg",
+    "CertKeyAlg",
+    "CertKeySize",
+    "CertSerial",
+    "CertSha1",
+    "CertSha256",
+    "CertPolicyErrors",
+    "CertChainStatus",
+    "CertSource",
+    "Flags",
+    "Advisories",
+    "Banner",
+    "Notes",
+    "DeviceName",
+    "Domain",
+    "ProtocolInfo",
+    "Jarm",
+    "Ja4s",
+    "VersionPaths",
+    "Cname",
+    "Cloud",
+    "CloudRegion",
+    "CloudService",
+    "Detections"
+  ],
+  "additionalProperties": true
+}

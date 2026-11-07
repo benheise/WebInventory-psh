@@ -48,7 +48,16 @@ script = script.replace("__SHIP_PS__", ship_ps, 1)
 script = script.replace("__BUILTIN_RULES__", rules.rstrip("\n"), 1)
 script = script.replace("__CPE_SUPPLEMENT__", cpesup.rstrip("\n"), 1)
 script = script.replace("__SELFTEST_CERT__", der_b64, 1)
-assert "__SHIP_CS__" not in script and "__SHIP_PS__" not in script and "__EXTRAS_CS__" not in script and "__ENGINE_CS__" not in script and "__STORE_CS__" not in script and "__BUILTIN_RULES__" not in script and "__CPE_SUPPLEMENT__" not in script and "__SELFTEST_CERT__" not in script
+# v2.7: pin the companion rule packs shipped in dist/ (canonical bytes: no BOM, LF line endings)
+def canonical_sha256(b):
+    t = b.decode("utf-8")
+    if t.startswith("\ufeff"):
+        t = t[1:]
+    return hashlib.sha256(t.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")).hexdigest()
+pins = "; ".join("'%s' = '%s'" % (f.name, canonical_sha256(f.read_bytes())) for f in sorted(dist.glob("WebInventory.rules.*.json")))
+assert pins, "no companion rule packs in dist/"
+script = script.replace("__COMPANION_PINS__", pins, 1)
+assert "__COMPANION_PINS__" not in script and "__SHIP_CS__" not in script and "__SHIP_PS__" not in script and "__EXTRAS_CS__" not in script and "__ENGINE_CS__" not in script and "__STORE_CS__" not in script and "__BUILTIN_RULES__" not in script and "__CPE_SUPPLEMENT__" not in script and "__SELFTEST_CERT__" not in script
 # Windows line endings + UTF-8 BOM: Windows PowerShell 5.1 reads BOM-less files as ANSI
 script = script.replace("\r\n", "\n").replace("\n", "\r\n")
 out = dist / "Invoke-WebInventory.ps1"

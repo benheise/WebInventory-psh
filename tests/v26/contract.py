@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validates WebInventory JSONL files (and Tideline manifests) against schemas/*.schema.json.
+"""Validates WebInventory JSONL files (and Tideline manifests) against the Tideline schemas vendored in schemas/.
 
   python3 tests/v26/contract.py FILE_OR_FOLDER...      kind from the file name; a folder: every WebInventory JSONL in it
 Exit 0 when every line of every file is valid. Needs the jsonschema package."""
@@ -7,19 +7,23 @@ import json, pathlib, re, sys
 from jsonschema import Draft202012Validator
 
 root = pathlib.Path(__file__).resolve().parents[2]
-schemas = {p.name[:-len(".schema.json")]: json.loads(p.read_text(encoding="utf-8")) for p in (root / "schemas").glob("*.schema.json")}
+# keyed by the schema id the files carry (webinventory.service/1 ...), as Tideline's own validator does
+schemas = {}
+for p in (root / "schemas").glob("*.json"):
+    d = json.loads(p.read_text(encoding="utf-8"))
+    schemas[d["x-tideline-schema"]] = d
 validators = {k: Draft202012Validator(v) for k, v in schemas.items()}
 for v in schemas.values():
     Draft202012Validator.check_schema(v)
 
 def kind_of(name):
-    if re.match(r"^WebInventory_.+_delta\.jsonl$", name): return "webinventory.delta-1"
-    if re.match(r"^WebInventory_.+_screenshots\.jsonl$", name): return "webinventory.screenshot-1"
-    if re.match(r"^WebInventory_.+_vulns\.jsonl$", name) or re.match(r"^WebInventory_store_vulnerabilities_.+\.jsonl$", name): return "webinventory.vuln-1"
-    if re.match(r"^WebInventory_.+_errors\.jsonl$", name): return "webinventory.error-1"
+    if re.match(r"^WebInventory_.+_delta\.jsonl$", name): return "webinventory.delta/1"
+    if re.match(r"^WebInventory_.+_screenshots\.jsonl$", name): return "webinventory.screenshot/1"
+    if re.match(r"^WebInventory_.+_vulns\.jsonl$", name) or re.match(r"^WebInventory_store_vulnerabilities_.+\.jsonl$", name): return "webinventory.vuln/1"
+    if re.match(r"^WebInventory_.+_errors\.jsonl$", name): return "webinventory.error/1"
     if re.match(r"^WebInventory_store_", name): return None
-    if re.match(r"^WebInventory_[^_]+_[^_]+\.jsonl$", name): return "webinventory.service-1"
-    if name.endswith("manifest.json"): return "tideline-envelope-1"
+    if re.match(r"^WebInventory_[^_]+_[^_]+\.jsonl$", name): return "webinventory.service/1"
+    if name.endswith("manifest.json"): return "tideline-envelope/1"
     return None
 
 files = []
@@ -33,7 +37,7 @@ for f in files:
     if not k: continue
     total += 1; per[k] = per.get(k, 0) + 1
     text = f.read_text(encoding="utf-8")
-    docs = [text] if k == "tideline-envelope-1" else text.splitlines()
+    docs = [text] if k == "tideline-envelope/1" else text.splitlines()
     for i, line in enumerate(docs, 1):
         if not line.strip(): continue
         lines += 1

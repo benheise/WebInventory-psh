@@ -15,7 +15,9 @@ $Columns = @(
     # v2.4 (appended)
     'VersionPaths',
     # v2.5 (appended)
-    'Cname', 'Cloud', 'CloudRegion', 'CloudService')
+    'Cname', 'Cloud', 'CloudRegion', 'CloudService',
+    # v2.7 (appended)
+    'ApiDocPaths', 'Appliance')
 
 # a results CSV with at least one data row (exit code 4 of a resumed run counts earlier sessions' rows)
 function Test-CsvHasRows([string]$Path) {

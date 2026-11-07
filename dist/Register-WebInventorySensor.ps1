@@ -68,7 +68,7 @@ param(
     [ValidateRange(5, 600)][int]$TimeoutSec = 30
 )
 $ErrorActionPreference = 'Stop'
-$ScriptVersion = '2.6.1'
+$ScriptVersion = '2.7.0'
 
 $ShipSource = @'
 // Tideline result shipping: shared by Invoke-WebInventory.ps1 (-ShipTo), Send-WebInventoryRun.ps1 and
@@ -1328,7 +1328,7 @@ namespace WebInv
         }
     }
 
-    public static class ShipInfo { public static string Version = "2.6.1"; }
+    public static class ShipInfo { public static string Version = "2.7.0"; }
 }
 '@
 
